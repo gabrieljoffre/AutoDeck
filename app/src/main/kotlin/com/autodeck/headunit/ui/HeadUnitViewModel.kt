@@ -41,6 +41,9 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
     fun requestUsbPermission(deviceName: String) = runtime.requestUsbPermission(deviceName)
     fun attachProjectionSurface(surface: Surface?, width: Int, height: Int) =
         runtime.attachProjectionSurface(surface, width, height)
+    fun attachCameraSurface(surface: Surface?) = runtime.attachCameraSurface(surface)
+    fun selectCameraChannel(channel: Int) = runtime.selectCameraChannel(channel)
+    fun setCameraStandardNtsc(isNtsc: Boolean) = runtime.setCameraStandardNtsc(isNtsc)
     fun sendProjectionTouch(action: TouchAction, normalizedX: Float, normalizedY: Float) =
         runtime.sendProjectionTouch(action, normalizedX, normalizedY)
     fun sendProjectionMultiTouch(points: List<MultiTouchPoint>) =

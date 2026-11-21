@@ -1,7 +1,9 @@
 package com.autodeck.headunit.ui.screens
 
 import android.annotation.SuppressLint
+import android.graphics.SurfaceTexture
 import android.view.MotionEvent
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.TextureView
@@ -51,6 +53,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -187,6 +190,8 @@ fun HeadUnitScreen(
                             onSetProjectionMode = { mode ->
                                 viewModel.updateConfig { it.copy(projectionMode = mode) }
                             },
+                            onSelectCameraChannel = { viewModel.selectCameraChannel(it) },
+                            onSetCameraStandardNtsc = { viewModel.setCameraStandardNtsc(it) },
                             onReopenWizard = { viewModel.reopenSetup() }
                         )
                     }
@@ -210,6 +215,9 @@ fun HeadUnitScreen(
         if (headUnit.isReverseOverlayVisible) {
             ReverseCameraOverlay(
                 uiState = uiState,
+                onAttachCameraSurface = { viewModel.attachCameraSurface(it) },
+                onSelectCameraChannel = { viewModel.selectCameraChannel(it) },
+                onSetCameraStandardNtsc = { viewModel.setCameraStandardNtsc(it) },
                 onToggleMirror = {
                     viewModel.updateConfig {
                         it.copy(guidelines = it.guidelines.copy(mirrorHorizontal = !it.guidelines.mirrorHorizontal))
@@ -860,6 +868,8 @@ private fun SettingsAndInspectorPanel(
     onUpdateFuelCalibration: (Double) -> Unit,
     onToggleLauncherMode: (Boolean) -> Unit,
     onSetProjectionMode: (ProjectionMode) -> Unit,
+    onSelectCameraChannel: (Int) -> Unit,
+    onSetCameraStandardNtsc: (Boolean) -> Unit,
     onReopenWizard: () -> Unit
 ) {
     val guide = uiState.config.guidelines
@@ -938,9 +948,14 @@ private fun SettingsAndInspectorPanel(
                                         fontSize = 12.sp
                                     )
                                     if (dev.role == UsbDeviceRole.CAMERA_EASYCAP_LEGACY) {
+                                        val isStk = dev.vendorId == 0x05E1 && dev.productId == 0x0408
                                         Text(
-                                            text = "Chip EasyCap proprietário detectado — na Fase 2 plugaremos o driver específico deste VID:PID.",
-                                            color = AutoDeckColors.StatusAmber,
+                                            text = if (isStk) {
+                                                "Driver nativo STK1160 + SAA7113 integrado (USB Audio desativado, standby Alt 0)."
+                                            } else {
+                                                "Chip EasyCap proprietário (${dev.vidPidHex}) detectado."
+                                            },
+                                            color = if (isStk) AutoDeckColors.StatusGreen else AutoDeckColors.StatusAmber,
                                             fontSize = 11.sp
                                         )
                                     }
@@ -972,6 +987,15 @@ private fun SettingsAndInspectorPanel(
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
+                if (uiState.cameraHardware.isStk1160Ready) {
+                    Text(
+                        text = "STK1160 (05E1:0408) | Reg 0x1F=${uiState.cameraHardware.lastStatusRegHex ?: "--"} | Sync=${if (uiState.cameraHardware.syncLockDetected) "TRAVADO" else "Standby Alt 0"} | Stream=${if (uiState.cameraHardware.isStreamingVideo) "Ativo" else "Pausado"}",
+                        color = AutoDeckColors.StatusGreen,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
                 cameraDebug.analysis?.let { sig ->
                     Text(
                         text = "Análise ao vivo: ${sig.reason} | Média=${"%.1f".format(sig.meanLuma)} Desvio=${"%.1f".format(sig.stdDev)} Δt=${sig.temporalDiff?.let { "%.1f".format(it) } ?: "--"}",
@@ -979,6 +1003,15 @@ private fun SettingsAndInspectorPanel(
                         fontSize = 12.sp
                     )
                 }
+
+                CameraInputControlRow(
+                    selectedChannel = uiState.config.cameraInputChannel,
+                    isNtsc = uiState.config.cameraIsNtsc,
+                    statusRegHex = uiState.cameraHardware.lastStatusRegHex,
+                    showDiagnostic = uiState.cameraHardware.isStk1160Ready,
+                    onSelectCameraChannel = onSelectCameraChannel,
+                    onSetCameraStandardNtsc = onSetCameraStandardNtsc
+                )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Simulador Câmera", color = AutoDeckColors.TextPrimary)
@@ -1101,8 +1134,66 @@ private fun SettingsAndInspectorPanel(
 }
 
 @Composable
+private fun CameraInputControlRow(
+    selectedChannel: Int,
+    isNtsc: Boolean,
+    statusRegHex: String?,
+    showDiagnostic: Boolean,
+    onSelectCameraChannel: (Int) -> Unit,
+    onSetCameraStandardNtsc: (Boolean) -> Unit
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("RCA:", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
+        (0..3).forEach { ch ->
+            val selected = selectedChannel == ch
+            if (selected) {
+                Button(
+                    onClick = { onSelectCameraChannel(ch) },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) { Text("Cam ${ch + 1}", fontSize = 12.sp) }
+            } else {
+                OutlinedButton(
+                    onClick = { onSelectCameraChannel(ch) },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) { Text("Cam ${ch + 1}", fontSize = 12.sp) }
+            }
+        }
+        Spacer(modifier = Modifier.width(6.dp))
+        listOf(true to "NTSC", false to "PAL").forEach { (isNtscOpt, label) ->
+            val selected = isNtsc == isNtscOpt
+            if (selected) {
+                Button(
+                    onClick = { onSetCameraStandardNtsc(isNtscOpt) },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) { Text(label, fontSize = 12.sp) }
+            } else {
+                OutlinedButton(
+                    onClick = { onSetCameraStandardNtsc(isNtscOpt) },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) { Text(label, fontSize = 12.sp) }
+            }
+        }
+        if (showDiagnostic && statusRegHex != null) {
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Reg1F=$statusRegHex",
+                color = AutoDeckColors.AccentCyan,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
 private fun ReverseCameraOverlay(
     uiState: HeadUnitUiState,
+    onAttachCameraSurface: (Surface?) -> Unit,
+    onSelectCameraChannel: (Int) -> Unit,
+    onSetCameraStandardNtsc: (Boolean) -> Unit,
     onToggleMirror: () -> Unit,
     onToggleGuidelines: () -> Unit,
     onToggleSimulatedReverse: () -> Unit,
@@ -1110,6 +1201,15 @@ private fun ReverseCameraOverlay(
 ) {
     val guide = uiState.config.guidelines
     val isManual = uiState.headUnit.cameraState == ReverseCameraState.MANUAL_PREVIEW
+    var currentSurface by remember { mutableStateOf<Surface?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            onAttachCameraSurface(null)
+            currentSurface?.release()
+            currentSurface = null
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -1119,33 +1219,62 @@ private fun ReverseCameraOverlay(
         // C2: TextureView real respeitando espelhamento sem brigar com o SurfaceView do CarPlay por baixo
         AndroidView(
             modifier = Modifier.fillMaxSize(),
-            factory = { ctx -> TextureView(ctx) },
+            factory = { ctx ->
+                TextureView(ctx).apply {
+                    surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(st: SurfaceTexture, width: Int, height: Int) {
+                            currentSurface?.release()
+                            val surface = Surface(st)
+                            currentSurface = surface
+                            onAttachCameraSurface(surface)
+                        }
+
+                        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, width: Int, height: Int) = Unit
+
+                        override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                            onAttachCameraSurface(null)
+                            currentSurface?.release()
+                            currentSurface = null
+                            return true
+                        }
+
+                        override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
+                    }
+                    if (isAvailable && surfaceTexture != null) {
+                        val surface = Surface(surfaceTexture)
+                        currentSurface = surface
+                        onAttachCameraSurface(surface)
+                    }
+                }
+            },
             update = { tv ->
                 tv.scaleX = if (guide.mirrorHorizontal) -1f else 1f
             }
         )
 
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = if (uiState.config.useSimulatedCamera) {
-                    "CÂMERA DE RÉ ATIVA (MODO SIMULADOR)"
-                } else {
-                    "CÂMERA DE RÉ ATIVA — ${uiState.cameraHardware.connectedDeviceLabel}"
-                },
-                color = AutoDeckColors.AccentCyan,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = if (guide.mirrorHorizontal) "Espelhamento: ATIVO" else "Espelhamento: NORMAL (padrão aftermarket)",
-                color = AutoDeckColors.TextSecondary,
-                fontSize = 13.sp
-            )
+        if (!uiState.cameraHardware.isStreamingVideo) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = if (uiState.config.useSimulatedCamera) {
+                        "CÂMERA DE RÉ ATIVA (MODO SIMULADOR)"
+                    } else {
+                        "CÂMERA DE RÉ ATIVA — ${uiState.cameraHardware.connectedDeviceLabel}"
+                    },
+                    color = AutoDeckColors.AccentCyan,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = if (guide.mirrorHorizontal) "Espelhamento: ATIVO" else "Espelhamento: NORMAL (padrão aftermarket)",
+                    color = AutoDeckColors.TextSecondary,
+                    fontSize = 13.sp
+                )
+            }
         }
 
         if (guide.enabled) {
@@ -1192,6 +1321,26 @@ private fun ReverseCameraOverlay(
                         Text("Fechar Câmera", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
+            }
+        }
+
+        if (!uiState.config.useSimulatedCamera) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.70f))
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                CameraInputControlRow(
+                    selectedChannel = uiState.config.cameraInputChannel,
+                    isNtsc = uiState.config.cameraIsNtsc,
+                    statusRegHex = uiState.cameraHardware.lastStatusRegHex,
+                    showDiagnostic = true,
+                    onSelectCameraChannel = onSelectCameraChannel,
+                    onSetCameraStandardNtsc = onSetCameraStandardNtsc
+                )
             }
         }
     }

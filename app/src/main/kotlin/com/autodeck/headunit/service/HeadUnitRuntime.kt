@@ -366,6 +366,19 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
         carlinkitEngine.attachSurface(surface, width, height)
     }
 
+    fun attachCameraSurface(surface: Surface?) {
+        usbCamera.attachSurface(surface)
+    }
+
+    fun selectCameraChannel(channel: Int) {
+        val clamped = channel.coerceIn(0, 3)
+        updateConfig { it.copy(cameraInputChannel = clamped) }
+    }
+
+    fun setCameraStandardNtsc(isNtsc: Boolean) {
+        updateConfig { it.copy(cameraIsNtsc = isNtsc) }
+    }
+
     fun sendProjectionTouch(action: TouchAction, normalizedX: Float, normalizedY: Float) {
         carlinkitEngine.sendTouch(action, normalizedX, normalizedY)
     }
@@ -382,6 +395,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
         scope.launch {
             usbHubCoordinator.devices.collect { list ->
                 _uiState.update { it.copy(usbDevices = list) }
+                usbCamera.refreshFromUsb()
             }
         }
         scope.launch {
@@ -415,10 +429,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
                     _uiState.update { it.copy(cameraHardware = hw) }
                 }
             }
-            source.lumaSamples(intervalMs = 140L).collect { grid ->
+            source.signalEvents(intervalMs = 140L).collect { sample ->
+                val grid = sample.grid
                 latestValidGrid = grid.takeIf { it.luma.isNotEmpty() }
                 val prevCamState = coordinator.state.cameraState
-                val analysis = signalDetector.analyze(grid)
+                val analysis = sample.hardwareSignalOverride ?: signalDetector.analyze(grid)
                 coordinator.onCameraSample(analysis, System.currentTimeMillis())
                 _cameraDebug.value = CameraDebugState(analysis = analysis, lastGrid = grid)
                 if (coordinator.state.cameraState != prevCamState) {
@@ -679,6 +694,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
         fuelCalculator.calibrationFactor = config.fuelCalibrationFactor
         signalDetector.calibration = config.noSignalCalibration
         carlinkitEngine.setUseBoxMic(config.useBoxMic)
+        usbCamera.selectChannel(config.cameraInputChannel)
+        usbCamera.setStandard(config.cameraIsNtsc)
         coordinator.alertThresholds = config.alertThresholds
         coordinator.configure(
             setupCompleted = config.setupCompleted,
@@ -689,6 +706,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
 
     private fun publishState() {
         val state = coordinator.state
+        val simCam = _uiState.value.config.useSimulatedCamera
+        usbCamera.setReverseOverlayVisible(state.isReverseOverlayVisible && !simCam)
         carlinkitEngine.setRenderPaused(state.shouldSuspendProjectionRender)
         carlinkitEngine.setAudioDucking(state.shouldDuckAudio)
         if (state.shouldDuckAudio) {

@@ -27,6 +27,8 @@ data class HeadUnitConfig(
     val duckAudioOnReverse: Boolean = true,
     val cameraVendorId: Int? = null,
     val cameraProductId: Int? = null,
+    val cameraInputChannel: Int = 0,
+    val cameraIsNtsc: Boolean = true,
     val noSignalCalibration: NoSignalCalibration? = null,
     val guidelines: GuidelineCalibration = GuidelineCalibration(),
     val alertThresholds: AlertThresholds = AlertThresholds(),
@@ -68,6 +70,8 @@ class HeadUnitPreferences(context: Context) {
             duckAudioOnReverse = prefs.getBoolean(KEY_DUCK_AUDIO, true),
             cameraVendorId = camVid?.takeIf { it > 0 },
             cameraProductId = camPid?.takeIf { it > 0 },
+            cameraInputChannel = prefs.getInt(KEY_CAMERA_INPUT_CH, 0).coerceIn(0, 3),
+            cameraIsNtsc = prefs.getBoolean(KEY_CAMERA_IS_NTSC, true),
             noSignalCalibration = loadNoSignalCalibration(),
             guidelines = GuidelineCalibration(
                 topWidthRatio = prefs.getFloat(KEY_GUIDE_TOP_W, 0.42f),
@@ -115,6 +119,8 @@ class HeadUnitPreferences(context: Context) {
                 remove(KEY_CAMERA_VID)
                 remove(KEY_CAMERA_PID)
             }
+            putInt(KEY_CAMERA_INPUT_CH, config.cameraInputChannel.coerceIn(0, 3))
+            putBoolean(KEY_CAMERA_IS_NTSC, config.cameraIsNtsc)
 
             val cal = config.noSignalCalibration
             if (cal != null) {
@@ -180,6 +186,8 @@ class HeadUnitPreferences(context: Context) {
         const val KEY_DUCK_AUDIO = "duck_audio_reverse"
         const val KEY_CAMERA_VID = "camera_vid"
         const val KEY_CAMERA_PID = "camera_pid"
+        const val KEY_CAMERA_INPUT_CH = "camera_input_ch"
+        const val KEY_CAMERA_IS_NTSC = "camera_is_ntsc"
         const val KEY_NO_SIG_MEAN = "no_sig_mean"
         const val KEY_NO_SIG_STD = "no_sig_std"
         const val KEY_NO_SIG_TOL = "no_sig_tol"
