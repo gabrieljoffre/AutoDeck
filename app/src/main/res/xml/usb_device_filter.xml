@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Carlinkit CPC200-CCPA / CarPlay + Android Auto (VID 0x1314 = 4884) -->
+    <usb-device vendor-id="4884" product-id="5408" />
+    <usb-device vendor-id="4884" product-id="5409" />
+
+    <!-- Câmeras / Captura UVC Padrão (USB Video Class = 14 / 0x0E) -->
+    <usb-device class="14" />
+
+    <!-- MacroSilicon MS210x / MS2130 (VID 0x534D = 21325) e 0x1B3F (6975) -->
+    <usb-device vendor-id="21325" />
+    <usb-device vendor-id="6975" />
+
+    <!-- EasyCap UTV007 (0x1B71 = 7025), STK1160 (0x05E1 = 1505), EM2860 (0xEB1A = 60186), Somagic (0x1C88 = 7304) -->
+    <usb-device vendor-id="7025" />
+    <usb-device vendor-id="1505" />
+    <usb-device vendor-id="60186" />
+    <usb-device vendor-id="7304" />
+</resources>
