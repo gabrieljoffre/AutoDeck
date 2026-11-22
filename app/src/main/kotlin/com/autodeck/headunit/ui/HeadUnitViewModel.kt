@@ -1,6 +1,7 @@
 package com.autodeck.headunit.ui
 
 import android.app.Application
+import android.view.MotionEvent
 import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
 import com.autodeck.headunit.data.HeadUnitConfig
@@ -10,6 +11,7 @@ import com.autodeck.headunit.service.HeadUnitUiState
 import com.autodeck.protocol.carplay.MultiTouchPoint
 import com.autodeck.protocol.carplay.TouchAction
 import com.autodeck.protocol.coordinator.MainTab
+import com.autodeck.protocol.obd2.TransmissionType
 import kotlinx.coroutines.flow.StateFlow
 
 class HeadUnitViewModel(application: Application) : AndroidViewModel(application) {
@@ -37,6 +39,10 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
     fun readDtcCodes() = runtime.readDtcCodes()
     fun clearDtcCodes() = runtime.clearDtcCodes()
     fun resetTripConsumption() = runtime.resetTripConsumption()
+    fun markTankFull() = runtime.markTankFull()
+    fun addFuelLiters(liters: Double) = runtime.addFuelLiters(liters)
+    fun setVirtualTankLiters(liters: Double) = runtime.setVirtualTankLiters(liters)
+    fun setTransmissionType(type: TransmissionType) = runtime.setTransmissionType(type)
     fun refreshUsbDevices() = runtime.refreshUsbDevices()
     fun requestUsbPermission(deviceName: String) = runtime.requestUsbPermission(deviceName)
     fun attachProjectionSurface(surface: Surface?, width: Int, height: Int) =
@@ -48,5 +54,11 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
         runtime.sendProjectionTouch(action, normalizedX, normalizedY)
     fun sendProjectionMultiTouch(points: List<MultiTouchPoint>) =
         runtime.sendProjectionMultiTouch(points)
+    fun sendProjectionMotionEvent(event: MotionEvent, viewWidth: Int, viewHeight: Int) =
+        runtime.sendProjectionMotionEvent(event, viewWidth, viewHeight)
+    fun retryAndroidAutoNow() = runtime.retryAndroidAutoNow()
+    fun startGuestWirelessPairing() = runtime.startGuestWirelessPairing()
+    fun checkForAppUpdate() = runtime.checkForAppUpdate()
+    fun downloadAndInstallAppUpdate() = runtime.downloadAndInstallAppUpdate()
     fun launchHurFallback(): Boolean = runtime.launchHurFallback()
 }

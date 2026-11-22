@@ -11,8 +11,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -20,6 +26,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.autodeck.headunit.service.HeadUnitForegroundService
 import com.autodeck.headunit.ui.HeadUnitViewModel
+import com.autodeck.headunit.ui.screens.BootSplashOverlay
 import com.autodeck.headunit.ui.screens.HeadUnitScreen
 import com.autodeck.headunit.ui.screens.SetupWizardScreen
 import com.autodeck.headunit.ui.theme.AutoDeckTheme
@@ -44,6 +51,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             AutoDeckTheme {
                 val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+                var showBootSplash by rememberSaveable { mutableStateOf(true) }
 
                 // Libera a tela para apagar quando o pós-chave / carregamento USB-C desconectar
                 LaunchedEffect(uiState.headUnit.powerConnected) {
@@ -54,21 +62,36 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (!uiState.config.setupCompleted) {
-                    SetupWizardScreen(
-                        uiState = uiState,
-                        onRefreshBluetooth = { viewModel.onPermissionsUpdated() },
-                        onRequestPermissions = { requestRuntimePermissionsIfNeeded() },
-                        onRefreshUsb = { viewModel.refreshUsbDevices() },
-                        onCalibrateNoSignal = { viewModel.calibrateCameraNoSignal() },
-                        onToggleLauncherMode = { enabled -> viewModel.setLauncherModeEnabled(enabled) },
-                        onFinishSetup = { updated -> viewModel.completeSetup(updated) }
-                    )
-                } else {
-                    HeadUnitScreen(
-                        uiState = uiState,
-                        viewModel = viewModel
-                    )
+                // Câmera de ré tem prioridade imediata mesmo durante a introdução
+                LaunchedEffect(uiState.headUnit.isReverseOverlayVisible) {
+                    if (uiState.headUnit.isReverseOverlayVisible) {
+                        showBootSplash = false
+                    }
+                }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    if (!uiState.config.setupCompleted) {
+                        SetupWizardScreen(
+                            uiState = uiState,
+                            onRefreshBluetooth = { viewModel.onPermissionsUpdated() },
+                            onRequestPermissions = { requestRuntimePermissionsIfNeeded() },
+                            onRefreshUsb = { viewModel.refreshUsbDevices() },
+                            onCalibrateNoSignal = { viewModel.calibrateCameraNoSignal() },
+                            onToggleLauncherMode = { enabled -> viewModel.setLauncherModeEnabled(enabled) },
+                            onFinishSetup = { updated -> viewModel.completeSetup(updated) }
+                        )
+                    } else {
+                        HeadUnitScreen(
+                            uiState = uiState,
+                            viewModel = viewModel
+                        )
+                    }
+
+                    if (showBootSplash && !uiState.headUnit.isReverseOverlayVisible) {
+                        BootSplashOverlay(
+                            onFinished = { showBootSplash = false }
+                        )
+                    }
                 }
             }
         }
@@ -106,8 +129,19 @@ class MainActivity : ComponentActivity() {
 
     private fun requestRuntimePermissionsIfNeeded() {
         val missing = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            missing += Manifest.permission.BLUETOOTH_CONNECT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                missing += Manifest.permission.BLUETOOTH_CONNECT
+            }
+            if (!hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)) {
+                missing += Manifest.permission.BLUETOOTH_ADVERTISE
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPermission(Manifest.permission.NEARBY_WIFI_DEVICES)) {
+            missing += Manifest.permission.NEARBY_WIFI_DEVICES
+        }
+        if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            missing += Manifest.permission.ACCESS_FINE_LOCATION
         }
         if (!hasPermission(Manifest.permission.CAMERA)) {
             missing += Manifest.permission.CAMERA

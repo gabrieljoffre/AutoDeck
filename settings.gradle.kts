@@ -25,4 +25,5 @@ rootProject.name = "AutoDeck"
 include(":core-protocol")
 if (providers.gradleProperty("onlyJvm").orNull != "true") {
     include(":app")
+    include(":companion-app")
 }

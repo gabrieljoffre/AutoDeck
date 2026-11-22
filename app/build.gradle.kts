@@ -15,8 +15,8 @@ android {
         applicationId = "com.autodeck.headunit"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 4
+        versionName = "1.2.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -27,6 +27,15 @@ android {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
+        }
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("keystore/autodeck-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
     }
 
@@ -47,6 +56,10 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    lint {
+        disable += "PackagedPrivateKey"
     }
 }
 
@@ -69,6 +82,9 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.protobuf.java)
+    implementation(libs.conscrypt.android)
+    implementation(libs.zxing.core)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

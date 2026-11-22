@@ -156,7 +156,7 @@ class BluetoothClassicObdTransport(
                         if (chunk.contains('>')) break
                     }
                 } else {
-                    delay(15)
+                    delay(3)
                 }
             }
             sb.toString()

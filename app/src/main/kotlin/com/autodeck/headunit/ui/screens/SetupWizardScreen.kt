@@ -324,7 +324,7 @@ private fun StepObdConfig(
 
     Text("Cilindrada do motor (fallback Speed-Density se o carro não tiver MAF):", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf(1.0, 1.4, 1.6, 1.8, 2.0, 2.4).forEach { liters ->
+        listOf(1.0, 1.4, 1.6, 1.7, 1.8, 2.0, 2.4).forEach { liters ->
             FilterChip(
                 selected = draft.engineDisplacementLiters == liters,
                 onClick = { onUpdate(draft.copy(engineDisplacementLiters = liters)) },
@@ -431,7 +431,8 @@ private fun StepProjectionConfig(
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         val modes = listOf(
-            ProjectionMode.CARLINKIT_NATIVE to "Carlinkit CPC200-CCPA Embutido (CarPlay + Android Auto automáticos no mesmo app)",
+            ProjectionMode.ANDROID_AUTO_NATIVE to "Android Auto Direto (Wi-Fi / Bluetooth sem fio embutido no app)",
+            ProjectionMode.CARLINKIT_NATIVE to "Carlinkit CPC200-CCPA Embutido (CarPlay + Android Auto via dongle USB)",
             ProjectionMode.HUR_FALLBACK to "HUR Transição (Android Auto via app HUR externo + Painel OBD-II/Ré aqui)"
         )
         modes.forEach { (mode, label) ->

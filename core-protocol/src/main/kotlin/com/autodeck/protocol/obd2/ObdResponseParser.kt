@@ -106,7 +106,10 @@ object ObdResponseParser {
             ObdPid.LTFT_BANK1 -> (a - 128.0) * 100.0 / 128.0
 
             ObdPid.INTAKE_MAP,
-            ObdPid.SPEED -> a.toDouble()
+            ObdPid.SPEED,
+            ObdPid.FUEL_SYSTEM_STATUS -> a.toDouble()
+
+            ObdPid.O2_SENSOR_B1S1_VOLTAGE -> a * 0.005
 
             ObdPid.RPM -> b?.let { ((a * 256) + it) / 4.0 }
             ObdPid.TIMING_ADVANCE -> (a / 2.0) - 64.0

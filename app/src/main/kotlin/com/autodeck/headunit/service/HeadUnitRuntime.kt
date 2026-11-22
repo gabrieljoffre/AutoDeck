@@ -5,9 +5,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbManager
+import android.view.MotionEvent
 import android.view.Surface
 import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.HeadUnitPreferences
+import com.autodeck.headunit.hardware.AndroidAutoNativeCoordinator
+import com.autodeck.headunit.hardware.AppUpdater
 import com.autodeck.headunit.hardware.AudioBtMonitor
 import com.autodeck.headunit.hardware.AudioRouteStatus
 import com.autodeck.headunit.hardware.BluetoothClassicObdTransport
@@ -19,6 +22,7 @@ import com.autodeck.headunit.hardware.ObdTransport
 import com.autodeck.headunit.hardware.PairedBluetoothDevice
 import com.autodeck.headunit.hardware.SimulatedCameraSource
 import com.autodeck.headunit.hardware.SimulatedObdTransport
+import com.autodeck.headunit.hardware.UpdateState
 import com.autodeck.headunit.hardware.UsbDeviceSummary
 import com.autodeck.headunit.hardware.UsbHubCoordinator
 import com.autodeck.headunit.hardware.UvcUsbCameraSource
@@ -33,6 +37,9 @@ import com.autodeck.protocol.coordinator.HeadUnitCoordinator
 import com.autodeck.protocol.coordinator.HeadUnitState
 import com.autodeck.protocol.coordinator.LinkStatus
 import com.autodeck.protocol.coordinator.MainTab
+import com.autodeck.protocol.coordinator.ProjectionMode
+import com.autodeck.protocol.obd2.CivicTelemetryCalculator
+import com.autodeck.protocol.obd2.DerivedTelemetry
 import com.autodeck.protocol.obd2.DtcCategory
 import com.autodeck.protocol.obd2.DtcCode
 import com.autodeck.protocol.obd2.FuelConsumptionCalculator
@@ -42,6 +49,8 @@ import com.autodeck.protocol.obd2.ObdPollingProfile
 import com.autodeck.protocol.obd2.ObdResponseParser
 import com.autodeck.protocol.obd2.ObdSnapshot
 import com.autodeck.protocol.obd2.SupportedPidCapabilities
+import com.autodeck.protocol.obd2.TireSpec
+import com.autodeck.protocol.obd2.TransmissionType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -66,13 +75,16 @@ data class HeadUnitUiState(
     val pairedBluetoothDevices: List<PairedBluetoothDevice> = emptyList(),
     val audioRoute: AudioRouteStatus = AudioRouteStatus(),
     val cameraHardware: CameraHardwareStatus = CameraHardwareStatus(),
-    val carlinkitDetail: String = "Aguardando dongle Carlinkit CPC200-CCPA na USB",
+    val carlinkitDetail: String = "Aguardando Android Auto (Wi-Fi / Bluetooth)",
+    val guestHotspotInfo: String? = null,
+    val guestWifiQrPayload: String? = null,
     val hurPackageInstalled: String? = null,
     val obdMessage: String = "OBD-II aguardando conexão",
     val simulatedReverseActive: Boolean = false,
     val dtcBusy: Boolean = false,
     val dtcActionFeedback: String? = null,
-    val isAppInForeground: Boolean = true
+    val isAppInForeground: Boolean = true,
+    val updateState: UpdateState = UpdateState()
 )
 
 /**
@@ -92,6 +104,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
     )
 
     private val audioMonitor = AudioBtMonitor(appContext)
+    private val appUpdater = AppUpdater(appContext, scope)
+    private val androidAutoNative = AndroidAutoNativeCoordinator(appContext, scope)
     private val carlinkitEngine = CarlinkitUsbEngine(
         context = appContext,
         scope = scope,
@@ -136,6 +150,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
     private var cameraJob: Job? = null
     private var latestValidGrid: LumaGrid? = null
     private var lowVoltageSinceMs: Long? = null
+    private var virtualTankRemainingLiters: Double = 50.0
+    private var peakRpm: Double = 0.0
+    private var peakSpeedKmh: Double = 0.0
+    private var peakCoolantTempC: Double? = null
+    private var pendingDtcCount: Int = 0
 
     private val _uiState = MutableStateFlow(HeadUnitUiState())
     val uiState: StateFlow<HeadUnitUiState> = _uiState.asStateFlow()
@@ -145,8 +164,15 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
 
     init {
         val loadedConfig = preferences.load()
+        virtualTankRemainingLiters = loadedConfig.virtualTankRemainingLiters
+            .coerceIn(0.0, loadedConfig.virtualTankCapacityLiters)
         fuelCalculator.restoreTripState(loadedConfig.tripDistanceKm, loadedConfig.tripFuelLiters)
         applyConfigToEngines(loadedConfig)
+        coordinator.updateObdSnapshot(
+            coordinator.state.obdSnapshot.copy(
+                derived = computeDerived(coordinator.state.obdSnapshot, loadedConfig)
+            )
+        )
 
         _uiState.update {
             it.copy(
@@ -164,6 +190,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
 
         if (loadedConfig.setupCompleted && loadedConfig.autoConnectOnLaunch) {
             startObdLoop()
+        }
+
+        scope.launch {
+            delay(8_000L)
+            appUpdater.checkForUpdate(silentIfUpToDate = true)
         }
     }
 
@@ -316,6 +347,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
                         coordinator.state.obdSnapshot.copy(milOn = mil.first, milDtcCount = mil.second)
                     )
                 }
+                pendingDtcCount = collected.count { it.category == DtcCategory.PENDING }
                 coordinator.updateDtcCodes(collected)
             }
             _uiState.update { it.copy(dtcBusy = false) }
@@ -331,9 +363,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
             val result = runCatching {
                 val raw = transport.sendCommand("04", timeoutMs = 3_000L)
                 if (ObdResponseParser.isClearDtcConfirmed(raw)) {
+                    pendingDtcCount = 0
                     coordinator.updateDtcCodes(emptyList())
+                    val refreshed = coordinator.state.obdSnapshot.copy(milOn = false, milDtcCount = 0)
                     coordinator.updateObdSnapshot(
-                        coordinator.state.obdSnapshot.copy(milOn = false, milDtcCount = 0)
+                        refreshed.copy(derived = computeDerived(refreshed, _uiState.value.config))
                     )
                     "Falhas limpas com sucesso."
                 } else {
@@ -348,9 +382,43 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
 
     fun resetTripConsumption() {
         fuelCalculator.resetTrip()
+        peakRpm = 0.0
+        peakSpeedKmh = 0.0
+        peakCoolantTempC = null
+        val cfg = _uiState.value.config.copy(tripDistanceKm = 0.0, tripFuelLiters = 0.0)
+        preferences.save(cfg)
+        _uiState.update { it.copy(config = cfg) }
         val snap = coordinator.state.obdSnapshot.copy(averageKmPerL = null)
-        coordinator.updateObdSnapshot(snap)
-        updateConfig { it.copy(tripDistanceKm = 0.0, tripFuelLiters = 0.0) }
+        coordinator.updateObdSnapshot(snap.copy(derived = computeDerived(snap, cfg)))
+        publishState()
+    }
+
+    fun markTankFull() {
+        setVirtualTankLiters(_uiState.value.config.virtualTankCapacityLiters)
+    }
+
+    fun addFuelLiters(liters: Double) {
+        if (liters <= 0.0) return
+        setVirtualTankLiters(virtualTankRemainingLiters + liters)
+    }
+
+    fun setVirtualTankLiters(liters: Double) {
+        val prev = _uiState.value.config
+        val clamped = liters.coerceIn(0.0, prev.virtualTankCapacityLiters)
+        virtualTankRemainingLiters = clamped
+        val updated = prev.copy(virtualTankRemainingLiters = clamped)
+        preferences.save(updated)
+        _uiState.update { it.copy(config = updated) }
+        val snap = coordinator.state.obdSnapshot
+        coordinator.updateObdSnapshot(snap.copy(derived = computeDerived(snap, updated)))
+        publishState()
+    }
+
+    fun setTransmissionType(type: TransmissionType) {
+        updateConfig { it.copy(transmissionType = type) }
+        val snap = coordinator.state.obdSnapshot
+        coordinator.updateObdSnapshot(snap.copy(derived = computeDerived(snap, _uiState.value.config)))
+        publishState()
     }
 
     fun refreshUsbDevices() {
@@ -363,7 +431,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
     }
 
     fun attachProjectionSurface(surface: Surface?, width: Int, height: Int) {
-        carlinkitEngine.attachSurface(surface, width, height)
+        if (_uiState.value.config.projectionMode == ProjectionMode.ANDROID_AUTO_NATIVE) {
+            androidAutoNative.attachSurface(surface, width, height)
+        } else {
+            carlinkitEngine.attachSurface(surface, width, height)
+        }
     }
 
     fun attachCameraSurface(surface: Surface?) {
@@ -387,6 +459,26 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
         carlinkitEngine.sendMultiTouch(points)
     }
 
+    fun sendProjectionMotionEvent(event: MotionEvent, viewWidth: Int, viewHeight: Int) {
+        androidAutoNative.sendMotionEvent(event, viewWidth, viewHeight)
+    }
+
+    fun retryAndroidAutoNow() {
+        androidAutoNative.retryNow()
+    }
+
+    fun startGuestWirelessPairing() {
+        androidAutoNative.startGuestWirelessPairing()
+    }
+
+    fun checkForAppUpdate() {
+        appUpdater.checkForUpdate(silentIfUpToDate = false)
+    }
+
+    fun downloadAndInstallAppUpdate() {
+        appUpdater.downloadAndInstallUpdate()
+    }
+
     fun launchHurFallback(): Boolean {
         return HurFallbackLauncher.launchHur(appContext)
     }
@@ -407,13 +499,47 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
         }
         scope.launch {
             carlinkitEngine.status.collect { status ->
-                coordinator.updateProjectionStatus(status)
-                publishState()
+                if (_uiState.value.config.projectionMode == ProjectionMode.CARLINKIT_NATIVE) {
+                    coordinator.updateProjectionStatus(status)
+                    publishState()
+                }
             }
         }
         scope.launch {
             carlinkitEngine.detailMessage.collect { detail ->
-                _uiState.update { it.copy(carlinkitDetail = detail) }
+                if (_uiState.value.config.projectionMode == ProjectionMode.CARLINKIT_NATIVE) {
+                    _uiState.update { it.copy(carlinkitDetail = detail) }
+                }
+            }
+        }
+        scope.launch {
+            androidAutoNative.status.collect { status ->
+                if (_uiState.value.config.projectionMode == ProjectionMode.ANDROID_AUTO_NATIVE) {
+                    coordinator.updateProjectionStatus(status)
+                    publishState()
+                }
+            }
+        }
+        scope.launch {
+            androidAutoNative.detailMessage.collect { detail ->
+                if (_uiState.value.config.projectionMode == ProjectionMode.ANDROID_AUTO_NATIVE) {
+                    _uiState.update { it.copy(carlinkitDetail = detail) }
+                }
+            }
+        }
+        scope.launch {
+            androidAutoNative.guestHotspotInfo.collect { info ->
+                _uiState.update { it.copy(guestHotspotInfo = info) }
+            }
+        }
+        scope.launch {
+            androidAutoNative.guestWifiQrPayload.collect { qrPayload ->
+                _uiState.update { it.copy(guestWifiQrPayload = qrPayload) }
+            }
+        }
+        scope.launch {
+            appUpdater.state.collect { upd ->
+                _uiState.update { it.copy(updateState = upd) }
             }
         }
     }
@@ -512,7 +638,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
                     val valid = when {
                         resp == null -> false
                         initCmd.optional -> true
-                        initCmd.command == "ATZ" || initCmd.command == "ATE0" ->
+                        initCmd.command.startsWith("AT") ->
                             ObdResponseParser.isValidElmInitResponse(resp)
                         else -> !ObdResponseParser.isErrorResponse(ObdResponseParser.sanitize(resp))
                     }
@@ -556,7 +682,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
                 }
                 publishState()
 
-                // Lê MIL e falhas iniciais
+                // Lê MIL e falhas iniciais (confirmadas + pendentes)
                 runCatching {
                     val milRaw = transport.sendCommand("0101", timeoutMs = 1_500L)
                     val mil = ObdResponseParser.parseMilStatus0101(milRaw)
@@ -564,13 +690,26 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
                         transport.sendCommand("03", timeoutMs = 2_000L),
                         DtcCategory.STORED
                     )
-                    coordinator.updateDtcCodes(stored)
+                    val pending = ObdResponseParser.parseDtcCodes(
+                        transport.sendCommand("07", timeoutMs = 2_000L),
+                        DtcCategory.PENDING
+                    )
+                    pendingDtcCount = pending.size
+                    coordinator.updateDtcCodes(stored + pending)
                     if (mil != null) {
                         coordinator.updateObdSnapshot(
                             coordinator.state.obdSnapshot.copy(milOn = mil.first, milDtcCount = mil.second)
                         )
                     }
                     publishState()
+                }
+
+                var useSingleFrameSuffix = false
+                runCatching {
+                    val probeRaw = transport.sendCommand("010C1", timeoutMs = 900L)
+                    if (ObdResponseParser.parsePid(ObdPid.RPM, probeRaw) != null) {
+                        useSingleFrameSuffix = true
+                    }
                 }
 
                 var cycle = 0L
@@ -588,13 +727,24 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
                     try {
                         var validResponses = 0
                         for (cmd in commands) {
-                            val raw = transport.sendCommand(cmd)
+                            val wireCmd = ObdPollingPlanner.formatCommand(cmd, useSingleFrameSuffix)
+                            val raw = transport.sendCommand(wireCmd, timeoutMs = 900L)
                             val updated = applyParsedCommand(cmd, raw, currentSnap)
                             if (updated != null) {
                                 currentSnap = updated
                                 validResponses++
+                                if (cmd == ObdPid.RPM.command || cmd == ObdPid.SPEED.command) {
+                                    val cfgFast = _uiState.value.config
+                                    val fastDerived = computeDerived(currentSnap, cfgFast)
+                                    peakRpm = fastDerived.peakRpm
+                                    peakSpeedKmh = fastDerived.peakSpeedKmh
+                                    peakCoolantTempC = fastDerived.peakCoolantTempC
+                                    currentSnap = currentSnap.copy(derived = fastDerived)
+                                    coordinator.updateObdSnapshot(currentSnap)
+                                    publishState()
+                                }
                             }
-                            delay(25L)
+                            delay(4L)
                         }
 
                         if (validResponses == 0) {
@@ -620,17 +770,28 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
                             timestampMs = now
                         )
 
-                        currentSnap = currentSnap.copy(
+                        val cfgNow = _uiState.value.config
+                        if (fuel.deltaFuelLiters > 0.0) {
+                            virtualTankRemainingLiters = (virtualTankRemainingLiters - fuel.deltaFuelLiters)
+                                .coerceIn(0.0, cfgNow.virtualTankCapacityLiters)
+                        }
+
+                        val preliminarySnap = currentSnap.copy(
                             instantKmPerL = fuel.instantKmPerL,
                             averageKmPerL = fuel.averageKmPerL ?: currentSnap.averageKmPerL,
                             litersPerHour = fuel.litersPerHour,
                             isStale = false,
                             timestampMs = now
                         )
+                        val derived = computeDerived(preliminarySnap, cfgNow)
+                        peakRpm = derived.peakRpm
+                        peakSpeedKmh = derived.peakSpeedKmh
+                        peakCoolantTempC = derived.peakCoolantTempC
+                        currentSnap = preliminarySnap.copy(derived = derived)
 
                         val volts = currentSnap.batteryVoltageV
                         val engineRunning = (currentSnap.rpm ?: 0.0) > 400.0
-                        val lowLimit = _uiState.value.config.alertThresholds.batteryLowV
+                        val lowLimit = cfgNow.alertThresholds.batteryLowV
                         val isLow = volts != null && ((engineRunning && volts <= lowLimit) || (!engineRunning && volts < 11.7))
                         val lowDuration = if (isLow) {
                             val start = lowVoltageSinceMs ?: now.also { lowVoltageSinceMs = it }
@@ -645,11 +806,16 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
 
                         if (cycle % 20L == 0L) {
                             val trip = fuelCalculator.exportTripState()
-                            val prev = _uiState.value.config
-                            preferences.save(prev.copy(tripDistanceKm = trip.distanceKm, tripFuelLiters = trip.fuelLiters))
+                            val updatedCfg = cfgNow.copy(
+                                tripDistanceKm = trip.distanceKm,
+                                tripFuelLiters = trip.fuelLiters,
+                                virtualTankRemainingLiters = virtualTankRemainingLiters
+                            )
+                            preferences.save(updatedCfg)
+                            _uiState.update { it.copy(config = updatedCfg) }
                         }
 
-                        delay(if (profile == ObdPollingProfile.DOCK_BASIC) 450L else 180L)
+                        delay(if (profile == ObdPollingProfile.DOCK_BASIC) 30L else 20L)
                     } catch (_: Exception) {
                         transport.disconnect()
                         break
@@ -672,6 +838,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
         val pid = ObdPid.entries.firstOrNull { it.command == cmd } ?: return null
         val value = ObdResponseParser.parsePid(pid, raw) ?: return null
         return when (pid) {
+            ObdPid.FUEL_SYSTEM_STATUS -> snap.copy(fuelSystemStatusCode = value.toInt())
             ObdPid.COOLANT_TEMP -> snap.copy(coolantTempC = value)
             ObdPid.RPM -> snap.copy(rpm = value)
             ObdPid.SPEED -> snap.copy(speedKmh = value)
@@ -683,17 +850,43 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
             ObdPid.TIMING_ADVANCE -> snap.copy(timingAdvanceDeg = value)
             ObdPid.STFT_BANK1 -> snap.copy(stftPct = value)
             ObdPid.LTFT_BANK1 -> snap.copy(ltftPct = value)
+            ObdPid.O2_SENSOR_B1S1_VOLTAGE -> snap.copy(o2SensorB1S1VoltageV = value)
             ObdPid.FUEL_LEVEL -> snap.copy(fuelLevelPct = value)
             ObdPid.CONTROL_MODULE_VOLTAGE -> snap.copy(batteryVoltageV = snap.batteryVoltageV ?: value)
         }
+    }
+
+    private fun computeDerived(snapshot: ObdSnapshot, cfg: HeadUnitConfig): DerivedTelemetry {
+        val trip = fuelCalculator.exportTripState()
+        return CivicTelemetryCalculator.compute(
+            snapshot = snapshot,
+            tire = TireSpec.CIVIC_2005_POWERCONTACT2_195_65_R15,
+            transmission = cfg.transmissionType,
+            virtualTankCapacityLiters = cfg.virtualTankCapacityLiters,
+            virtualTankRemainingLiters = virtualTankRemainingLiters,
+            tripDistanceKm = trip.distanceKm,
+            tripFuelUsedLiters = trip.fuelLiters,
+            peakRpm = peakRpm,
+            peakSpeedKmh = peakSpeedKmh,
+            peakCoolantTempC = peakCoolantTempC,
+            pendingDtcCount = pendingDtcCount,
+            isReverseActive = coordinator.state.isReverseOverlayVisible
+        )
     }
 
     private fun applyConfigToEngines(config: HeadUnitConfig) {
         fuelCalculator.fuelType = config.fuelType
         fuelCalculator.engineDisplacementLiters = config.engineDisplacementLiters
         fuelCalculator.calibrationFactor = config.fuelCalibrationFactor
+        fuelCalculator.speedCorrectionFactor = config.tireCorrectionFactor
         signalDetector.calibration = config.noSignalCalibration
         carlinkitEngine.setUseBoxMic(config.useBoxMic)
+        androidAutoNative.setIgnoredObdMac(config.obdDeviceMac)
+        if (config.projectionMode == ProjectionMode.ANDROID_AUTO_NATIVE) {
+            androidAutoNative.start()
+        } else {
+            androidAutoNative.stop()
+        }
         usbCamera.selectChannel(config.cameraInputChannel)
         usbCamera.setStandard(config.cameraIsNtsc)
         coordinator.alertThresholds = config.alertThresholds
@@ -710,6 +903,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) {
         usbCamera.setReverseOverlayVisible(state.isReverseOverlayVisible && !simCam)
         carlinkitEngine.setRenderPaused(state.shouldSuspendProjectionRender)
         carlinkitEngine.setAudioDucking(state.shouldDuckAudio)
+        androidAutoNative.setRenderPaused(state.shouldSuspendProjectionRender)
+        androidAutoNative.setAudioDucking(state.shouldDuckAudio)
         if (state.shouldDuckAudio) {
             audioMonitor.requestReverseDucking()
         } else {

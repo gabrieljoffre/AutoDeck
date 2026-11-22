@@ -3,7 +3,9 @@ package com.autodeck.protocol.obd2
 data class FuelMetrics(
     val instantKmPerL: Double?,
     val averageKmPerL: Double?,
-    val litersPerHour: Double?
+    val litersPerHour: Double?,
+    val deltaDistanceKm: Double = 0.0,
+    val deltaFuelLiters: Double = 0.0
 )
 
 data class TripFuelState(
@@ -13,14 +15,15 @@ data class TripFuelState(
 
 /**
  * Calcula consumo instantâneo (km/L), vazão horária (L/h) e média da viagem via MAF direto
- * ou estimativa Speed-Density (MAP + IAT + RPM + Cilindrada) com correção de trims (STFT/LTFT)
- * e detecção de cut-off (freio motor).
+ * ou estimativa Speed-Density (MAP + IAT + RPM + Cilindrada) com correção de trims (STFT/LTFT),
+ * correção de diâmetro do pneu e detecção de cut-off (freio motor).
  */
 class FuelConsumptionCalculator(
     var fuelType: FuelType = FuelType.GASOLINE_E27,
     var engineDisplacementLiters: Double = 1.6,
     var volumetricEfficiency: Double = 0.85,
-    var calibrationFactor: Double = 1.0
+    var calibrationFactor: Double = 1.0,
+    var speedCorrectionFactor: Double = 1.0
 ) {
     private var accumulatedDistanceKm = 0.0
     private var accumulatedFuelLiters = 0.0
@@ -114,6 +117,7 @@ class FuelConsumptionCalculator(
         ltftPct: Double?,
         timestampMs: Long
     ): FuelMetrics {
+        val effectiveSpeedKmh = speedKmh?.let { it * speedCorrectionFactor.coerceIn(0.85, 1.15) }
         val effectiveMaf = estimateMafGramsPerSec(mafSensor, intakeMapKpa, intakeTempC, rpm)
         val lph = calculateLitersPerHour(
             mafGramsPerSec = effectiveMaf,
@@ -121,22 +125,26 @@ class FuelConsumptionCalculator(
             ltftPct = ltftPct,
             throttlePct = throttlePct,
             rpm = rpm,
-            speedKmh = speedKmh
+            speedKmh = effectiveSpeedKmh
         )
 
         val instant = when {
-            speedKmh == null || speedKmh < 3.0 || lph == null -> null
+            effectiveSpeedKmh == null || effectiveSpeedKmh < 3.0 || lph == null -> null
             lph <= 0.001 -> 50.0
-            else -> (speedKmh / lph).coerceIn(0.0, 50.0)
+            else -> (effectiveSpeedKmh / lph).coerceIn(0.0, 50.0)
         }
 
         val previousMs = lastSampleTimestampMs
         lastSampleTimestampMs = timestampMs
 
-        if (previousMs != null && timestampMs > previousMs && speedKmh != null && lph != null) {
+        var deltaDistanceKm = 0.0
+        var deltaFuelLiters = 0.0
+        if (previousMs != null && timestampMs > previousMs && effectiveSpeedKmh != null && lph != null) {
             val deltaHours = ((timestampMs - previousMs).coerceAtMost(10_000L)) / 3_600_000.0
-            accumulatedDistanceKm += speedKmh * deltaHours
-            accumulatedFuelLiters += lph * deltaHours
+            deltaDistanceKm = effectiveSpeedKmh * deltaHours
+            deltaFuelLiters = lph * deltaHours
+            accumulatedDistanceKm += deltaDistanceKm
+            accumulatedFuelLiters += deltaFuelLiters
         }
 
         val average = if (accumulatedFuelLiters > 0.002 && accumulatedDistanceKm > 0.05) {
@@ -148,7 +156,9 @@ class FuelConsumptionCalculator(
         return FuelMetrics(
             instantKmPerL = instant,
             averageKmPerL = average,
-            litersPerHour = lph
+            litersPerHour = lph,
+            deltaDistanceKm = deltaDistanceKm,
+            deltaFuelLiters = deltaFuelLiters
         )
     }
 

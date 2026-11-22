@@ -17,6 +17,7 @@ enum class ObdPid(
     val labelPt: String,
     val unit: String
 ) {
+    FUEL_SYSTEM_STATUS("0103", "4103", "Status Sistema Comb.", ""),
     ENGINE_LOAD("0104", "4104", "Carga do Motor", "%"),
     COOLANT_TEMP("0105", "4105", "Temp. do Motor", "°C"),
     STFT_BANK1("0106", "4106", "Ajuste Curto Comb.", "%"),
@@ -28,6 +29,7 @@ enum class ObdPid(
     INTAKE_TEMP("010F", "410F", "Temp. Admissão", "°C"),
     MAF("0110", "4110", "Fluxo de Ar (MAF)", "g/s"),
     THROTTLE_POS("0111", "4111", "Posição Borboleta", "%"),
+    O2_SENSOR_B1S1_VOLTAGE("0114", "4114", "Sonda Lambda B1S1", "V"),
     FUEL_LEVEL("012F", "412F", "Nível do Tanque", "%"),
     CONTROL_MODULE_VOLTAGE("0142", "4142", "Voltagem ECU", "V")
 }
@@ -48,11 +50,14 @@ data class ObdSnapshot(
     val timingAdvanceDeg: Double? = null,
     val stftPct: Double? = null,
     val ltftPct: Double? = null,
+    val fuelSystemStatusCode: Int? = null,
+    val o2SensorB1S1VoltageV: Double? = null,
     val fuelLevelPct: Double? = null,
     val milOn: Boolean = false,
     val milDtcCount: Int = 0,
     val isStale: Boolean = false,
-    val timestampMs: Long = 0L
+    val timestampMs: Long = 0L,
+    val derived: DerivedTelemetry = DerivedTelemetry()
 )
 
 data class SupportedPidCapabilities(

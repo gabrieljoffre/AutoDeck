@@ -19,14 +19,28 @@ object ObdPollingPlanner {
         return listOf(
             InitCommand("ATZ", optional = false, timeoutMs = 2_500L),
             InitCommand("ATE0", optional = false, timeoutMs = 1_500L),
-            InitCommand("ATL0", optional = true, timeoutMs = 1_200L),
-            InitCommand("ATS0", optional = true, timeoutMs = 1_200L),
-            InitCommand("ATH0", optional = true, timeoutMs = 1_200L),
-            InitCommand("ATAT1", optional = true, timeoutMs = 1_200L),
+            InitCommand("ATL0", optional = true, timeoutMs = 1_000L),
+            InitCommand("ATS0", optional = true, timeoutMs = 1_000L),
+            InitCommand("ATH0", optional = true, timeoutMs = 1_000L),
+            InitCommand("ATAT2", optional = true, timeoutMs = 1_000L),
+            InitCommand("ATST14", optional = true, timeoutMs = 1_000L),
             InitCommand(protocolCmd, optional = false, timeoutMs = 1_500L),
             // Primeiro handshake com a ECU (K-line / Fiat / VW antigos podem levar até 8-10s)
             InitCommand("0100", optional = true, timeoutMs = 10_000L)
         )
+    }
+
+    /**
+     * Adiciona o sufixo "1" aos PIDs Mode 01 (ex: "010C" -> "010C1") para o ELM327
+     * responder imediatamente após o 1º frame da ECU sem esperar timeout de 2ª ECU.
+     */
+    fun formatCommand(command: String, useSingleFrameSuffix: Boolean): String {
+        val trimmed = command.trim()
+        return if (useSingleFrameSuffix && trimmed.length == 4 && trimmed.startsWith("01")) {
+            "${trimmed}1"
+        } else {
+            trimmed
+        }
     }
 
     fun nextCommands(
@@ -52,17 +66,19 @@ object ObdPollingPlanner {
         val useMaf = capabilities.supportsMaf
         return when (profile) {
             ObdPollingProfile.DOCK_BASIC -> {
-                val commands = mutableListOf(ObdPid.SPEED.command)
+                val commands = mutableListOf(
+                    ObdPid.RPM.command,
+                    ObdPid.SPEED.command
+                )
                 if (useMaf) {
                     commands += ObdPid.MAF.command
                 } else {
                     commands += ObdPid.INTAKE_MAP.command
-                    commands += ObdPid.RPM.command
                 }
-                when ((cycleIndex % 4).toInt()) {
+                when ((cycleIndex % 10).toInt()) {
                     0 -> commands += ObdPid.COOLANT_TEMP.command
-                    2 -> commands += "ATRV"
-                    3 -> if (!useMaf) commands += ObdPid.INTAKE_TEMP.command
+                    4 -> commands += "ATRV"
+                    8 -> if (!useMaf) commands += ObdPid.INTAKE_TEMP.command
                 }
                 commands
             }
@@ -71,24 +87,28 @@ object ObdPollingPlanner {
                 val commands = mutableListOf(
                     ObdPid.RPM.command,
                     ObdPid.SPEED.command,
-                    ObdPid.THROTTLE_POS.command,
-                    if (useMaf) ObdPid.MAF.command else ObdPid.INTAKE_MAP.command
+                    if (useMaf) ObdPid.MAF.command else ObdPid.INTAKE_MAP.command,
+                    ObdPid.THROTTLE_POS.command
                 )
-                when ((cycleIndex % 3).toInt()) {
-                    0 -> {
-                        commands += ObdPid.COOLANT_TEMP.command
-                        commands += ObdPid.ENGINE_LOAD.command
-                        commands += "ATRV"
-                    }
-                    1 -> {
+                when ((cycleIndex % 6).toInt()) {
+                    0 -> commands += ObdPid.COOLANT_TEMP.command
+                    1 -> commands += ObdPid.ENGINE_LOAD.command
+                    2 -> commands += "ATRV"
+                    3 -> {
                         commands += ObdPid.INTAKE_TEMP.command
                         commands += ObdPid.TIMING_ADVANCE.command
-                        commands += ObdPid.FUEL_LEVEL.command
+                    }
+                    4 -> {
+                        commands += ObdPid.FUEL_SYSTEM_STATUS.command
+                        commands += ObdPid.O2_SENSOR_B1S1_VOLTAGE.command
                     }
                     else -> {
                         commands += ObdPid.STFT_BANK1.command
                         commands += ObdPid.LTFT_BANK1.command
-                        commands += ObdPid.CONTROL_MODULE_VOLTAGE.command
+                        if (useMaf) {
+                            commands += ObdPid.FUEL_LEVEL.command
+                            commands += ObdPid.CONTROL_MODULE_VOLTAGE.command
+                        }
                         if (useMaf && capabilities.supportsMap) {
                             commands += ObdPid.INTAKE_MAP.command
                         } else if (!useMaf && capabilities.supportsMaf) {

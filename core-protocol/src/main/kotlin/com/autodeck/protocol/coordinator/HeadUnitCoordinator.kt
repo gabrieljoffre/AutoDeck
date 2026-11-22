@@ -18,6 +18,7 @@ enum class MainTab {
 }
 
 enum class ProjectionMode {
+    ANDROID_AUTO_NATIVE,
     CARLINKIT_NATIVE,
     HUR_FALLBACK
 }
@@ -35,7 +36,7 @@ data class HeadUnitState(
     val activeTab: MainTab = MainTab.PROJECTION,
     val projectionMode: ProjectionMode = ProjectionMode.CARLINKIT_NATIVE,
     val audioBtStatus: LinkStatus = LinkStatus.DISCONNECTED,
-    val audioBtDeviceName: String = "Processador Taranis",
+    val audioBtDeviceName: String = "Processador Taramps",
     val obdStatus: LinkStatus = LinkStatus.DISCONNECTED,
     val obdSnapshot: ObdSnapshot = ObdSnapshot(),
     val obdAlerts: List<ObdAlert> = emptyList(),

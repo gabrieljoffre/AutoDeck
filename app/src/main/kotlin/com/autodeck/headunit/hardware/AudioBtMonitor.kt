@@ -20,12 +20,12 @@ import kotlinx.coroutines.flow.asStateFlow
 
 data class AudioRouteStatus(
     val linkStatus: LinkStatus = LinkStatus.DISCONNECTED,
-    val routeLabel: String = "Processador Taranis (Aguardando)",
+    val routeLabel: String = "Processador Taramps (Aguardando)",
     val isDucking: Boolean = false
 )
 
 /**
- * Monitora passivamente a saída Bluetooth A2DP / USB para o processador de áudio Taranis
+ * Monitora passivamente a saída Bluetooth A2DP / USB para o processador de áudio Taramps
  * sem nunca disparar scans Bluetooth, e aplica ducking suave durante a marcha ré.
  */
 class AudioBtMonitor(private val context: Context) {
@@ -106,7 +106,7 @@ class AudioBtMonitor(private val context: Context) {
 
         val label = when {
             !overrideName.isNullOrBlank() && status == LinkStatus.CONNECTED -> overrideName
-            btDevice != null -> btDevice.productName?.toString()?.takeIf { it.isNotBlank() } ?: "Bluetooth A2DP (Taranis)"
+            btDevice != null -> btDevice.productName?.toString()?.takeIf { it.isNotBlank() } ?: "Bluetooth A2DP (Taramps)"
             usbAudio != null -> usbAudio.productName?.toString()?.takeIf { it.isNotBlank() } ?: "Transceptor 2.4 / USB"
             else -> "Alto-falante do tablet (Sem BT/2.4)"
         }

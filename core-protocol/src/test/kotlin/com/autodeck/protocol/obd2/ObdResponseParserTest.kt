@@ -86,4 +86,28 @@ class ObdResponseParserTest {
         assertTrue(ObdResponseParser.isClearDtcConfirmed("44\r>"))
         assertFalse(ObdResponseParser.isClearDtcConfirmed("NO DATA\r>"))
     }
+
+    @Test
+    fun `parses live Honda Civic 2005 LX ELM327 v21 responses including ATSP OK`() {
+        assertTrue(ObdResponseParser.isValidElmInitResponse("OK\r\r>"))
+
+        val cap = ObdResponseParser.parseSupportedPids0100("SEARCHING...\r4100BE3EB000\r\r>")
+        assertNotNull(cap)
+        assertTrue(cap!!.supportsMap)
+        assertFalse(cap.supportsMaf)
+
+        assertEquals(90.0, ObdResponseParser.parsePid(ObdPid.COOLANT_TEMP, "410582\r\r>")!!, 0.01)
+        assertEquals(26.0, ObdResponseParser.parsePid(ObdPid.INTAKE_MAP, "410B1A\r\r>")!!, 0.01)
+        assertEquals(720.75, ObdResponseParser.parsePid(ObdPid.RPM, "410C0B43\r\r>")!!, 0.01)
+        assertEquals(2.0, ObdResponseParser.parsePid(ObdPid.FUEL_SYSTEM_STATUS, "41030200\r\r>")!!, 0.01)
+        assertEquals(0.095, ObdResponseParser.parsePid(ObdPid.O2_SENSOR_B1S1_VOLTAGE, "41141383\r\r>")!!, 0.001)
+        assertEquals(14.5, ObdResponseParser.parseBatteryVoltage("14.5V\r\r>")!!, 0.01)
+
+        assertEquals("010C1", ObdPollingPlanner.formatCommand("010C", true))
+        assertEquals("010C", ObdPollingPlanner.formatCommand("010C", false))
+        assertEquals("ATRV", ObdPollingPlanner.formatCommand("ATRV", true))
+        val initCmds = ObdPollingPlanner.initSequence("3").map { it.command }
+        assertTrue(initCmds.contains("ATAT2"))
+        assertTrue(initCmds.contains("ATST14"))
+    }
 }

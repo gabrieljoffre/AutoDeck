@@ -7,26 +7,32 @@ import com.autodeck.protocol.camera.NoSignalCalibration
 import com.autodeck.protocol.coordinator.ProjectionMode
 import com.autodeck.protocol.obd2.AlertThresholds
 import com.autodeck.protocol.obd2.FuelType
+import com.autodeck.protocol.obd2.TireSpec
+import com.autodeck.protocol.obd2.TransmissionType
 
 data class HeadUnitConfig(
-    val setupCompleted: Boolean = false,
-    val obdDeviceMac: String? = null,
-    val obdDeviceName: String? = null,
-    val savedObdProtocol: String? = null,
+    val setupCompleted: Boolean = true,
+    val obdDeviceMac: String? = "00:10:CC:4F:36:03",
+    val obdDeviceName: String? = "OBDII",
+    val savedObdProtocol: String? = "3",
     val useSimulatedObd: Boolean = false,
     val useSimulatedCamera: Boolean = false,
     val fuelType: FuelType = FuelType.GASOLINE_E27,
-    val engineDisplacementLiters: Double = 1.6,
+    val engineDisplacementLiters: Double = 1.7,
     val fuelCalibrationFactor: Double = 1.0,
     val preferSpeedDensity: Boolean = true,
-    val projectionMode: ProjectionMode = ProjectionMode.CARLINKIT_NATIVE,
+    val transmissionType: TransmissionType = TransmissionType.MANUAL_5,
+    val tireCorrectionFactor: Double = TireSpec.CIVIC_2005_POWERCONTACT2_195_65_R15.speedCorrectionFactor,
+    val virtualTankCapacityLiters: Double = 50.0,
+    val virtualTankRemainingLiters: Double = 50.0,
+    val projectionMode: ProjectionMode = ProjectionMode.ANDROID_AUTO_NATIVE,
     val useBoxMic: Boolean = false,
     val autoConnectOnLaunch: Boolean = true,
     val autoStartOnPower: Boolean = true,
     val launcherModeEnabled: Boolean = false,
     val duckAudioOnReverse: Boolean = true,
-    val cameraVendorId: Int? = null,
-    val cameraProductId: Int? = null,
+    val cameraVendorId: Int? = 0x05E1,
+    val cameraProductId: Int? = 0x0408,
     val cameraInputChannel: Int = 0,
     val cameraIsNtsc: Boolean = true,
     val noSignalCalibration: NoSignalCalibration? = null,
@@ -44,24 +50,34 @@ class HeadUnitPreferences(context: Context) {
         val fuelName = prefs.getString(KEY_FUEL_TYPE, FuelType.GASOLINE_E27.name)
         val fuelType = FuelType.entries.firstOrNull { it.name == fuelName } ?: FuelType.GASOLINE_E27
 
-        val projName = prefs.getString(KEY_PROJECTION_MODE, ProjectionMode.CARLINKIT_NATIVE.name)
+        val projName = prefs.getString(KEY_PROJECTION_MODE, ProjectionMode.ANDROID_AUTO_NATIVE.name)
         val projectionMode = ProjectionMode.entries.firstOrNull { it.name == projName }
-            ?: ProjectionMode.CARLINKIT_NATIVE
+            ?: ProjectionMode.ANDROID_AUTO_NATIVE
 
-        val camVid = if (prefs.contains(KEY_CAMERA_VID)) prefs.getInt(KEY_CAMERA_VID, -1) else null
-        val camPid = if (prefs.contains(KEY_CAMERA_PID)) prefs.getInt(KEY_CAMERA_PID, -1) else null
+        val camVid = if (prefs.contains(KEY_CAMERA_VID)) prefs.getInt(KEY_CAMERA_VID, -1) else 0x05E1
+        val camPid = if (prefs.contains(KEY_CAMERA_PID)) prefs.getInt(KEY_CAMERA_PID, -1) else 0x0408
+        val transName = prefs.getString(KEY_TRANSMISSION_TYPE, TransmissionType.MANUAL_5.name)
+        val transmissionType = TransmissionType.entries.firstOrNull { it.name == transName }
+            ?: TransmissionType.MANUAL_5
+        val defaultTireFactor = TireSpec.CIVIC_2005_POWERCONTACT2_195_65_R15.speedCorrectionFactor.toFloat()
+        val tankCap = prefs.getFloat(KEY_VIRTUAL_TANK_CAP_L, 50.0f).toDouble().coerceAtLeast(1.0)
+        val tankRem = prefs.getFloat(KEY_VIRTUAL_TANK_REM_L, tankCap.toFloat()).toDouble().coerceIn(0.0, tankCap)
 
         return HeadUnitConfig(
-            setupCompleted = prefs.getBoolean(KEY_SETUP_COMPLETED, false),
-            obdDeviceMac = prefs.getString(KEY_OBD_MAC, null),
-            obdDeviceName = prefs.getString(KEY_OBD_NAME, null),
-            savedObdProtocol = prefs.getString(KEY_SAVED_OBD_PROTOCOL, null),
+            setupCompleted = prefs.getBoolean(KEY_SETUP_COMPLETED, true),
+            obdDeviceMac = prefs.getString(KEY_OBD_MAC, "00:10:CC:4F:36:03"),
+            obdDeviceName = prefs.getString(KEY_OBD_NAME, "OBDII"),
+            savedObdProtocol = prefs.getString(KEY_SAVED_OBD_PROTOCOL, "3"),
             useSimulatedObd = prefs.getBoolean(KEY_SIMULATED_OBD, false),
             useSimulatedCamera = prefs.getBoolean(KEY_SIMULATED_CAMERA, false),
             fuelType = fuelType,
-            engineDisplacementLiters = prefs.getFloat(KEY_ENGINE_DISPLACEMENT, 1.6f).toDouble(),
+            engineDisplacementLiters = prefs.getFloat(KEY_ENGINE_DISPLACEMENT, 1.7f).toDouble(),
             fuelCalibrationFactor = prefs.getFloat(KEY_FUEL_CAL_FACTOR, 1.0f).toDouble(),
             preferSpeedDensity = prefs.getBoolean(KEY_PREFER_SPEED_DENSITY, true),
+            transmissionType = transmissionType,
+            tireCorrectionFactor = prefs.getFloat(KEY_TIRE_CORRECTION_FACTOR, defaultTireFactor).toDouble(),
+            virtualTankCapacityLiters = tankCap,
+            virtualTankRemainingLiters = tankRem,
             projectionMode = projectionMode,
             useBoxMic = prefs.getBoolean(KEY_USE_BOX_MIC, false),
             autoConnectOnLaunch = prefs.getBoolean(KEY_AUTO_CONNECT, true),
@@ -105,6 +121,10 @@ class HeadUnitPreferences(context: Context) {
             putFloat(KEY_ENGINE_DISPLACEMENT, config.engineDisplacementLiters.toFloat())
             putFloat(KEY_FUEL_CAL_FACTOR, config.fuelCalibrationFactor.toFloat())
             putBoolean(KEY_PREFER_SPEED_DENSITY, config.preferSpeedDensity)
+            putString(KEY_TRANSMISSION_TYPE, config.transmissionType.name)
+            putFloat(KEY_TIRE_CORRECTION_FACTOR, config.tireCorrectionFactor.toFloat())
+            putFloat(KEY_VIRTUAL_TANK_CAP_L, config.virtualTankCapacityLiters.toFloat())
+            putFloat(KEY_VIRTUAL_TANK_REM_L, config.virtualTankRemainingLiters.toFloat())
             putString(KEY_PROJECTION_MODE, config.projectionMode.name)
             putBoolean(KEY_USE_BOX_MIC, config.useBoxMic)
             putBoolean(KEY_AUTO_CONNECT, config.autoConnectOnLaunch)
@@ -205,5 +225,9 @@ class HeadUnitPreferences(context: Context) {
         const val KEY_ALERT_BATT_HIGH = "alert_batt_high"
         const val KEY_TRIP_DIST_KM = "trip_dist_km"
         const val KEY_TRIP_FUEL_L = "trip_fuel_liters"
+        const val KEY_TRANSMISSION_TYPE = "transmission_type"
+        const val KEY_TIRE_CORRECTION_FACTOR = "tire_correction_factor"
+        const val KEY_VIRTUAL_TANK_CAP_L = "virtual_tank_cap_l"
+        const val KEY_VIRTUAL_TANK_REM_L = "virtual_tank_rem_l"
     }
 }

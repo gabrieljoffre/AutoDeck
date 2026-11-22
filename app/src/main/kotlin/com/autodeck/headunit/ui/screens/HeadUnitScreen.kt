@@ -9,6 +9,7 @@ import android.view.SurfaceView
 import android.view.TextureView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -47,6 +48,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -66,17 +68,21 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.autodeck.headunit.hardware.AndroidAutoNativeCoordinator
 import com.autodeck.headunit.hardware.UsbDeviceRole
 import com.autodeck.headunit.service.CameraDebugState
 import com.autodeck.headunit.service.HeadUnitUiState
 import com.autodeck.headunit.ui.HeadUnitViewModel
+import com.autodeck.headunit.ui.generateQrBitmap
 import com.autodeck.headunit.ui.theme.AutoDeckColors
 import com.autodeck.protocol.camera.GuidelineCalibration
 import com.autodeck.protocol.camera.ReverseCameraState
@@ -131,6 +137,11 @@ fun HeadUnitScreen(
                     onMultiTouch = { points ->
                         viewModel.sendProjectionMultiTouch(points)
                     },
+                    onMotionEvent = { event, w, h ->
+                        viewModel.sendProjectionMotionEvent(event, w, h)
+                    },
+                    onRetryAndroidAuto = { viewModel.retryAndroidAutoNow() },
+                    onStartGuestPairing = { viewModel.startGuestWirelessPairing() },
                     onLaunchHur = { viewModel.launchHurFallback() },
                     onOpenSettings = { viewModel.selectTab(MainTab.SETTINGS) },
                     onTestReverse = { viewModel.toggleSimulatedReverse() }
@@ -192,7 +203,9 @@ fun HeadUnitScreen(
                             },
                             onSelectCameraChannel = { viewModel.selectCameraChannel(it) },
                             onSetCameraStandardNtsc = { viewModel.setCameraStandardNtsc(it) },
-                            onReopenWizard = { viewModel.reopenSetup() }
+                            onReopenWizard = { viewModel.reopenSetup() },
+                            onCheckForUpdate = { viewModel.checkForAppUpdate() },
+                            onDownloadUpdate = { viewModel.downloadAndInstallAppUpdate() }
                         )
                     }
                 }
@@ -517,10 +530,14 @@ private fun ProjectionPanel(
     onAttachSurface: (android.view.Surface?, Int, Int) -> Unit,
     onTouch: (TouchAction, Float, Float) -> Unit,
     onMultiTouch: (List<MultiTouchPoint>) -> Unit,
+    onMotionEvent: (MotionEvent, Int, Int) -> Unit,
+    onRetryAndroidAuto: () -> Unit,
+    onStartGuestPairing: () -> Unit,
     onLaunchHur: () -> Boolean,
     onOpenSettings: () -> Unit,
     onTestReverse: () -> Unit
 ) {
+    val context = LocalContext.current
     val headUnit = uiState.headUnit
     val isCarlinkitStreaming = headUnit.projectionStatus == LinkStatus.CONNECTED
 
@@ -550,6 +567,10 @@ private fun ProjectionPanel(
                     })
                     setOnTouchListener { v, event ->
                         if (v.width <= 0 || v.height <= 0) return@setOnTouchListener false
+                        if (headUnit.projectionMode == ProjectionMode.ANDROID_AUTO_NATIVE) {
+                            onMotionEvent(event, v.width, v.height)
+                            return@setOnTouchListener true
+                        }
                         if (event.pointerCount > 1) {
                             val masked = event.actionMasked
                             val actionIdx = event.actionIndex
@@ -602,10 +623,10 @@ private fun ProjectionPanel(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = if (headUnit.projectionMode == ProjectionMode.CARLINKIT_NATIVE) {
-                        "Apple CarPlay & Android Auto"
-                    } else {
-                        "Modo Transição — HUR (Android Auto)"
+                    text = when (headUnit.projectionMode) {
+                        ProjectionMode.ANDROID_AUTO_NATIVE -> "Android Auto Direto (Wi-Fi / Bluetooth)"
+                        ProjectionMode.CARLINKIT_NATIVE -> "Apple CarPlay & Android Auto"
+                        ProjectionMode.HUR_FALLBACK -> "Modo Transição — HUR (Android Auto)"
                     },
                     color = AutoDeckColors.TextPrimary,
                     fontSize = 24.sp,
@@ -619,15 +640,71 @@ private fun ProjectionPanel(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Áudio BT (Taranis): ${uiState.audioRoute.routeLabel} | Câmera: ${headUnit.cameraState.name}",
+                    text = "Áudio BT (Taramps): ${uiState.audioRoute.routeLabel} | Câmera: ${headUnit.cameraState.name}",
                     color = AutoDeckColors.AccentCyan,
                     fontSize = 12.sp
                 )
+                uiState.guestHotspotInfo?.let { info ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = info,
+                        color = AutoDeckColors.StatusGreen,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                uiState.guestWifiQrPayload?.let { payload ->
+                    val qrBitmap = remember(payload) { generateQrBitmap(payload, 240) }
+                    if (qrBitmap != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White)
+                                .padding(10.dp)
+                        ) {
+                            Image(
+                                bitmap = qrBitmap.asImageBitmap(),
+                                contentDescription = "QR Code Wi-Fi Convidado",
+                                modifier = Modifier.size(136.dp)
+                            )
+                            Text(
+                                text = "Aponte a câmera do outro celular para entrar no Wi-Fi do Civic",
+                                color = Color(0xFF0F172A),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.width(150.dp)
+                            )
+                        }
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(22.dp))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    if (uiState.hurPackageInstalled != null) {
+                    if (headUnit.projectionMode == ProjectionMode.ANDROID_AUTO_NATIVE) {
+                        Button(
+                            onClick = onRetryAndroidAuto,
+                            colors = ButtonDefaults.buttonColors(containerColor = AutoDeckColors.AccentCyan)
+                        ) {
+                            Text("Conectar Agora (Wi-Fi / BT)", color = Color(0xFF03151B), fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                onStartGuestPairing()
+                                runCatching {
+                                    context.startActivity(
+                                        AndroidAutoNativeCoordinator.buildDiscoverableBluetoothIntent(120)
+                                    )
+                                }
+                            }
+                        ) {
+                            Text("Conectar Outro Celular (Convidado)")
+                        }
+                    } else if (uiState.hurPackageInstalled != null) {
                         Button(
                             onClick = { onLaunchHur() },
                             colors = ButtonDefaults.buttonColors(containerColor = AutoDeckColors.AccentCyan)
@@ -870,7 +947,9 @@ private fun SettingsAndInspectorPanel(
     onSetProjectionMode: (ProjectionMode) -> Unit,
     onSelectCameraChannel: (Int) -> Unit,
     onSetCameraStandardNtsc: (Boolean) -> Unit,
-    onReopenWizard: () -> Unit
+    onReopenWizard: () -> Unit,
+    onCheckForUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit
 ) {
     val guide = uiState.config.guidelines
     val thresholds = uiState.config.alertThresholds
@@ -1097,7 +1176,7 @@ private fun SettingsAndInspectorPanel(
         ) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "Áudio Taranis, OBD-II, Projeção e Automação",
+                    text = "Áudio Taramps, OBD-II, Projeção e Automação",
                     color = AutoDeckColors.TextPrimary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
@@ -1118,6 +1197,9 @@ private fun SettingsAndInspectorPanel(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Simulador OBD-II", color = AutoDeckColors.TextPrimary)
                     Switch(checked = uiState.config.useSimulatedObd, onCheckedChange = onToggleSimObd)
+                    OutlinedButton(onClick = { onSetProjectionMode(ProjectionMode.ANDROID_AUTO_NATIVE) }) {
+                        Text("Modo AA Direto")
+                    }
                     OutlinedButton(onClick = { onSetProjectionMode(ProjectionMode.CARLINKIT_NATIVE) }) {
                         Text("Modo Carlinkit")
                     }
@@ -1126,6 +1208,60 @@ private fun SettingsAndInspectorPanel(
                     }
                     Button(onClick = onReopenWizard) {
                         Text("Reabrir Assistente 1ª Config")
+                    }
+                }
+            }
+        }
+
+        // 5. Atualização OTA dentro do AutoDeck
+        val upd = uiState.updateState
+        Card(
+            colors = CardDefaults.cardColors(containerColor = AutoDeckColors.SurfaceCard),
+            border = BorderStroke(1.dp, AutoDeckColors.BorderSubtle),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "Atualização do AutoDeck (OTA • v${upd.currentVersion})",
+                    color = AutoDeckColors.TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = upd.errorMessage ?: upd.statusMessage,
+                    color = if (upd.errorMessage != null) AutoDeckColors.StatusAmber else AutoDeckColors.TextSecondary,
+                    fontSize = 13.sp
+                )
+                if (upd.downloading) {
+                    LinearProgressIndicator(
+                        progress = { upd.downloadProgressPct / 100f },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = "Baixando APK: ${upd.downloadProgressPct}%",
+                        color = AutoDeckColors.AccentCyan,
+                        fontSize = 12.sp
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick = onCheckForUpdate,
+                        enabled = !upd.checking && !upd.downloading
+                    ) {
+                        Text(if (upd.checking) "Verificando..." else "Verificar Atualização")
+                    }
+                    if (upd.availableDownloadUrl != null) {
+                        Button(
+                            onClick = onDownloadUpdate,
+                            enabled = !upd.downloading,
+                            colors = ButtonDefaults.buttonColors(containerColor = AutoDeckColors.AccentCyan)
+                        ) {
+                            Text(
+                                text = "Baixar e Atualizar (${upd.availableVersionName ?: "nova"})",
+                                color = Color(0xFF03151B),
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
             }
