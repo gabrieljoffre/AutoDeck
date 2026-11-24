@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # publicar o APK na release fixa "hondadeck-latest"
 
 jobs:
   build:
@@ -43,16 +43,12 @@ jobs:
           "$SDKM" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" \
             "cmake;3.22.1" "ndk;28.2.13676358" | tail -n 5
 
-      # As chaves ficam em Settings > Secrets and variables > Actions do repositório,
-      # nunca no código. Sem elas o APK funciona, só sem Gemini/Maps pré-configurados.
-      - name: local.properties a partir dos secrets
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
-        run: |
-          : > local.properties
-          if [ -n "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY=$GEMINI_API_KEY" >> local.properties; fi
-          if [ -n "$MAPS_API_KEY" ]; then echo "MAPS_API_KEY=$MAPS_API_KEY" >> local.properties; fi
+      # SEM chaves embutidas: o repositório é público e o APK vai para uma release
+      # pública (link do QR code). Qualquer pessoa poderia extrair uma chave do APK.
+      # A chave do Gemini é digitada uma vez em Configurações > Agente e fica salva
+      # só no tablet. Builds locais continuam lendo HondaDeck/local.properties.
+      - name: local.properties vazio
+        run: ': > local.properties'
 
       - name: Testes da lógica e APK de debug
         run: |
@@ -65,6 +61,24 @@ jobs:
           name: HondaDeck-debug-${{ github.ref_name }}
           path: HondaDeck/app/build/outputs/apk/debug/*.apk
           retention-days: 30
+
+      # Link fixo para o QR code de instalação (sempre a versão mais nova):
+      # https://github.com/gabrieljoffre/AutoDeck/releases/download/hondadeck-latest/HondaDeck.apk
+      - name: Preparar APK para a release
+        run: cp app/build/outputs/apk/debug/*.apk app/build/outputs/apk/debug/HondaDeck.apk
+
+      - name: Publicar na release hondadeck-latest
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: hondadeck-latest
+          name: HondaDeck (última versão)
+          body: |
+            APK de debug do HondaDeck, gerado automaticamente.
+            Branch: ${{ github.ref_name }} · commit ${{ github.sha }}
+            Instalar: baixar HondaDeck.apk no tablet (ou ler o QR code).
+          prerelease: true
+          make_latest: false
+          files: HondaDeck/app/build/outputs/apk/debug/HondaDeck.apk
 
       # Os testes do app rodam depois do APK publicado: uma falha aqui aparece
       # em vermelho, mas não impede baixar o APK para testar no carro.
