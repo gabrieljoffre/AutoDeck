@@ -118,8 +118,11 @@ class NectarLinkAndMobileAgentTest {
     fun nectarlink_manifest_play_protect_and_automotive_compliance() {
         val manifest = File(resolveAppDir(), "src/main/AndroidManifest.xml").readText()
 
+        // BIND_NOTIFICATION_LISTENER_SERVICE foi liberado de propósito: o HondaDeck precisa
+        // do NotificationListenerService para ler a sessão de mídia (capa, título, controles
+        // do Spotify) e as notificações do WhatsApp. Sem declarar o serviço no manifesto, o
+        // app nem aparece em "Acesso a notificações" do Android.
         val blockedPermissions = listOf(
-            "BIND_NOTIFICATION_LISTENER_SERVICE",
             "BIND_ACCESSIBILITY_SERVICE",
             "REQUEST_INSTALL_PACKAGES",
             "READ_SMS",
@@ -131,6 +134,10 @@ class NectarLinkAndMobileAgentTest {
                 manifest.contains(perm)
             )
         }
+
+        // O listener precisa estar declarado e protegido pela permissão do sistema.
+        assertTrue(manifest.contains(".media.HondaNotificationMediaService"))
+        assertTrue(manifest.contains("android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"))
 
         assertTrue(manifest.contains("android:allowBackup=\"false\""))
         assertTrue(manifest.contains("android.permission.FOREGROUND_SERVICE_LOCATION"))
