@@ -91,9 +91,10 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice|location" />
 
-        <!-- NÃO declarar aqui um NotificationListenerService
-             (BIND_NOTIFICATION_LISTENER_SERVICE): com ele o Android bloqueia a
-             instalação do APK no tablet. Música e capa vêm dos broadcasts do Spotify. -->
+        <!-- NÃO declarar aqui o serviço de leitura de notificações: com ele o Android
+             bloqueia a instalação do APK baixado pelo QR code. Ele fica só na versão
+             "completo" (src/completo/AndroidManifest.xml), instalada pelo USB.
+             Veja HondaDeck/INSTALACAO.md. -->
 
         <receiver
             android:name=".hardware.IgnitionBluetoothReceiver"
