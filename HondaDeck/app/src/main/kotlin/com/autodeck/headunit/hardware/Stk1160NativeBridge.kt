@@ -43,6 +43,10 @@ object Stk1160NativeBridge {
     @JvmStatic
     external fun nativeCopyLastLumaGrid(out192: IntArray): Boolean
 
+    /** false quando a thread ISO nativa terminou sozinha (falha de URB, poll ou USB removido). */
+    @JvmStatic
+    external fun nativeIsStreaming(): Boolean
+
     @JvmStatic
     external fun nativeStopStreaming()
 

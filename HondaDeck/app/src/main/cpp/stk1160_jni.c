@@ -681,18 +681,34 @@ Java_com_autodeck_headunit_hardware_Stk1160NativeBridge_nativeStartStreaming(
     memset(g_ctx.uyvy_frame, 0, sizeof(g_ctx.uyvy_frame));
     atomic_store(&g_ctx.running, 1);
 
-    if (pthread_create(&g_ctx.iso_thread, NULL, iso_stream_thread, NULL) == 0) {
+    /* pthread_create devolve o código de erro e NÃO altera errno. */
+    int create_err = pthread_create(&g_ctx.iso_thread, NULL, iso_stream_thread, NULL);
+    if (create_err == 0) {
         g_ctx.thread_active = 1;
         rc = 0;
     } else {
         atomic_store(&g_ctx.running, 0);
-        rc = -errno;
+        rc = -create_err;
+        LOGE("pthread_create failed: %d", create_err);
         struct usbdevfs_setinterface set_zero = {.interface = 0, .altsetting = 0};
         ioctl(fd, USBDEVFS_SETINTERFACE, &set_zero);
     }
     pthread_mutex_unlock(&g_stream_lock);
 
     return rc;
+}
+
+/*
+ * A thread ISO encerra sozinha quando o envio de URBs falha (ex.: banda do hub USB),
+ * quando o poll dá erro ou quando o dispositivo some. Este getter permite ao Kotlin
+ * perceber isso e reiniciar a captura, em vez de ficar com a tela preta.
+ */
+JNIEXPORT jboolean JNICALL
+Java_com_autodeck_headunit_hardware_Stk1160NativeBridge_nativeIsStreaming(
+    JNIEnv *env, jclass clazz) {
+    (void) env;
+    (void) clazz;
+    return atomic_load(&g_ctx.running) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

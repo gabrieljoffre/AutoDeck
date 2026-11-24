@@ -7,6 +7,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import android.util.Log
 import android.view.Surface
 import androidx.core.content.ContextCompat
 import com.autodeck.protocol.camera.IsoAltSettingCandidate
@@ -117,12 +118,55 @@ class Stk1160CameraController {
     private var attachedSurface: Surface? = null
     private var wantStreaming: Boolean = false
     private var streamingActive: Boolean = false
+    private var lastStartAttemptMs: Long = 0L
+    private var consecutiveStartFailures: Int = 0
+
+    /** Momento em que o vídeo começou de fato (0 = parado). Usado como carência do sinal. */
+    @Volatile
+    var streamStartedAtMs: Long = 0L
+        private set
+
+    @Volatile
+    var lastStreamError: String? = null
+        private set
 
     val isInitialized: Boolean
         get() = synchronized(lock) { connection != null }
 
     val isStreamingActive: Boolean
         get() = synchronized(lock) { streamingActive }
+
+    /** Quer vídeo agora (ré/preview visível com superfície pronta). */
+    val wantsVideo: Boolean
+        get() = synchronized(lock) { wantStreaming && attachedSurface != null }
+
+    /**
+     * Chamado a cada ciclo do monitor de sinal. Detecta a thread ISO nativa que morreu sozinha
+     * e tenta reiniciar a captura enquanto a ré/preview estiver visível. Antes, uma falha no
+     * início (ex.: banda do hub USB) deixava a tela preta até sair e entrar de novo na ré.
+     */
+    fun superviseStreaming(nowMs: Long) {
+        synchronized(lock) {
+            if (streamingActive && !Stk1160NativeBridge.nativeIsStreaming()) {
+                Log.w(TAG, "Thread ISO encerrou sozinha; reiniciando captura")
+                lastStreamError = "Vídeo interrompido; reiniciando"
+                Stk1160NativeBridge.nativeStopStreaming()
+                streamingActive = false
+                streamStartedAtMs = 0L
+            }
+            val needsStart = wantStreaming && attachedSurface != null && !streamingActive && connection != null
+            if (!needsStart) return
+            if (nowMs - lastStartAttemptMs < RETRY_INTERVAL_MS) return
+            if (consecutiveStartFailures >= MAX_START_FAILURES_BEFORE_REINIT) {
+                // Várias falhas seguidas: reinicia o chip do zero no próximo refreshFromUsb().
+                Log.w(TAG, "Falhas seguidas ao iniciar vídeo; reinicializando STK1160")
+                consecutiveStartFailures = 0
+                releaseLocked()
+                return
+            }
+            syncStreamingLocked()
+        }
+    }
 
     fun ensureInitialized(
         manager: UsbManager,
@@ -203,8 +247,11 @@ class Stk1160CameraController {
                 } else {
                     Stk1160NativeBridge.nativeStopStreaming()
                     streamingActive = false
+                    streamStartedAtMs = 0L
                 }
             } else {
+                // Superfície nova = tentativa nova, sem esperar o intervalo de repetição.
+                lastStartAttemptMs = 0L
                 syncStreamingLocked()
             }
         }
@@ -255,6 +302,7 @@ class Stk1160CameraController {
         val shouldStream = wantStreaming && surface != null
 
         if (shouldStream && !streamingActive) {
+            lastStartAttemptMs = System.currentTimeMillis()
             val rc = Stk1160NativeBridge.nativeStartStreaming(
                 fd = conn.fileDescriptor,
                 altSetting = selectedAltSetting,
@@ -263,9 +311,19 @@ class Stk1160CameraController {
                 surface = surface
             )
             streamingActive = (rc == 0)
+            if (streamingActive) {
+                streamStartedAtMs = lastStartAttemptMs
+                consecutiveStartFailures = 0
+                lastStreamError = null
+            } else {
+                consecutiveStartFailures++
+                lastStreamError = "Falha ao iniciar vídeo (rc=$rc); tentando de novo"
+                Log.w(TAG, "nativeStartStreaming rc=$rc (falha $consecutiveStartFailures)")
+            }
         } else if (!shouldStream && streamingActive) {
             Stk1160NativeBridge.nativeStopStreaming()
             streamingActive = false
+            streamStartedAtMs = 0L
         }
     }
 
@@ -283,6 +341,13 @@ class Stk1160CameraController {
         videoInterface = null
         activeDeviceName = null
         streamingActive = false
+        streamStartedAtMs = 0L
+    }
+
+    private companion object {
+        const val TAG = "Stk1160Camera"
+        const val RETRY_INTERVAL_MS = 800L
+        const val MAX_START_FAILURES_BEFORE_REINIT = 4
     }
 
     private fun findVideoInterfaceZero(device: UsbDevice): UsbInterface? {
@@ -488,13 +553,21 @@ class UvcUsbCameraSource(
         while (true) {
             refreshFromUsb()
             if (stk1160Controller.isInitialized) {
+                val nowMs = System.currentTimeMillis()
+                stk1160Controller.superviseStreaming(nowMs)
+                val videoWanted = stk1160Controller.wantsVideo
+
                 val polled = stk1160Controller.pollStatus1F()
                 if (polled != null) {
                     consecutiveI2cErrors = 0
                     lastSyncedStatus = polled
                 } else {
                     consecutiveI2cErrors++
-                    if (consecutiveI2cErrors >= 4) {
+                    // Com o vídeo ISO rodando, leituras I2C podem falhar por disputa no USB.
+                    // Derrubar o controlador aqui matava o vídeo no meio da ré; só reinicia
+                    // por erro de I2C quando não há vídeo sendo exibido.
+                    val limit = if (videoWanted) I2C_ERRORS_LIMIT_WHILE_STREAMING else I2C_ERRORS_LIMIT
+                    if (consecutiveI2cErrors >= limit) {
                         lastSyncedStatus = null
                         stk1160Controller.release()
                     }
@@ -503,7 +576,13 @@ class UvcUsbCameraSource(
                 val grid = stk1160Controller.copyLastLumaGrid()
                     ?: LumaGrid(width = 0, height = 0, luma = IntArray(0))
                 val st = lastSyncedStatus
-                val hasLock = st?.hasSyncLock == true
+                // Ao iniciar o vídeo, o decodificador é reprogramado e pode perder o
+                // sincronismo por instantes; sem esta carência a ré "piscava" e a tela de
+                // vídeo era destruída antes da primeira imagem.
+                val startedAt = stk1160Controller.streamStartedAtMs
+                val inStartupGrace = videoWanted && (startedAt == 0L || nowMs - startedAt < STREAM_STARTUP_GRACE_MS)
+                val hasLock = st?.hasSyncLock == true || (inStartupGrace && lastLockSeenRecently(nowMs))
+                if (st?.hasSyncLock == true) lastLockSeenMs = nowMs
                 val hex = st?.let { "0x%02X".format(it.rawReg1F) } ?: "--"
                 val freq = st?.let { if (it.is60Hz) "60Hz" else "50Hz" } ?: ""
 
@@ -517,7 +596,7 @@ class UvcUsbCameraSource(
                 val hwAnalysis = SignalAnalysis(
                     hasActiveSignal = hasLock,
                     reason = if (hasLock) {
-                        "STK1160 SAA7113 HSYNC travado ($hex $freq)"
+                        stk1160Controller.lastStreamError ?: "STK1160 SAA7113 HSYNC travado ($hex $freq)"
                     } else {
                         "STK1160 standby Alt 0 sem sinal ($hex)"
                     },
@@ -532,6 +611,19 @@ class UvcUsbCameraSource(
             }
             delay(intervalMs)
         }
+    }
+
+    @Volatile
+    private var lastLockSeenMs: Long = 0L
+
+    /** Só segura o sinal na carência se houve travamento real há pouco (evita ré fantasma). */
+    private fun lastLockSeenRecently(nowMs: Long): Boolean =
+        lastLockSeenMs != 0L && nowMs - lastLockSeenMs < STREAM_STARTUP_GRACE_MS
+
+    private companion object {
+        const val I2C_ERRORS_LIMIT = 4
+        const val I2C_ERRORS_LIMIT_WHILE_STREAMING = 25 // ~3,5 s a 140 ms por ciclo
+        const val STREAM_STARTUP_GRACE_MS = 2_500L
     }
 
     private fun computeGridStats(grid: LumaGrid): Pair<Double, Double> {
