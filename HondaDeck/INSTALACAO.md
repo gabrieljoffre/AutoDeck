@@ -67,7 +67,10 @@ O link é fixo: cada build no GitHub substitui o arquivo. Esta versão não tem 
 
 **Os valores das chaves não ficam neste repositório (ele é público).**
 Eles estão no documento privado **"HondaDeck – Chaves de API"**, no Google Drive da conta dona
-do projeto (a mesma do Google Cloud `hondadeck`). Acesso restrito: só o dono abre.
+do projeto (a mesma do Google Cloud `hondadeck`):
+[abrir no Drive](https://drive.google.com/file/d/10kXWZS7VPJ4-i-WjGOYPieKt15qoJjI2/view).
+Acesso restrito: só o dono abre; para qualquer outra pessoa o link pede permissão.
+**Nunca mude o compartilhamento para "Qualquer pessoa com o link"** — este repositório é público.
 
 | Chave | Para que serve | Onde entra | Onde ver ou gerar outra |
 |---|---|---|---|
