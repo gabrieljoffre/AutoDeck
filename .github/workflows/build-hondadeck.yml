@@ -50,42 +50,64 @@ jobs:
       - name: local.properties vazio
         run: ': > local.properties'
 
-      - name: Testes da lógica e APK de debug
+      # Gera as duas versões (veja HondaDeck/INSTALACAO.md):
+      #  completo = USB/ADB, com o serviço de notificações (WhatsApp e mídia)
+      #  qr       = QR code/navegador, sem ele (senão o Android bloqueia a instalação)
+      - name: Testes da lógica e APKs de debug (completo + qr)
         run: |
           chmod +x gradlew
-          ./gradlew :core-protocol:test :app:assembleDebug --stacktrace
+          ./gradlew :core-protocol:test :app:assembleCompletoDebug :app:assembleQrDebug --stacktrace
+          mkdir -p dist
+          cp app/build/outputs/apk/completo/debug/*.apk dist/HondaDeck-completo.apk
+          cp app/build/outputs/apk/qr/debug/*.apk dist/HondaDeck.apk
 
-      - name: Publicar APK
+      # Trava de segurança: o APK do QR nunca pode levar o NotificationListenerService.
+      - name: Conferir manifestos dos APKs
+        run: |
+          AA="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          if "$AA" manifest print dist/HondaDeck.apk | grep -q NotificationListenerService; then
+            echo "::error::HondaDeck.apk (QR) contém o NotificationListenerService"; exit 1
+          fi
+          if ! "$AA" manifest print dist/HondaDeck-completo.apk | grep -q NotificationListenerService; then
+            echo "::error::HondaDeck-completo.apk não contém o NotificationListenerService"; exit 1
+          fi
+          echo "Manifestos OK: QR sem listener, completo com listener."
+
+      - name: Publicar APKs
         uses: actions/upload-artifact@v4
         with:
           name: HondaDeck-debug-${{ github.ref_name }}
-          path: HondaDeck/app/build/outputs/apk/debug/*.apk
+          path: HondaDeck/dist/*.apk
           retention-days: 30
 
-      # Link fixo para o QR code de instalação (sempre a versão mais nova):
-      # https://github.com/gabrieljoffre/AutoDeck/releases/download/hondadeck-latest/HondaDeck.apk
-      - name: Preparar APK para a release
-        run: cp app/build/outputs/apk/debug/*.apk app/build/outputs/apk/debug/HondaDeck.apk
-
+      # Links fixos (sempre a versão mais nova):
+      #  QR code:  https://github.com/gabrieljoffre/AutoDeck/releases/download/hondadeck-latest/HondaDeck.apk
+      #  USB/ADB:  https://github.com/gabrieljoffre/AutoDeck/releases/download/hondadeck-latest/HondaDeck-completo.apk
       - name: Publicar na release hondadeck-latest
         uses: softprops/action-gh-release@v2
         with:
           tag_name: hondadeck-latest
           name: HondaDeck (última versão)
           body: |
-            APK de debug do HondaDeck, gerado automaticamente.
+            APKs de debug do HondaDeck, gerados automaticamente.
             Branch: ${{ github.ref_name }} · commit ${{ github.sha }}
-            Instalar: baixar HondaDeck.apk no tablet (ou ler o QR code).
+
+            - HondaDeck-completo.apk: instalar pelo USB (ADB), em casa. Tem WhatsApp e capa/título de qualquer app de música.
+            - HondaDeck.apk: instalar pelo QR code/navegador. Sem WhatsApp.
+
+            Instruções: HondaDeck/INSTALACAO.md
           prerelease: true
           make_latest: false
-          files: HondaDeck/app/build/outputs/apk/debug/HondaDeck.apk
+          files: |
+            HondaDeck/dist/HondaDeck.apk
+            HondaDeck/dist/HondaDeck-completo.apk
 
       # Os testes do app rodam depois do APK publicado: uma falha aqui aparece
       # em vermelho, mas não impede baixar o APK para testar no carro.
       - name: Testes do app
         id: apptests
         continue-on-error: true
-        run: ./gradlew :app:testDebugUnitTest --stacktrace
+        run: ./gradlew :app:testCompletoDebugUnitTest --stacktrace
 
       - name: Relatórios de teste
         if: always()

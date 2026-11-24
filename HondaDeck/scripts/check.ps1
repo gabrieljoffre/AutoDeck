@@ -51,16 +51,17 @@ try {
         & .\gradlew.bat --no-daemon --console=plain :core-protocol:test
     }
 
-    Invoke-Step "App unit & mobile-agent tests (:app:testDebugUnitTest)" {
-        & .\gradlew.bat --no-daemon --console=plain :app:testDebugUnitTest
+    # Versões "completo" (USB) e "qr" (QR code): veja INSTALACAO.md.
+    Invoke-Step "App unit & mobile-agent tests (:app:testCompletoDebugUnitTest)" {
+        & .\gradlew.bat --no-daemon --console=plain :app:testCompletoDebugUnitTest
     }
 
-    Invoke-Step "Android Lint (:app:lintDebug)" {
-        & .\gradlew.bat --no-daemon --console=plain :app:lintDebug
+    Invoke-Step "Android Lint (:app:lintCompletoDebug)" {
+        & .\gradlew.bat --no-daemon --console=plain :app:lintCompletoDebug
     }
 
     if (-not $Fast) {
-        Invoke-Step "Debug APK build (:app:assembleDebug)" {
+        Invoke-Step "Debug APKs completo + qr (:app:assembleDebug)" {
             & .\gradlew.bat --no-daemon --console=plain :app:assembleDebug
         }
     }

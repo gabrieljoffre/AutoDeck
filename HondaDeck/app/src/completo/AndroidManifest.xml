@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Só na versão "completo", instalada pelo USB (ADB). Este trecho é somado ao
+  manifesto principal no build.
+
+  NÃO mover para src/main: com o NotificationListenerService declarado, o Android
+  bloqueia a instalação de APKs baixados pela internet (QR code/navegador). O teste
+  NectarLinkAndMobileAgentTest garante que src/main continue sem ele.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Sessão de mídia (capa, título, controles de qualquer app de música)
+             e notificações do WhatsApp. Precisa ser liberado em "Acesso a notificações". -->
+        <service
+            android:name="com.autodeck.headunit.media.HondaNotificationMediaService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

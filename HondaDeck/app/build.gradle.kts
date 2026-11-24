@@ -64,6 +64,25 @@ android {
         }
     }
 
+    // Duas versões do mesmo app (mesmo applicationId e assinatura: uma substitui a
+    // outra mantendo os dados). Veja HondaDeck/INSTALACAO.md.
+    //  - completo: instalada pelo USB (ADB) em casa. Declara o NotificationListenerService
+    //    (src/completo/AndroidManifest.xml) -> WhatsApp, capa e título da música.
+    //  - qr: baixada pelo QR code/navegador. Sem o listener, porque com ele o Android
+    //    bloqueia a instalação de APKs vindos da internet.
+    flavorDimensions += "instalacao"
+    productFlavors {
+        create("completo") {
+            dimension = "instalacao"
+            isDefault = true // variante que o Android Studio abre por padrão
+            buildConfigField("boolean", "HAS_NOTIFICATION_LISTENER", "true")
+        }
+        create("qr") {
+            dimension = "instalacao"
+            buildConfigField("boolean", "HAS_NOTIFICATION_LISTENER", "false")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
