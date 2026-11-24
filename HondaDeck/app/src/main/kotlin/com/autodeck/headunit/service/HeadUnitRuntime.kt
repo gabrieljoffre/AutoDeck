@@ -54,6 +54,13 @@ import com.autodeck.protocol.obd2.ObdSnapshot
 import com.autodeck.protocol.obd2.SupportedPidCapabilities
 import com.autodeck.protocol.obd2.TireSpec
 import com.autodeck.protocol.obd2.TransmissionType
+import com.autodeck.headunit.data.FuelLogStore
+import com.autodeck.protocol.obd2.FuelEntry
+import com.autodeck.protocol.obd2.FuelLogCalculator
+import com.autodeck.protocol.obd2.FuelLogSummary
+import com.autodeck.headunit.weather.WeatherService
+import com.autodeck.headunit.weather.WeatherState
+import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -83,6 +90,9 @@ data class HeadUnitUiState(
     val mediaState: MediaPlaybackState = MediaPlaybackState(),
     val whatsAppMessages: List<WhatsAppNotificationItem> = emptyList(),
     val gpsState: GpsLocationState = GpsLocationState(),
+    val weather: WeatherState = WeatherState(),
+    val fuelEntries: List<FuelEntry> = emptyList(),
+    val fuelSummary: FuelLogSummary = FuelLogSummary(),
     val ignitionStatus: IgnitionStatus = IgnitionStatus(),
     val agentState: AgentUiState = AgentUiState(),
     val installedMusicApps: List<InstalledAppOption> = emptyList(),
@@ -106,6 +116,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val preferences = HeadUnitPreferences(appContext)
+    // Declarado aqui no topo: o init abaixo já lança corrotinas que leem o diário.
+    private val fuelLogStore = FuelLogStore(appContext)
     private val fuelCalculator = FuelConsumptionCalculator()
     private val signalDetector = VideoSignalDetector()
     private val coordinator = HeadUnitCoordinator(
@@ -460,6 +472,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
     }
 
+    override fun getWeatherSummary(): String? = _uiState.value.weather.spokenSummary()
+
     override fun markMessagesRead() {
         mediaController.messages.value.firstOrNull()?.let { mediaController.markMessageRead(it.key) }
     }
@@ -598,6 +612,71 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         publishState()
     }
 
+    // --- Diário de abastecimentos ---
+    private fun refreshFuelLogState(entries: List<FuelEntry> = fuelLogStore.load()) {
+        val summary = FuelLogCalculator.summarize(entries, _uiState.value.config.fuelCalibrationFactor, System.currentTimeMillis())
+        _uiState.update { it.copy(fuelEntries = entries.sortedByDescending { e -> e.timestampMs }, fuelSummary = summary) }
+    }
+
+    /**
+     * Registra um abastecimento (voz, Gemini ou tela). Atualiza o tanque virtual, recalcula o
+     * consumo real e, ao fechar um trecho tanque cheio a tanque cheio, recalibra o cálculo de
+     * combustível do OBD para o tanque virtual e a autonomia ficarem mais próximos do real.
+     */
+    fun logRefuel(liters: Double, pricePerLiter: Double?, odometerKm: Double?, fullTank: Boolean): String {
+        if (liters <= 0.0 || liters > 120.0) return "Não entendi os litros. Diga, por exemplo: abasteci 40 litros a 6,29, completei."
+        val trip = fuelCalculator.exportTripState()
+        val entry = FuelEntry(
+            timestampMs = System.currentTimeMillis(),
+            odometerKm = odometerKm,
+            liters = liters,
+            pricePerLiter = pricePerLiter,
+            fullTank = fullTank,
+            appTripKm = trip.distanceKm,
+            appTripFuelL = trip.fuelLiters
+        )
+        val entries = fuelLogStore.load() + entry
+        fuelLogStore.save(entries)
+
+        if (fullTank) markTankFull() else addFuelLiters(liters)
+
+        val cfg = _uiState.value.config
+        val summary = FuelLogCalculator.summarize(entries, cfg.fuelCalibrationFactor, entry.timestampMs)
+        summary.suggestedCalibrationFactor?.let { f -> updateConfig { it.copy(fuelCalibrationFactor = f) } }
+        refreshFuelLogState(entries)
+
+        val parts = mutableListOf("Abastecimento registrado: ${"%.1f".format(liters)} litros")
+        entry.totalCost?.let { parts += "total de ${"%.2f".format(it)} reais" }
+        if (fullTank) {
+            summary.lastKmPerL?.takeIf { odometerKm != null }?.let { parts += "consumo real do último tanque: ${"%.1f".format(it)} km por litro" }
+        } else {
+            parts += "anotei como parcial"
+        }
+        if (odometerKm == null) parts += "sem hodômetro, então não deu para calcular o consumo real"
+        return parts.joinToString(", ") + "."
+    }
+
+    fun deleteFuelEntry(timestampMs: Long) {
+        val entries = fuelLogStore.load().filterNot { it.timestampMs == timestampMs }
+        fuelLogStore.save(entries)
+        refreshFuelLogState(entries)
+    }
+
+    override fun logRefuelFromAgent(liters: Double, pricePerLiter: Double?, odometerKm: Double?, fullTank: Boolean): String =
+        logRefuel(liters, pricePerLiter, odometerKm, fullTank)
+
+    override fun getFuelLogSummary(): String? {
+        val s = _uiState.value.fuelSummary
+        if (s.entryCount == 0) return null
+        val bits = mutableListOf<String>()
+        s.averageKmPerL?.let { bits += "consumo real médio ${"%.1f".format(it)} km/L" }
+        s.lastKmPerL?.let { bits += "último tanque ${"%.1f".format(it)} km/L" }
+        s.costPerKm?.let { bits += "custo de ${"%.2f".format(it)} reais por km" }
+        bits += "gasto nos últimos 30 dias ${"%.2f".format(s.spentLast30Days)} reais"
+        s.lastPricePerLiter?.let { bits += "último preço ${"%.2f".format(it)} reais o litro" }
+        return bits.joinToString("; ")
+    }
+
     fun setTransmissionType(type: TransmissionType) {
         updateConfig { it.copy(transmissionType = type) }
         val snap = coordinator.state.obdSnapshot
@@ -625,6 +704,46 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
 
     fun setCameraStandardNtsc(isNtsc: Boolean) {
         updateConfig { it.copy(cameraIsNtsc = isNtsc) }
+    }
+
+    /**
+     * Clima pelo Open-Meteo: atualiza a cada 15 min ou ao andar mais de ~10 km.
+     * Sem GPS ainda, espera; sem internet, mantém o último dado e tenta de novo em 2 min.
+     */
+    private suspend fun weatherLoop() {
+        var lastLat = Double.NaN
+        var lastLon = Double.NaN
+        var lastFetchMs = 0L
+        while (true) {
+            val gps = _uiState.value.gpsState
+            if (gps.hasFix) {
+                val moved = lastLat.isNaN() ||
+                    abs(gps.latitude - lastLat) > 0.09 || abs(gps.longitude - lastLon) > 0.09
+                val stale = System.currentTimeMillis() - lastFetchMs > WEATHER_REFRESH_MS
+                if (moved || stale) {
+                    val fetched = try {
+                        WeatherService.fetch(gps.latitude, gps.longitude)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (fetched != null) {
+                        lastLat = gps.latitude
+                        lastLon = gps.longitude
+                        lastFetchMs = System.currentTimeMillis()
+                        _uiState.update { it.copy(weather = fetched) }
+                    } else {
+                        _uiState.update { s ->
+                            s.copy(weather = s.weather.copy(statusText = "Clima indisponível (sem internet)"))
+                        }
+                        delay(WEATHER_RETRY_MS)
+                        continue
+                    }
+                }
+            }
+            delay(WEATHER_TICK_MS)
+        }
     }
 
     private fun observeAllFlows() {
@@ -661,6 +780,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                 _uiState.update { it.copy(gpsState = gps) }
             }
         }
+        scope.launch { weatherLoop() }
+        scope.launch(Dispatchers.IO) { refreshFuelLogState() }
         scope.launch {
             ignitionMonitor.status.collect { ign ->
                 _uiState.update { it.copy(ignitionStatus = ign) }
@@ -1078,6 +1199,10 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     }
 
     companion object {
+        private const val WEATHER_REFRESH_MS = 15 * 60_000L
+        private const val WEATHER_RETRY_MS = 2 * 60_000L
+        private const val WEATHER_TICK_MS = 30_000L
+
         @SuppressLint("StaticFieldLeak")
         @Volatile
         private var instance: HeadUnitRuntime? = null

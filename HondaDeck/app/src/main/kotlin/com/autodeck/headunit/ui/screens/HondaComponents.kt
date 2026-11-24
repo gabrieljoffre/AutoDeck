@@ -2,9 +2,14 @@ package com.autodeck.headunit.ui.screens
 
 import android.annotation.SuppressLint
 import android.view.MotionEvent
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -308,7 +313,8 @@ private fun StatusMicroDot(
 
 @Composable
 fun HondaClockBlock(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    weather: com.autodeck.headunit.weather.WeatherState? = null
 ) {
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -356,6 +362,9 @@ fun HondaClockBlock(
             letterSpacing = 1.5.sp,
             textAlign = TextAlign.Center
         )
+        if (weather != null) {
+            WeatherChip(weather = weather)
+        }
     }
 }
 
@@ -718,9 +727,20 @@ fun OsmDarkMapSurface(
     )
 }
 
+/** Fundo de escala do arco de giro: corte do Civic 1.7 (D17) fica perto de 6.800 rpm. */
+private const val RPM_ARC_FULL_SCALE = 7000f
+private const val RPM_ARC_START = 148f
+private const val RPM_ARC_SWEEP = 244f
+private const val RPM_SEGMENTS = 28 // 250 rpm por segmento
+private const val RPM_YELLOW_FROM = 4500f
+private const val RPM_RED_FROM = 6000f
+/** A partir daqui os LEDs acesos piscam (hora de trocar de marcha). */
+private const val RPM_SHIFT_ALERT = 6300f
+
 /**
  * Cockpit Central Honda fiel à imagem: arco 145°/250°, faixas internas, velocidade Light 58sp,
  * MARCHA dentro da abertura do arco e COMBUSTÍVEL fino com E/F abaixo da barra.
+ * O arco azul interno é o conta-giros (RPM).
  */
 @Composable
 fun HondaCenterGaugeCluster(
@@ -739,7 +759,7 @@ fun HondaCenterGaugeCluster(
         label = "HondaSpeedAnim"
     )
     val animatedRpm by animateFloatAsState(
-        targetValue = rpm.coerceIn(0f, 7500f),
+        targetValue = rpm.coerceIn(0f, RPM_ARC_FULL_SCALE),
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "HondaRpmAnim"
     )
@@ -747,6 +767,16 @@ fun HondaCenterGaugeCluster(
         targetValue = (fuelPercent / 100f).coerceIn(0f, 1f),
         animationSpec = spring(stiffness = Spring.StiffnessLow),
         label = "HondaFuelAnim"
+    )
+    // Pisca dos LEDs de giro perto do corte (só é usado acima de RPM_SHIFT_ALERT).
+    val shiftBlinkAlpha by rememberInfiniteTransition(label = "HondaShiftBlink").animateFloat(
+        initialValue = 1f,
+        targetValue = 0.25f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 140),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "HondaShiftBlinkAlpha"
     )
 
     Column(
@@ -927,44 +957,53 @@ fun HondaCenterGaugeCluster(
                     }
                 }
 
-                // Arco interno azul neon (RPM / Progresso) com ponto luminoso APENAS nele
+                // CONTA-GIROS estilo pista (shift light) em volta do número da velocidade:
+                // segmentos de LED que acendem com o RPM, verdes até 4.500, amarelos até
+                // 6.000 e vermelhos acima. Perto do corte, os segmentos acesos piscam.
+                // A velocidade fica só no número central e a marcha no seletor.
                 val innerR = radius * 0.45f
                 val innerTopLeft = Offset(center.x - innerR, center.y - innerR)
                 val innerSize = Size(innerR * 2f, innerR * 2f)
-                drawArc(
-                    color = Color(0xFF0E2942),
-                    startAngle = 148f,
-                    sweepAngle = 244f,
-                    useCenter = false,
-                    topLeft = innerTopLeft,
-                    size = innerSize,
-                    style = Stroke(width = 10f, cap = StrokeCap.Round)
-                )
-                val activeFrac = if (rpm > 50f) {
-                    (animatedRpm / 7000f).coerceIn(0.05f, 1f)
-                } else {
-                    (animatedSpeed / maxSpeedKmh.toFloat()).coerceIn(0.05f, 1f)
+                val rpmFrac = (animatedRpm / RPM_ARC_FULL_SCALE).coerceIn(0f, 1f)
+                val segSweep = RPM_ARC_SWEEP / RPM_SEGMENTS
+                val segGap = 1.8f
+                val shiftAlert = animatedRpm >= RPM_SHIFT_ALERT
+                for (i in 0 until RPM_SEGMENTS) {
+                    val segRpm = (i + 0.5f) / RPM_SEGMENTS * RPM_ARC_FULL_SCALE
+                    val zoneColor = when {
+                        segRpm < RPM_YELLOW_FROM -> AutoDeckColors.StatusGreen
+                        segRpm < RPM_RED_FROM -> AutoDeckColors.StatusAmber
+                        else -> AutoDeckColors.StatusRed
+                    }
+                    val lit = (i + 1f) / RPM_SEGMENTS <= rpmFrac + 0.0001f
+                    val alpha = when {
+                        !lit -> 0.13f
+                        shiftAlert -> shiftBlinkAlpha
+                        else -> 1f
+                    }
+                    val segStart = RPM_ARC_START + i * segSweep + segGap / 2f
+                    if (lit) {
+                        // Brilho atrás do segmento aceso (efeito LED)
+                        drawArc(
+                            color = zoneColor.copy(alpha = 0.28f * alpha),
+                            startAngle = segStart,
+                            sweepAngle = segSweep - segGap,
+                            useCenter = false,
+                            topLeft = innerTopLeft,
+                            size = innerSize,
+                            style = Stroke(width = 20f, cap = StrokeCap.Butt)
+                        )
+                    }
+                    drawArc(
+                        color = zoneColor.copy(alpha = alpha),
+                        startAngle = segStart,
+                        sweepAngle = segSweep - segGap,
+                        useCenter = false,
+                        topLeft = innerTopLeft,
+                        size = innerSize,
+                        style = Stroke(width = 11f, cap = StrokeCap.Butt)
+                    )
                 }
-                val innerSweep = 244f * activeFrac
-                drawArc(
-                    brush = Brush.sweepGradient(
-                        colors = listOf(AutoDeckColors.AccentBlue, AutoDeckColors.AccentCyan),
-                        center = center
-                    ),
-                    startAngle = 148f,
-                    sweepAngle = innerSweep,
-                    useCenter = false,
-                    topLeft = innerTopLeft,
-                    size = innerSize,
-                    style = Stroke(width = 10f, cap = StrokeCap.Round)
-                )
-                val innerTipRad = ((148f + innerSweep) * PI / 180.0)
-                val innerTip = Offset(
-                    center.x + (innerR * cos(innerTipRad)).toFloat(),
-                    center.y + (innerR * sin(innerTipRad)).toFloat()
-                )
-                drawCircle(color = AutoDeckColors.AccentCyan.copy(alpha = 0.55f), radius = 8f, center = innerTip)
-                drawCircle(color = Color.White, radius = 3.2f, center = innerTip)
             }
 
             // Velocidade central 58sp Light + "km/h"

@@ -75,6 +75,9 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
     fun resetTripConsumption() = runtime.resetTripConsumption()
     fun markTankFull() = runtime.markTankFull()
     fun addFuelLiters(liters: Double) = runtime.addFuelLiters(liters)
+    fun logRefuel(liters: Double, pricePerLiter: Double?, odometerKm: Double?, fullTank: Boolean): String =
+        runtime.logRefuel(liters, pricePerLiter, odometerKm, fullTank)
+    fun deleteFuelEntry(timestampMs: Long) = runtime.deleteFuelEntry(timestampMs)
     fun setVirtualTankLiters(liters: Double) = runtime.setVirtualTankLiters(liters)
     fun setTransmissionType(type: TransmissionType) = runtime.setTransmissionType(type)
     fun refreshUsbDevices() = runtime.refreshUsbDevices()

@@ -855,8 +855,20 @@ fun ObdScannerPanel(
     onResetTrip: () -> Unit,
     onMarkTankFull: () -> Unit,
     onAddFuelLiters: (Double) -> Unit,
-    onToggleSim: (Boolean) -> Unit
+    onToggleSim: (Boolean) -> Unit,
+    onLogRefuel: (liters: Double, price: Double?, odometerKm: Double?, full: Boolean) -> String = { _, _, _, _ -> "" },
+    onDeleteFuelEntry: (Long) -> Unit = {}
 ) {
+    var showFuelLog by remember { mutableStateOf(false) }
+    if (showFuelLog) {
+        FuelLogDialog(
+            entries = uiState.fuelEntries,
+            summary = uiState.fuelSummary,
+            onSave = onLogRefuel,
+            onDelete = onDeleteFuelEntry,
+            onDismiss = { showFuelLog = false }
+        )
+    }
     val snap = uiState.headUnit.obdSnapshot
     val derived = snap.derived
     val dtcs = uiState.headUnit.dtcCodes
@@ -1007,6 +1019,12 @@ fun ObdScannerPanel(
                         Button(onClick = onMarkTankFull, modifier = Modifier.weight(1f)) {
                             Text("Cheio", fontSize = 11.sp)
                         }
+                    }
+                    fuelSummaryLine(uiState.fuelSummary)?.let {
+                        Text(it, color = AutoDeckColors.StatusGreen, fontSize = 12.sp)
+                    }
+                    OutlinedButton(onClick = { showFuelLog = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Abastecimentos e consumo real", fontSize = 12.sp)
                     }
 
                     Text(

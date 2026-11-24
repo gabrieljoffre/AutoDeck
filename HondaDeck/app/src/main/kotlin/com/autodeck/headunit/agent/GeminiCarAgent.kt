@@ -19,6 +19,7 @@ import com.autodeck.headunit.media.MediaPlaybackState
 import com.autodeck.headunit.media.WhatsAppNotificationItem
 import com.autodeck.protocol.coordinator.HeadUnitState
 import com.autodeck.protocol.coordinator.MainTab
+import com.autodeck.protocol.obd2.FuelLogCalculator
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -75,6 +76,16 @@ interface CarAgentHostBridge {
     fun toggleReverseCamera(): String
     fun replyLatestWhatsApp(replyText: String): String
     fun markMessagesRead()
+
+    /** Resumo do clima atual e previsão (null enquanto não houver GPS/internet). */
+    fun getWeatherSummary(): String? = null
+
+    /** Registra um abastecimento e devolve a frase de confirmação para falar. */
+    fun logRefuelFromAgent(liters: Double, pricePerLiter: Double?, odometerKm: Double?, fullTank: Boolean): String =
+        "Diário de abastecimento indisponível."
+
+    /** Consumo real e gastos do diário de abastecimento (null se não houver registros). */
+    fun getFuelLogSummary(): String? = null
 }
 
 /**
@@ -487,9 +498,12 @@ class GeminiCarAgent(
         val body = JSONObject().apply {
             put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
             put("contents", contents)
+            // Pesquisa Google: o Copilot passa a responder sobre notícias, trânsito, horários,
+            // resultados de jogos etc., como o app do Gemini, sem perder os dados do carro.
+            put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
             put("generationConfig", JSONObject().apply {
                 put("temperature", 0.4)
-                put("maxOutputTokens", 280)
+                put("maxOutputTokens", 400)
             })
         }
 
@@ -518,7 +532,11 @@ class GeminiCarAgent(
             val candidates = json.optJSONArray("candidates") ?: throw IllegalStateException("Sem resposta do Gemini")
             val first = candidates.getJSONObject(0)
             val parts = first.getJSONObject("content").getJSONArray("parts")
-            parts.getJSONObject(0).getString("text").trim()
+            // Com a pesquisa Google a resposta pode vir em mais de uma parte de texto.
+            (0 until parts.length())
+                .mapNotNull { parts.getJSONObject(it).optString("text").takeIf { t -> t.isNotBlank() } }
+                .joinToString("")
+                .trim()
         }
 
         val rawText = apiResult.getOrNull()
@@ -567,7 +585,12 @@ class GeminiCarAgent(
             
             MÚSICA AGORA (${media.appLabel}):
             - Tocando: ${media.isPlaying} | Faixa: "${media.title}" por "${media.artist}"
-            
+
+            CLIMA NO LOCAL DO CARRO:
+            - ${host.getWeatherSummary() ?: "sem dados no momento"}
+
+            Você pode usar a pesquisa Google para perguntas sobre o mundo (notícias, trânsito, horários, lugares).
+
             WHATSAPP RECEBIDO:
             - ${if (latestMsg != null) "De ${latestMsg.sender}: \"${latestMsg.message}\"" else "Nenhuma mensagem pendente"}
             
@@ -580,6 +603,11 @@ class GeminiCarAgent(
             - READ_WHATSAPP | REPLY_WHATSAPP (arg = texto exato da resposta)
             - SWITCH_TAB (arg = HOME, NAVIGATION, MUSIC, AGENT_VOICE, OBD_SCANNER, SETTINGS)
             - OPEN_CAMERA
+            - LOG_FUEL (arg = JSON em texto: {"litros":40,"preco":6.29,"km":123456,"cheio":true}; omita campos que o motorista não disse; "cheio" só true se ele disse que completou)
+
+            DIÁRIO DE ABASTECIMENTO (consumo real medido tanque cheio a tanque cheio):
+            - ${host.getFuelLogSummary() ?: "sem registros ainda"}
+            Quando o motorista contar um abastecimento, use LOG_FUEL e confirme em uma frase.
         """.trimIndent()
     }
 
@@ -622,6 +650,17 @@ class GeminiCarAgent(
                 host.switchTab(tab)
             }
             "OPEN_CAMERA" -> host.toggleReverseCamera()
+            "LOG_FUEL" -> {
+                // arg = {"litros":40,"preco":6.29,"km":123456,"cheio":true}
+                val o = runCatching { JSONObject(arg) }.getOrNull() ?: return null
+                val liters = o.optDouble("litros").takeIf { !it.isNaN() && it > 0 } ?: return null
+                host.logRefuelFromAgent(
+                    liters = liters,
+                    pricePerLiter = o.optDouble("preco").takeIf { !it.isNaN() && it > 0 },
+                    odometerKm = o.optDouble("km").takeIf { !it.isNaN() && it > 0 },
+                    fullTank = o.optBoolean("cheio", false)
+                )
+            }
             else -> null
         }
     }
@@ -633,6 +672,29 @@ class GeminiCarAgent(
         val derived = snap.derived
 
         return when {
+            // Diário de abastecimento: "abasteci 40 litros a 6,29 com 123.456 km, completei"
+            Regex("\\b(abasteci|abastecer|enchi o tanque|completei o tanque)\\b").containsMatchIn(q) -> {
+                val parsed = FuelLogCalculator.parseUtterance(rawInput)
+                val liters = parsed?.resolvedLiters
+                if (parsed == null || liters == null) {
+                    AgentReplyResult(
+                        "Para registrar, diga os litros e, se puder, o preço e o hodômetro. Exemplo: abasteci 40 litros a 6,29 com 123 mil 456 quilômetros, completei.",
+                        "Abastecimento",
+                        isOffline = true
+                    )
+                } else {
+                    val msg = host.logRefuelFromAgent(liters, parsed.resolvedPrice, parsed.odometerKm, parsed.fullTank)
+                    AgentReplyResult(msg, "Abastecimento", isOffline = true)
+                }
+            }
+            q.contains("quanto gastei") || q.contains("gasto com combustivel") || q.contains("consumo real") -> {
+                AgentReplyResult(
+                    host.getFuelLogSummary()?.let { "Pelo seu diário: $it." }
+                        ?: "Ainda não há abastecimentos registrados. Diga, por exemplo: abasteci 40 litros a 6,29, completei.",
+                    "Abastecimento",
+                    isOffline = true
+                )
+            }
             q.contains("proxima") || q.contains("pular") || q.contains("avancar musica") -> {
                 val badge = host.controlMusic("MUSIC_NEXT")
                 AgentReplyResult("Passando para a próxima música.", badge, isOffline = true)
@@ -689,6 +751,16 @@ class GeminiCarAgent(
                 val reply = rawInput.replaceFirst(Regex("(?i)responder\\s+"), "").trim()
                 val res = host.replyLatestWhatsApp(reply)
                 AgentReplyResult(res, "WhatsApp", isOffline = true)
+            }
+            // Clima vem antes de "temperatura" para "temperatura lá fora" não cair no motor.
+            Regex("\\b(clima|chuva|chover)\\b").containsMatchIn(q) ||
+                q.contains("previsao do tempo") || q.contains("la fora") -> {
+                val summary = host.getWeatherSummary()
+                AgentReplyResult(
+                    summary ?: "Ainda não tenho o clima. Preciso de GPS e internet do celular.",
+                    "Clima",
+                    isOffline = true
+                )
             }
             q.contains("temperatura") || q.contains("esquentando") -> {
                 val t = snap.coolantTempC?.toInt()

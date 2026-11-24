@@ -151,7 +151,9 @@ fun HeadUnitScreen(
                             onAddFuelLiters = { viewModel.addFuelLiters(it) },
                             onToggleSim = { enabled ->
                                 viewModel.updateConfig { it.copy(useSimulatedObd = enabled) }
-                            }
+                            },
+                            onLogRefuel = { l, p, km, full -> viewModel.logRefuel(l, p, km, full) },
+                            onDeleteFuelEntry = { viewModel.deleteFuelEntry(it) }
                         )
 
                         MainTab.SETTINGS -> {
@@ -315,7 +317,8 @@ private fun HomeDashboardPanel(
             HondaClockBlock(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(0.27f)
+                    .weight(0.27f),
+                weather = uiState.weather
             )
             Spacer(modifier = Modifier.height(6.dp))
             OsmDarkMiniMapCard(
