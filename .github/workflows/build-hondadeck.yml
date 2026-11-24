@@ -32,15 +32,16 @@ jobs:
       - name: Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # O android-actions/setup-android@v3 está falhando desde 23/11 (o build-apk.yml
+      # do repositório também). O runner ubuntu já traz o Android SDK; aqui só se
+      # instalam os pacotes que faltam com o sdkmanager dele.
       - name: Android SDK, NDK e CMake
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-36
-            build-tools;36.0.0
-            cmake;3.22.1
-            ndk;28.2.13676358
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" \
+            "cmake;3.22.1" "ndk;28.2.13676358" | tail -n 5
 
       # As chaves ficam em Settings > Secrets and variables > Actions do repositório,
       # nunca no código. Sem elas o APK funciona, só sem Gemini/Maps pré-configurados.
