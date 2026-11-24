@@ -1,4 +1,4 @@
-<#
+﻿<#
   Instala (ou atualiza) a versão COMPLETA do HondaDeck no tablet pelo USB (ADB).
   É o jeito padrão de instalar em casa. Detalhes em HondaDeck/INSTALACAO.md.
 
