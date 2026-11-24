@@ -65,6 +65,22 @@ O link é fixo: cada build no GitHub substitui o arquivo. Esta versão não tem 
 
 ## Chaves de API
 
+**Os valores das chaves não ficam neste repositório (ele é público).**
+Eles estão no documento privado **"HondaDeck – Chaves de API"**, no Google Drive da conta dona
+do projeto (a mesma do Google Cloud `hondadeck`). Acesso restrito: só o dono abre.
+
+| Chave | Para que serve | Onde entra | Onde ver ou gerar outra |
+|---|---|---|---|
+| **Google AI Studio (Gemini)** | Copilot de voz/chat (Gemini + pesquisa Google) | `HondaDeck/local.properties` → `GEMINI_API_KEY=...` (build no notebook), ou no tablet em Configurações → Agente | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| **HondaDeck Maps Android** | Mapa, busca de endereço e rotas do Google (ainda não usado pelo app) | `HondaDeck/local.properties` → `MAPS_API_KEY=...` | Google Cloud → projeto `hondadeck` → APIs e serviços → Credenciais |
+
+A chave do Maps é restrita ao app Android `com.autodeck.hondadeck` com o SHA-1 do keystore de debug
+(`95:EB:E7:B0:A4:81:B8:E8:2C:90:5F:2B:F8:02:46:BB:F1:14:09:A3`) e às APIs Maps SDK for Android,
+Places (New) e Routes. Alerta de orçamento do projeto: R$ 30/mês (e-mail em 50% e 100%).
+
+Se uma chave vazar: gere outra no link da tabela, apague a antiga, atualize o documento do Drive
+e o `local.properties`.
+
 - **Build local (USB em casa):** a chave do Gemini pode ficar em `HondaDeck/local.properties`
   (fora do Git) na linha `GEMINI_API_KEY=...`; o APK já sai configurado. **Não publique esse APK.**
 - **Builds do GitHub (release pública):** saem **sem** chave, de propósito. O repositório é público e
