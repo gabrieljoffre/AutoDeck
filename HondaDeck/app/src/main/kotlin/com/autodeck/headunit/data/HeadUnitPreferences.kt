@@ -2,6 +2,7 @@ package com.autodeck.headunit.data
 
 import android.content.Context
 import androidx.core.content.edit
+import com.autodeck.headunit.BuildConfig
 import com.autodeck.protocol.camera.GuidelineCalibration
 import com.autodeck.protocol.camera.NoSignalCalibration
 import com.autodeck.protocol.obd2.AlertThresholds
@@ -134,7 +135,8 @@ class HeadUnitPreferences(context: Context) {
             ignitionBtName = prefs.getString(KEY_IGNITION_BT_NAME, "TARAMPS") ?: "TARAMPS",
             ignitionOffStandbyDelaySec = prefs.getInt(KEY_IGNITION_STANDBY_DELAY_SEC, 8).coerceIn(3, 60),
             showBootSplashOnIgnition = prefs.getBoolean(KEY_SHOW_BOOT_ON_IGNITION, true),
-            geminiApiKey = prefs.getString(KEY_GEMINI_API_KEY, "") ?: "",
+            // Vazio nas Configurações = usa a chave embutida no build (local.properties).
+            geminiApiKey = (prefs.getString(KEY_GEMINI_API_KEY, "") ?: "").ifBlank { BuildConfig.GEMINI_API_KEY },
             geminiModel = prefs.getString(KEY_GEMINI_MODEL, "gemini-2.5-flash") ?: "gemini-2.5-flash",
             voiceAssistantMode = voiceAssistantMode,
             wakeWordEnabled = prefs.getBoolean(KEY_WAKE_WORD_ENABLED, true),

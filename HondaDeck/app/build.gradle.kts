@@ -1,5 +1,16 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
+// Chaves de API vêm de HondaDeck/local.properties, que NÃO vai para o Git (.gitignore).
+// O repositório é público: uma chave escrita no código fica exposta para qualquer pessoa.
+//   GEMINI_API_KEY=...
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun localKey(name: String): String =
+    (localProps.getProperty(name) ?: "").trim().replace("\\", "\\\\").replace("\"", "\\\"")
 
 plugins {
     alias(libs.plugins.android.application)
@@ -21,6 +32,10 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
+
+        // Chave padrão do Copilot embutida no APK: o tablet já sai configurado.
+        // Uma chave digitada nas Configurações do app tem prioridade.
+        buildConfigField("String", "GEMINI_API_KEY", "\"${localKey("GEMINI_API_KEY")}\"")
     }
 
     externalNativeBuild {
@@ -56,6 +71,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {
