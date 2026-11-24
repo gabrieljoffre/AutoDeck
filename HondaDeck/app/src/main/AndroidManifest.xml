@@ -91,18 +91,9 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice|location" />
 
-        <!-- Sem esta declaração o HondaDeck nem aparece em "Acesso a notificações":
-             o cartão de música não recebe capa/título, os botões não controlam o
-             Spotify direto e as mensagens do WhatsApp não chegam. -->
-        <service
-            android:name=".media.HondaNotificationMediaService"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
+        <!-- NÃO declarar aqui um NotificationListenerService
+             (BIND_NOTIFICATION_LISTENER_SERVICE): com ele o Android bloqueia a
+             instalação do APK no tablet. Música e capa vêm dos broadcasts do Spotify. -->
 
         <receiver
             android:name=".hardware.IgnitionBluetoothReceiver"
