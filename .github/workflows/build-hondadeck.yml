@@ -1,0 +1,84 @@
+name: Build HondaDeck APK
+
+# Gera o APK de debug do HondaDeck em qualquer branch que mexa em HondaDeck/,
+# para baixar direto do GitHub (aba Actions > execução > Artifacts) e instalar no tablet.
+on:
+  push:
+    paths:
+      - 'HondaDeck/**'
+      - '.github/workflows/build-hondadeck.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: HondaDeck
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Android SDK, NDK e CMake
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platform-tools
+            platforms;android-36
+            build-tools;36.0.0
+            cmake;3.22.1
+            ndk;28.2.13676358
+
+      # As chaves ficam em Settings > Secrets and variables > Actions do repositório,
+      # nunca no código. Sem elas o APK funciona, só sem Gemini/Maps pré-configurados.
+      - name: local.properties a partir dos secrets
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+        run: |
+          : > local.properties
+          if [ -n "$GEMINI_API_KEY" ]; then echo "GEMINI_API_KEY=$GEMINI_API_KEY" >> local.properties; fi
+          if [ -n "$MAPS_API_KEY" ]; then echo "MAPS_API_KEY=$MAPS_API_KEY" >> local.properties; fi
+
+      - name: Testes da lógica e APK de debug
+        run: |
+          chmod +x gradlew
+          ./gradlew :core-protocol:test :app:assembleDebug --stacktrace
+
+      - name: Publicar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: HondaDeck-debug-${{ github.ref_name }}
+          path: HondaDeck/app/build/outputs/apk/debug/*.apk
+          retention-days: 30
+
+      # Os testes do app rodam depois do APK publicado: uma falha aqui aparece
+      # em vermelho, mas não impede baixar o APK para testar no carro.
+      - name: Testes do app
+        id: apptests
+        continue-on-error: true
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Relatórios de teste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HondaDeck-test-reports-${{ github.ref_name }}
+          path: |
+            HondaDeck/core-protocol/build/reports/tests
+            HondaDeck/app/build/reports/tests
+          if-no-files-found: ignore
+          retention-days: 7
