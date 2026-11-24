@@ -1,0 +1,66 @@
+[
+  {
+    "id": "sm_t500_driver",
+    "platform": "android",
+    "profile": "Driver of a 2005 Honda Civic LX, glanceable landscape ergonomics, connects Taramps BT and ELM327.",
+    "goal": "Complete or skip setup, inspect Home gauges, verify CartoDark map pan/zoom and recenter button, launch Spotify/Music controls, and trigger reverse camera preview.",
+    "locale": "pt-BR",
+    "geo": [-23.55052, -46.63331],
+    "device": {
+      "name": "Galaxy Tab A7 SM-T500, Android 12 landscape",
+      "width_px": 2000,
+      "height_px": 1200,
+      "density_dpi": 240,
+      "font_scale": 1.0,
+      "theme": "dark"
+    }
+  },
+  {
+    "id": "anna_large_font_130",
+    "platform": "android",
+    "profile": "Driver needing larger accessible text (130%-200% font scale), checks that Switches, FlowRow chips, and dialogs never truncate.",
+    "goal": "Navigate through all 4 Setup Wizard steps and all Settings sections without clipped labels or hidden switches.",
+    "locale": "pt-BR",
+    "geo": [-23.55052, -46.63331],
+    "device": {
+      "name": "Galaxy Tab A7 SM-T500, Android 12 large text",
+      "width_px": 2000,
+      "height_px": 1200,
+      "density_dpi": 240,
+      "font_scale": 1.35,
+      "theme": "dark"
+    }
+  },
+  {
+    "id": "malik_fast_tapper",
+    "platform": "android",
+    "profile": "Impatient driver tapping quickly across dock icons, dragging the map, and engaging reverse mid-navigation.",
+    "goal": "Stress-test rapid tab changes, manual reverse camera interrupt, drag-to-explore map without GPS snapping back, and voice offline commands.",
+    "locale": "pt-BR",
+    "geo": [-23.55052, -46.63331],
+    "device": {
+      "name": "Pixel / Tablet landscape 1280x800",
+      "width_px": 1280,
+      "height_px": 800,
+      "density_dpi": 213,
+      "font_scale": 1.0,
+      "theme": "dark"
+    }
+  },
+  {
+    "id": "clara_no_permissions",
+    "platform": "android",
+    "profile": "Privacy-focused user who denies Location, Camera, Microphone, and Overlay permissions during first boot.",
+    "goal": "Ensure HondaDeck launches cleanly without crashing, falls back to honest status messages, and operates offline.",
+    "locale": "pt-BR",
+    "geo": [-23.55052, -46.63331],
+    "device": {
+      "name": "Galaxy Tab A7 SM-T500, permissions denied",
+      "width_px": 2000,
+      "height_px": 1200,
+      "density_dpi": 240,
+      "font_scale": 1.0,
+      "theme": "dark"
+    }
+  }
+]

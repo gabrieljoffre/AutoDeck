@@ -5,24 +5,28 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.core.net.toUri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -35,6 +39,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -46,20 +51,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.VoiceAssistantMode
 import com.autodeck.headunit.hardware.PairedBluetoothDevice
 import com.autodeck.headunit.hardware.UsbDeviceSummary
-import com.autodeck.headunit.media.HondaNotificationMediaService
 import com.autodeck.headunit.media.InstalledAppOption
 import com.autodeck.headunit.service.HeadUnitUiState
 import com.autodeck.headunit.ui.theme.AutoDeckColors
 import com.autodeck.protocol.obd2.FuelType
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SetupWizardScreen(
     uiState: HeadUnitUiState,
@@ -98,7 +107,7 @@ fun SetupWizardScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
                 Text(
                     text = "HondaDeck — 1ª Configuração",
                     color = AutoDeckColors.AccentCyan,
@@ -130,13 +139,15 @@ fun SetupWizardScreen(
                 Box(
                     modifier = Modifier
                         .weight(1f)
+                        .heightIn(min = 48.dp)
                         .background(
                             if (selected) AutoDeckColors.AccentCyan.copy(alpha = 0.18f)
                             else AutoDeckColors.SurfaceCard,
                             RoundedCornerShape(10.dp)
                         )
                         .clickable { step = index }
-                        .padding(vertical = 10.dp, horizontal = 12.dp)
+                        .padding(vertical = 10.dp, horizontal = 12.dp),
+                    contentAlignment = Alignment.CenterStart
                 ) {
                     Text(
                         text = title,
@@ -242,6 +253,7 @@ fun SetupWizardScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StepObdConfig(
     draft: HeadUnitConfig,
@@ -262,23 +274,30 @@ private fun StepObdConfig(
     )
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = draft.useSimulatedObd,
+                role = Role.Switch,
+                onValueChange = { onUpdate(draft.copy(useSimulatedObd = it)) }
+            ),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
             Text("Usar Modo Simulador OBD-II (Bancada)", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
             Text("Gera RPM, velocidade, marcha, temperatura e bateria simulados sem precisar do carro", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
         }
         Switch(
             checked = draft.useSimulatedObd,
-            onCheckedChange = { onUpdate(draft.copy(useSimulatedObd = it)) }
+            onCheckedChange = null
         )
     }
 
     if (!draft.useSimulatedObd) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Dispositivos Bluetooth pareados:", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
+            Text("Dispositivos Bluetooth pareados:", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             OutlinedButton(onClick = onRefreshBluetooth) { Text("Atualizar lista") }
         }
         if (pairedDevices.isEmpty()) {
@@ -314,7 +333,10 @@ private fun StepObdConfig(
     }
 
     Text("Combustível para cálculo de consumo (km/L):", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         FuelType.entries.forEach { fuel ->
             FilterChip(
                 selected = draft.fuelType == fuel,
@@ -325,7 +347,10 @@ private fun StepObdConfig(
     }
 
     Text("Cilindrada do motor (fallback Speed-Density):", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         listOf(1.0, 1.4, 1.6, 1.7, 1.8, 2.0, 2.4).forEach { liters ->
             FilterChip(
                 selected = draft.engineDisplacementLiters == liters,
@@ -336,6 +361,7 @@ private fun StepObdConfig(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StepCameraConfig(
     draft: HeadUnitConfig,
@@ -359,21 +385,31 @@ private fun StepCameraConfig(
     )
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = draft.useSimulatedCamera,
+                role = Role.Switch,
+                onValueChange = { onUpdate(draft.copy(useSimulatedCamera = it)) }
+            ),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column {
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
             Text("Usar Modo Simulador de Câmera (Bancada)", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
             Text("Permite simular tela cinza em standby e subida automática ao engatar a ré", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
         }
         Switch(
             checked = draft.useSimulatedCamera,
-            onCheckedChange = { onUpdate(draft.copy(useSimulatedCamera = it)) }
+            onCheckedChange = null
         )
     }
 
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         OutlinedButton(onClick = onRefreshUsb) { Text("Verificar Conversor no Hub USB") }
         Button(
             onClick = onCalibrateNoSignal,
@@ -412,6 +448,7 @@ private fun StepCameraConfig(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StepNativeAppsAndGemini(
     draft: HeadUnitConfig,
@@ -428,7 +465,10 @@ private fun StepNativeAppsAndGemini(
     )
 
     Text("App padrão de Música (card direito da Home):", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         musicApps.forEach { app ->
             FilterChip(
                 selected = draft.preferredMusicPackage == app.packageName,
@@ -439,7 +479,10 @@ private fun StepNativeAppsAndGemini(
     }
 
     Text("App padrão de Navegação (botão do card esquerdo):", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         mapApps.forEach { app ->
             FilterChip(
                 selected = draft.preferredMapPackage == app.packageName,
@@ -451,7 +494,10 @@ private fun StepNativeAppsAndGemini(
 
     Text("Dispositivo Bluetooth gatilho da Ignição (Taramps):", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
     if (pairedDevices.isNotEmpty()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             pairedDevices.take(5).forEach { dev ->
                 val selected = draft.ignitionBtMac == dev.macAddress ||
                     (draft.ignitionBtMac.isBlank() && dev.name.contains(draft.ignitionBtName, ignoreCase = true))
@@ -465,7 +511,10 @@ private fun StepNativeAppsAndGemini(
     }
 
     Text("Modo do Assistente de Voz:", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.SemiBold)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         VoiceAssistantMode.entries.forEach { mode ->
             FilterChip(
                 selected = draft.voiceAssistantMode == mode,
@@ -492,6 +541,7 @@ private fun StepNativeAppsAndGemini(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @SuppressLint("BatteryLife")
 @Composable
 private fun StepAutomationAndChecklist(
@@ -501,15 +551,31 @@ private fun StepAutomationAndChecklist(
     onToggleLauncherMode: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
-    val btGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        hasPerm(context, Manifest.permission.BLUETOOTH_CONNECT)
-    } else true
-    val gpsGranted = hasPerm(context, Manifest.permission.ACCESS_FINE_LOCATION)
-    val camGranted = hasPerm(context, Manifest.permission.CAMERA)
-    val micGranted = hasPerm(context, Manifest.permission.RECORD_AUDIO)
-    val overlayGranted = Settings.canDrawOverlays(context)
-    val pm = context.getSystemService(PowerManager::class.java)
-    val batteryUnrestricted = pm?.isIgnoringBatteryOptimizations(context.packageName) == true
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumeTick by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                resumeTick++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val btGranted = remember(resumeTick, context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            hasPerm(context, Manifest.permission.BLUETOOTH_CONNECT)
+        } else true
+    }
+    val gpsGranted = remember(resumeTick, context) { hasPerm(context, Manifest.permission.ACCESS_FINE_LOCATION) }
+    val camGranted = remember(resumeTick, context) { hasPerm(context, Manifest.permission.CAMERA) }
+    val micGranted = remember(resumeTick, context) { hasPerm(context, Manifest.permission.RECORD_AUDIO) }
+    val overlayGranted = remember(resumeTick, context) { Settings.canDrawOverlays(context) }
+    val batteryUnrestricted = remember(resumeTick, context) {
+        val pm = context.getSystemService(PowerManager::class.java)
+        pm?.isIgnoringBatteryOptimizations(context.packageName) == true
+    }
 
     Text(
         text = "Checklist 'Painel Sempre Pronto' (Galaxy Tab A7 SM-T500)",
@@ -518,7 +584,10 @@ private fun StepAutomationAndChecklist(
         fontWeight = FontWeight.Bold
     )
 
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         Button(onClick = onRequestPermissions) {
             Text("Pedir Permissões")
         }
@@ -527,7 +596,7 @@ private fun StepAutomationAndChecklist(
                 onClick = {
                     val intent = Intent(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:${context.packageName}")
+                        "package:${context.packageName}".toUri()
                     )
                     runCatching { context.startActivity(intent) }
                 }
@@ -540,7 +609,7 @@ private fun StepAutomationAndChecklist(
                 onClick = {
                     val intent = Intent(
                         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                        Uri.parse("package:${context.packageName}")
+                        "package:${context.packageName}".toUri()
                     )
                     runCatching { context.startActivity(intent) }
                 }
@@ -558,7 +627,14 @@ private fun StepAutomationAndChecklist(
     PermissionStatusRow("Sem suspensão / Otimização Bateria", batteryUnrestricted)
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = draft.launcherModeEnabled,
+                role = Role.Switch,
+                onValueChange = onToggleLauncherMode
+            ),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -569,12 +645,19 @@ private fun StepAutomationAndChecklist(
         Spacer(modifier = Modifier.width(12.dp))
         Switch(
             checked = draft.launcherModeEnabled,
-            onCheckedChange = onToggleLauncherMode
+            onCheckedChange = null
         )
     }
 
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = draft.duckAudioOnReverse,
+                role = Role.Switch,
+                onValueChange = { onUpdate(draft.copy(duckAudioOnReverse = it)) }
+            ),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -584,7 +667,7 @@ private fun StepAutomationAndChecklist(
         }
         Switch(
             checked = draft.duckAudioOnReverse,
-            onCheckedChange = { onUpdate(draft.copy(duckAudioOnReverse = it)) }
+            onCheckedChange = null
         )
     }
 }

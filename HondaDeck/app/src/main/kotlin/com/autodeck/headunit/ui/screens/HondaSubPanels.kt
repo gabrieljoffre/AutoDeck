@@ -1,8 +1,8 @@
 package com.autodeck.headunit.ui.screens
 
 import android.content.Intent
-import android.net.Uri
 import android.provider.Settings
+import androidx.core.net.toUri
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -25,8 +25,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -34,6 +36,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -73,9 +76,12 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,12 +92,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.VoiceAssistantMode
 import com.autodeck.headunit.hardware.CameraHardwareStatus
@@ -121,7 +133,7 @@ fun NavigationFullPanel(
     onNavigateDestination: (String) -> Unit,
     onDownloadOfflineRegion: (MapView) -> Unit
 ) {
-    var followGps by remember { mutableStateOf(true) }
+    var followGps by rememberSaveable { mutableStateOf(true) }
     var destinationText by remember { mutableStateOf("") }
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
 
@@ -187,6 +199,7 @@ fun NavigationFullPanel(
                 if (!followGps) {
                     Surface(
                         onClick = { followGps = true },
+                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                         shape = RoundedCornerShape(20.dp),
                         color = Color(0xE80A1624),
                         border = BorderStroke(1.dp, AutoDeckColors.AccentCyan)
@@ -213,19 +226,21 @@ fun NavigationFullPanel(
                 }
                 Surface(
                     onClick = { mapViewRef?.controller?.zoomIn() },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                     shape = CircleShape,
                     color = Color(0xE00A1624),
                     border = BorderStroke(1.dp, AutoDeckColors.AccentCyan.copy(alpha = 0.6f))
                 ) {
-                    Icon(Icons.Rounded.Add, "Zoom +", tint = Color.White, modifier = Modifier.padding(10.dp))
+                    Icon(Icons.Rounded.Add, "Zoom +", tint = Color.White, modifier = Modifier.padding(12.dp))
                 }
                 Surface(
                     onClick = { mapViewRef?.controller?.zoomOut() },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                     shape = CircleShape,
                     color = Color(0xE00A1624),
                     border = BorderStroke(1.dp, AutoDeckColors.AccentCyan.copy(alpha = 0.6f))
                 ) {
-                    Icon(Icons.Rounded.Remove, "Zoom -", tint = Color.White, modifier = Modifier.padding(10.dp))
+                    Icon(Icons.Rounded.Remove, "Zoom -", tint = Color.White, modifier = Modifier.padding(12.dp))
                 }
             }
         }
@@ -485,7 +500,8 @@ fun MusicCenterPanel(
                 Slider(
                     value = uiState.masterVolumePct.toFloat(),
                     onValueChange = { onSetVolumePct(it.roundToInt()) },
-                    valueRange = 0f..100f
+                    valueRange = 0f..100f,
+                    modifier = Modifier.semantics { contentDescription = "Volume ${uiState.masterVolumePct}%" }
                 )
 
                 Button(
@@ -518,6 +534,7 @@ fun MusicCenterPanel(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GeminiAgentPanel(
     uiState: HeadUnitUiState,
@@ -562,7 +579,11 @@ fun GeminiAgentPanel(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(
+                        modifier = Modifier.weight(1f).padding(end = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                         Box(
                             modifier = Modifier
                                 .size(48.dp)
@@ -582,7 +603,7 @@ fun GeminiAgentPanel(
                         ) {
                             Icon(Icons.Rounded.Mic, "Falar", tint = Color.White, modifier = Modifier.size(24.dp))
                         }
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text("Copiloto HondaDeck (${agent.engineBadge})", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                             Text(
                                 text = agent.partialTranscript.ifBlank { agent.statusText },
@@ -594,9 +615,24 @@ fun GeminiAgentPanel(
                         }
                     }
 
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("\"${uiState.config.wakeWordPhrase}\"", color = AutoDeckColors.TextSecondary, fontSize = 11.sp)
-                        Switch(checked = uiState.config.wakeWordEnabled, onCheckedChange = onToggleWakeWord)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .toggleable(
+                                    value = uiState.config.wakeWordEnabled,
+                                    role = Role.Switch,
+                                    onValueChange = onToggleWakeWord
+                                ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("\"${uiState.config.wakeWordPhrase}\"", color = AutoDeckColors.TextSecondary, fontSize = 11.sp)
+                            Switch(checked = uiState.config.wakeWordEnabled, onCheckedChange = null)
+                        }
                         if (agent.isListening || agent.isSpeaking) {
                             IconButton(onClick = onStopVoice) {
                                 Icon(Icons.Rounded.Stop, "Parar", tint = AutoDeckColors.StatusRed)
@@ -606,7 +642,10 @@ fun GeminiAgentPanel(
                 }
 
                 // Chips rápidos
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     listOf(
                         "Como está o motor?" to "Motor agora",
                         "Qual meu consumo e autonomia?" to "Consumo",
@@ -752,15 +791,30 @@ fun GeminiAgentPanel(
                                 Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("${msg.sender} (${msg.appLabel})", color = AutoDeckColors.AccentCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                                         Text(
-                                            text = "Dispensar",
-                                            color = AutoDeckColors.TextMuted,
-                                            fontSize = 11.sp,
-                                            modifier = Modifier.clickable { onDismissWhatsApp(msg.key) }
+                                            text = "${msg.sender} (${msg.appLabel})",
+                                            color = AutoDeckColors.AccentCyan,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f).padding(end = 8.dp)
                                         )
+                                        Box(
+                                            modifier = Modifier
+                                                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                                .clickable { onDismissWhatsApp(msg.key) },
+                                            contentAlignment = Alignment.CenterEnd
+                                        ) {
+                                            Text(
+                                                text = "Dispensar",
+                                                color = AutoDeckColors.TextMuted,
+                                                fontSize = 11.sp
+                                            )
+                                        }
                                     }
                                     Text(msg.message, color = AutoDeckColors.TextPrimary, fontSize = 13.sp)
                                     if (msg.canReply) {
@@ -860,8 +914,20 @@ fun ObdScannerPanel(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Simulador", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
-                    Switch(checked = uiState.config.useSimulatedObd, onCheckedChange = onToggleSim)
+                    Row(
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .toggleable(
+                                value = uiState.config.useSimulatedObd,
+                                role = Role.Switch,
+                                onValueChange = onToggleSim
+                            ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("Simulador", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
+                        Switch(checked = uiState.config.useSimulatedObd, onCheckedChange = null)
+                    }
                     OutlinedButton(onClick = onResetTrip) { Text("Zerar Viagem", fontSize = 12.sp) }
                     if (uiState.headUnit.obdStatus == LinkStatus.CONNECTED) {
                         OutlinedButton(onClick = onDisconnect) { Text("Desconectar", fontSize = 12.sp) }
@@ -1016,6 +1082,19 @@ fun HondaSettingsPanel(
     onTestManualCamera: () -> Unit = onTestReverse
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumeTick by remember { mutableIntStateOf(0) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                resumeTick++
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val canDrawOverlays = remember(resumeTick, context) { Settings.canDrawOverlays(context) }
+
     val cfg = uiState.config
     var calibrationMsg by remember { mutableStateOf<String?>(null) }
     var showApiKey by remember { mutableStateOf(false) }
@@ -1070,7 +1149,7 @@ fun HondaSettingsPanel(
 
             SettingsSwitchRow(
                 title = "Mostrar Mini-Cápsula Flutuante Honda sobre Maps e Spotify",
-                subtitle = if (Settings.canDrawOverlays(context)) {
+                subtitle = if (canDrawOverlays) {
                     "Permissão de sobreposição concedida (mostra km/h, marcha, Gemini e voltar)"
                 } else {
                     "Permissão pendente — toque no botão abaixo para liberar"
@@ -1086,12 +1165,12 @@ fun HondaSettingsPanel(
                     fontSize = 11.sp,
                     modifier = Modifier.weight(1f)
                 )
-                if (!Settings.canDrawOverlays(context)) {
+                if (!canDrawOverlays) {
                     Button(
                         onClick = {
                             val intent = Intent(
                                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}")
+                                "package:${context.packageName}".toUri()
                             )
                             runCatching { context.startActivity(intent) }
                         }
@@ -1428,7 +1507,14 @@ private fun SettingsSwitchRow(
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onCheckedChange
+            ),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1438,7 +1524,7 @@ private fun SettingsSwitchRow(
                 Text(subtitle, color = AutoDeckColors.TextSecondary, fontSize = 11.sp)
             }
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 

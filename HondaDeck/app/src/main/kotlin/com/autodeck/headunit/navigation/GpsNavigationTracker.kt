@@ -17,6 +17,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Looper
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.net.toUri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -269,8 +272,8 @@ class GpsNavigationTracker(
     fun navigateToDestination(destination: String, preferredPackage: String): Boolean {
         val encoded = Uri.encode(destination.trim())
         val uri = when (preferredPackage) {
-            "com.waze" -> Uri.parse("waze://?q=$encoded&navigate=yes")
-            else -> Uri.parse("google.navigation:q=$encoded")
+            "com.waze" -> "waze://?q=$encoded&navigate=yes".toUri()
+            else -> "google.navigation:q=$encoded".toUri()
         }
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             if (preferredPackage != "INTERNAL_MAP") {
@@ -284,7 +287,7 @@ class GpsNavigationTracker(
         }.getOrElse {
             val fallback = Intent(
                 Intent.ACTION_VIEW,
-                Uri.parse("geo:0,0?q=$encoded")
+                "geo:0,0?q=$encoded".toUri()
             ).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
@@ -318,7 +321,7 @@ class GpsNavigationTracker(
 
         fun createNavigationArrowDrawable(context: Context): BitmapDrawable {
             val sizePx = (58 * context.resources.displayMetrics.density).toInt().coerceAtLeast(48)
-            val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            val bmp = createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bmp)
             val cx = sizePx / 2f
             val cy = sizePx / 2f
@@ -348,7 +351,7 @@ class GpsNavigationTracker(
                 close()
             }
             canvas.drawPath(arrow, arrowPaint)
-            return BitmapDrawable(context.resources, bmp)
+            return bmp.toDrawable(context.resources)
         }
     }
 }

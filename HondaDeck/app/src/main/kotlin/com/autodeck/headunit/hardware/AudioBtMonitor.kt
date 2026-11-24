@@ -1,5 +1,6 @@
 package com.autodeck.headunit.hardware
 
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothProfile
@@ -11,6 +12,7 @@ import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import com.autodeck.protocol.coordinator.LinkStatus
@@ -39,6 +41,7 @@ class AudioBtMonitor(private val context: Context) {
     private var duckFocusRequest: AudioFocusRequest? = null
 
     private val receiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
         override fun onReceive(ctx: Context, intent: Intent) {
             when (intent.action) {
                 BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED -> {
@@ -91,7 +94,7 @@ class AudioBtMonitor(private val context: Context) {
         val outputs = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
         val btDevice = outputs.firstOrNull {
             it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
         }
         val usbAudio = outputs.firstOrNull {
             it.type == AudioDeviceInfo.TYPE_USB_DEVICE ||

@@ -11,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,6 +53,9 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -250,7 +256,7 @@ fun HeadUnitScreen(
             )
         }
 
-        if (showClearDtcDialog) {
+        if (showClearDtcDialog && !headUnit.isReverseOverlayVisible) {
             AlertDialog(
                 onDismissRequest = { showClearDtcDialog = false },
                 title = { Text("Limpar Códigos de Falha (DTC)?") },
@@ -402,15 +408,23 @@ private fun WhatsAppTopBanner(
             ) {
                 Text("Responder", fontSize = 11.sp)
             }
-            Text(
-                text = "✕",
-                color = AutoDeckColors.TextSecondary,
-                modifier = Modifier.clickable(onClick = onDismiss).padding(4.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                    .clickable(onClick = onDismiss)
+                    .clearAndSetSemantics { contentDescription = "Fechar alerta WhatsApp" },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "✕",
+                    color = AutoDeckColors.TextSecondary
+                )
+            }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CameraInputControlRow(
     selectedChannel: Int,
@@ -420,11 +434,16 @@ fun CameraInputControlRow(
     onSelectCameraChannel: (Int) -> Unit,
     onSetCameraStandardNtsc: (Boolean) -> Unit
 ) {
-    Row(
+    FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("RCA:", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
+        Text(
+            text = "RCA:",
+            color = AutoDeckColors.TextSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.align(Alignment.CenterVertically)
+        )
         (0..3).forEach { ch ->
             val selected = selectedChannel == ch
             if (selected) {
@@ -460,12 +479,14 @@ fun CameraInputControlRow(
                 text = "Reg1F=$statusRegHex",
                 color = AutoDeckColors.AccentCyan,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.CenterVertically)
             )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ReverseCameraOverlay(
     uiState: HeadUnitUiState,
@@ -567,7 +588,11 @@ private fun ReverseCameraOverlay(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.weight(1f).padding(end = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(AutoDeckColors.StatusRed))
                 Text(
                     text = if (isManual) "CÂMERA TRASEIRA (MANUAL)" else "MARCHA RÉ DETECTADA — PRIORIDADE MÁXIMA",
@@ -577,7 +602,10 @@ private fun ReverseCameraOverlay(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 OutlinedButton(onClick = onToggleMirror) { Text("Espelhar") }
                 OutlinedButton(onClick = onToggleGuidelines) {
                     Text(if (guide.enabled) "Ocultar Guias" else "Mostrar Guias")

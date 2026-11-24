@@ -33,6 +33,7 @@ data class IgnitionStatus(
  * imediatamente quando o Bluetooth do processador Taramps conecta (1ª fase da chave).
  */
 class IgnitionBluetoothReceiver : BroadcastReceiver() {
+    @SuppressLint("MissingPermission")
     override fun onReceive(context: Context, intent: Intent) {
         val device = IntentCompat.getParcelableExtra(
             intent,

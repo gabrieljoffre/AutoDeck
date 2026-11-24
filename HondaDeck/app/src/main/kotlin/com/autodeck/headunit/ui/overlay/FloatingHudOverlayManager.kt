@@ -13,6 +13,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.graphics.toColorInt
 import com.autodeck.headunit.MainActivity
 import kotlin.math.abs
 
@@ -30,6 +31,7 @@ class FloatingHudOverlayManager(
     private var telemetryLabel: TextView? = null
     private var voiceButton: TextView? = null
 
+    @SuppressLint("SetTextI18n")
     fun showOrUpdate(
         speedKmh: Int,
         gearLabel: String,
@@ -48,7 +50,7 @@ class FloatingHudOverlayManager(
         telemetryLabel?.text = "H  $speedKmh km/h  |  M:$gearLabel  |  $tempStr"
         voiceButton?.text = if (isAgentListening) "🎙️ Ouvindo" else "🎙️ Gemini"
         voiceButton?.setTextColor(
-            if (isAgentListening) Color.parseColor("#22C55E") else Color.parseColor("#38F2FF")
+            if (isAgentListening) "#22C55E".toColorInt() else "#38F2FF".toColorInt()
         )
     }
 
@@ -61,7 +63,7 @@ class FloatingHudOverlayManager(
         voiceButton = null
     }
 
-    @SuppressLint("ClickableViewAccessibility")
+    @SuppressLint("ClickableViewAccessibility", "SetTextI18n")
     private fun createView(wm: WindowManager) {
         val density = context.resources.displayMetrics.density
         fun dp(v: Int): Int = (v * density).toInt()
@@ -69,8 +71,8 @@ class FloatingHudOverlayManager(
         val bg = GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             cornerRadius = dp(24).toFloat()
-            setColor(Color.parseColor("#E8071019"))
-            setStroke(dp(1), Color.parseColor("#CC00E5FF"))
+            setColor("#E8071019".toColorInt())
+            setStroke(dp(1), "#CC00E5FF".toColorInt())
         }
 
         val container = LinearLayout(context).apply {
@@ -88,7 +90,7 @@ class FloatingHudOverlayManager(
 
         val voiceBtn = TextView(context).apply {
             text = "🎙️ Gemini"
-            setTextColor(Color.parseColor("#38F2FF"))
+            setTextColor("#38F2FF".toColorInt())
             textSize = 14f
             setPadding(dp(10), dp(4), dp(10), dp(4))
             setOnClickListener {
@@ -98,7 +100,7 @@ class FloatingHudOverlayManager(
 
         val homeBtn = TextView(context).apply {
             text = "🏠 Painel"
-            setTextColor(Color.parseColor("#F8FAFC"))
+            setTextColor("#F8FAFC".toColorInt())
             textSize = 14f
             setPadding(dp(10), dp(4), dp(4), dp(4))
             setOnClickListener {

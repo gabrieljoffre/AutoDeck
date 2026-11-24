@@ -1,5 +1,7 @@
 package com.autodeck.headunit.service
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,6 +11,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -22,6 +25,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.toColorInt
 import com.autodeck.headunit.MainActivity
 import com.autodeck.headunit.ui.overlay.FloatingHudOverlayManager
 import kotlinx.coroutines.CoroutineScope
@@ -137,13 +141,14 @@ class HeadUnitForegroundService : Service() {
         }
     }
 
+    @SuppressLint("SetTextI18n")
     private fun showReverseOverlayIfPermitted() {
         if (reverseOverlayView != null) return
         if (!Settings.canDrawOverlays(this)) return
 
         val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
         val container = FrameLayout(this).apply {
-            setBackgroundColor(Color.parseColor("#E606090F"))
+            setBackgroundColor("#E606090F".toColorInt())
         }
         val label = TextView(this).apply {
             text = "MARCHA RÉ DETECTADA\nToque para voltar ao HondaDeck"
@@ -186,7 +191,35 @@ class HeadUnitForegroundService : Service() {
     }
 
     private fun startForegroundCompat(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            var typeMask = 0
+            val btGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+            if (btGranted) {
+                typeMask = typeMask or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            }
+            val locGranted = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            if (locGranted) {
+                typeMask = typeMask or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            }
+            val started = if (typeMask != 0) {
+                runCatching { startForeground(NOTIFICATION_ID, notification, typeMask) }.isSuccess
+            } else {
+                false
+            }
+            if (!started) {
+                runCatching { startForeground(NOTIFICATION_ID, notification) }
+                    .onFailure { stopSelf() }
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             runCatching {
                 startForeground(
                     NOTIFICATION_ID,
@@ -195,9 +228,11 @@ class HeadUnitForegroundService : Service() {
                 )
             }.onFailure {
                 runCatching { startForeground(NOTIFICATION_ID, notification) }
+                    .onFailure { stopSelf() }
             }
         } else {
             runCatching { startForeground(NOTIFICATION_ID, notification) }
+                .onFailure { stopSelf() }
         }
     }
 

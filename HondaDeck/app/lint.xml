@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- HondaDeck targets ARM automotive tablets (arm64-v8a / armeabi-v7a), not ChromeOS x86_64 -->
+    <issue id="ChromeOsAbiSupport" severity="ignore" />
+</lint>

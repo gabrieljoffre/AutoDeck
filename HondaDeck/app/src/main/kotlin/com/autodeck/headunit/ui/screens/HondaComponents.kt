@@ -24,9 +24,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,9 +55,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +78,9 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -228,7 +235,7 @@ fun HondaTopHeader(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(54.dp)
+            .heightIn(min = 56.dp)
             .padding(horizontal = 24.dp, vertical = 4.dp)
     ) {
         // Centro: Emblema [H] + HONDA sans bold largo ciano
@@ -262,8 +269,10 @@ fun HondaTopHeader(
         Row(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .clickable(onClick = onOpenSettings)
+                .semantics { contentDescription = "Status e Configurações" }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(7.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -418,7 +427,7 @@ fun HondaBottomDock(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(50.dp),
+            .height(56.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -426,11 +435,20 @@ fun HondaBottomDock(
             verticalAlignment = Alignment.CenterVertically
         ) {
             items.forEach { (tab, icon, label) ->
-                val selected = activeTab == tab
+                val isSelected = activeTab == tab
+                val longPressDesc = when (tab) {
+                    MainTab.AGENT_VOICE -> "Ativar comando de voz"
+                    MainTab.OBD_SCANNER -> "Alternar câmera traseira"
+                    else -> null
+                }
                 Box(
                     modifier = Modifier
+                        .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                         .clip(RoundedCornerShape(10.dp))
+                        .semantics { selected = isSelected }
                         .combinedClickable(
+                            onClickLabel = label,
+                            onLongClickLabel = longPressDesc,
                             onClick = { onSelectTab(tab) },
                             onLongClick = {
                                 when (tab) {
@@ -443,7 +461,7 @@ fun HondaBottomDock(
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (selected) {
+                    if (isSelected) {
                         Box(
                             modifier = Modifier
                                 .size(30.dp)
@@ -454,7 +472,7 @@ fun HondaBottomDock(
                     Icon(
                         imageVector = icon,
                         contentDescription = label,
-                        tint = if (selected) AutoDeckColors.AccentCyan else Color(0xFF7D93AC),
+                        tint = if (isSelected) AutoDeckColors.AccentCyan else Color(0xFF7D93AC),
                         modifier = Modifier.size(26.dp)
                     )
                     if (tab == MainTab.AGENT_VOICE && unreadMessages > 0) {
@@ -490,7 +508,7 @@ fun OsmDarkMiniMapCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(42.dp)
+                .heightIn(min = 48.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color(0xFF1A2433).copy(alpha = 0.92f))
                 .border(1.dp, Color(0xFF28394F), RoundedCornerShape(8.dp))
@@ -536,6 +554,7 @@ fun OsmDarkMiniMapCard(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .heightIn(min = 48.dp)
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(Color.Transparent, Color(0xEB071019))
@@ -575,11 +594,11 @@ fun OsmDarkMapSurface(
     gpsState: GpsLocationState,
     followGps: Boolean,
     interactive: Boolean,
+    modifier: Modifier = Modifier,
     initialZoom: Double = 16.0,
     onUserDragMap: () -> Unit = {},
     onTapNonInteractive: () -> Unit = {},
-    onMapViewReady: (MapView) -> Unit = {},
-    modifier: Modifier = Modifier
+    onMapViewReady: (MapView) -> Unit = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -1033,7 +1052,7 @@ fun HondaCenterGaugeCluster(
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.72f)
-                .height(62.dp),
+                .heightIn(min = 62.dp),
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -1146,7 +1165,7 @@ fun HondaMusicCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(42.dp)
+                .heightIn(min = 48.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color(0xFF1A2433).copy(alpha = 0.92f))
                 .border(1.dp, Color(0xFF28394F), RoundedCornerShape(8.dp))
@@ -1194,6 +1213,7 @@ fun HondaMusicCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = 48.dp)
                     .clickable(onClick = onLaunchMusicApp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(14.dp)
@@ -1292,7 +1312,7 @@ fun HondaMusicCard(
                 Spacer(modifier = Modifier.width(16.dp))
                 Box(
                     modifier = Modifier
-                        .size(46.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .border(1.2.dp, Color(0xFFCBD5E1), CircleShape)
                         .clickable(onClick = onTogglePlayPause),
@@ -1326,25 +1346,45 @@ fun HondaMusicProgressBar(
     onSeekFraction: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val currentOnSeek by rememberUpdatedState(onSeekFraction)
+    var isDragging by remember { mutableStateOf(false) }
+    var dragProgress by remember { mutableFloatStateOf(progress.coerceIn(0f, 1f)) }
+    val displayProgress = if (isDragging) dragProgress else progress.coerceIn(0f, 1f)
+
     Canvas(
         modifier = modifier
             .fillMaxWidth()
-            .height(16.dp)
+            .height(32.dp)
+            .semantics { contentDescription = "Barra de progresso da música" }
             .then(
                 if (enabled) {
                     Modifier
                         .pointerInput(Unit) {
                             detectTapGestures { offset ->
                                 if (size.width > 0) {
-                                    onSeekFraction((offset.x / size.width.toFloat()).coerceIn(0f, 1f))
+                                    currentOnSeek((offset.x / size.width.toFloat()).coerceIn(0f, 1f))
                                 }
                             }
                         }
                         .pointerInput(Unit) {
-                            detectHorizontalDragGestures { change, _ ->
+                            detectHorizontalDragGestures(
+                                onDragStart = { offset ->
+                                    isDragging = true
+                                    if (size.width > 0) {
+                                        dragProgress = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                                    }
+                                },
+                                onDragEnd = {
+                                    isDragging = false
+                                    currentOnSeek(dragProgress)
+                                },
+                                onDragCancel = {
+                                    isDragging = false
+                                }
+                            ) { change, _ ->
                                 change.consume()
                                 if (size.width > 0) {
-                                    onSeekFraction((change.position.x / size.width.toFloat()).coerceIn(0f, 1f))
+                                    dragProgress = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f)
                                 }
                             }
                         }
@@ -1362,7 +1402,7 @@ fun HondaMusicProgressBar(
             strokeWidth = 3f,
             cap = StrokeCap.Round
         )
-        val activeX = (size.width * progress.coerceIn(0f, 1f))
+        val activeX = (size.width * displayProgress)
         if (activeX > 0f) {
             drawLine(
                 color = Color(0xFFE2E8F0),
@@ -1399,7 +1439,7 @@ fun HondaMonitoringCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(42.dp)
+                .heightIn(min = 48.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color(0xFF1A2433).copy(alpha = 0.92f))
                 .border(1.dp, Color(0xFF28394F), RoundedCornerShape(8.dp))
@@ -1490,14 +1530,16 @@ private fun MonitoringGaugeItem(
             text = label,
             color = Color(0xFF94A3B8),
             fontSize = 11.sp,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Text(
             text = value,
             color = if (isStale) AutoDeckColors.TextMuted else valueColor,
             fontSize = 16.sp,
             fontWeight = FontWeight.Normal,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

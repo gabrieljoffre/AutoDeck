@@ -112,7 +112,7 @@ class GeminiCarAgent(
     private fun initTts() {
         tts = TextToSpeech(appContext) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val res = tts?.setLanguage(Locale("pt", "BR"))
+                val res = tts?.setLanguage(Locale.forLanguageTag("pt-BR"))
                 ttsReady = res != TextToSpeech.LANG_MISSING_DATA && res != TextToSpeech.LANG_NOT_SUPPORTED
                 tts?.setSpeechRate(1.06f)
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -813,7 +813,7 @@ class GeminiCarAgent(
     }
 
     private fun normalize(text: String): String {
-        val nfd = Normalizer.normalize(text.lowercase(Locale("pt", "BR")), Normalizer.Form.NFD)
+        val nfd = Normalizer.normalize(text.lowercase(Locale.forLanguageTag("pt-BR")), Normalizer.Form.NFD)
         return nfd.replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "").trim()
     }
 
