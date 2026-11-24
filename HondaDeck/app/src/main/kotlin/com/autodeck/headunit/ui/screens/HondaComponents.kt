@@ -1,16 +1,19 @@
 package com.autodeck.headunit.ui.screens
 
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
+import android.annotation.SuppressLint
+import android.view.MotionEvent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -21,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,31 +32,29 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.DirectionsCar
-import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.outlined.DirectionsCar
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Map
+import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.outlined.Phone
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.rounded.FastForward
+import androidx.compose.material.icons.rounded.FastRewind
 import androidx.compose.material.icons.rounded.LocalGasStation
-import androidx.compose.material.icons.rounded.Map
-import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.SkipNext
-import androidx.compose.material.icons.rounded.SkipPrevious
-import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,27 +71,34 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.autodeck.headunit.media.MediaPlaybackState
 import com.autodeck.headunit.navigation.GpsLocationState
+import com.autodeck.headunit.navigation.GpsNavigationTracker
 import com.autodeck.headunit.service.HeadUnitUiState
 import com.autodeck.headunit.ui.theme.AutoDeckColors
 import com.autodeck.protocol.coordinator.LinkStatus
 import com.autodeck.protocol.coordinator.MainTab
 import com.autodeck.protocol.obd2.TransmissionType
 import kotlinx.coroutines.delay
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -98,7 +107,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Fundo texturizado escuro Honda com moldura chanfrada superior e inferior em Ciano Neon.
+ * Fundo texturizado escuro Honda com padrão sutil + moldura chanfrada em Ciano Neon.
  */
 @Composable
 fun HondaOuterFrameBackground(
@@ -110,8 +119,8 @@ fun HondaOuterFrameBackground(
             .background(
                 Brush.radialGradient(
                     colors = listOf(
-                        Color(0xFF0A1B2E),
-                        Color(0xFF050B14),
+                        Color(0xFF0B2136),
+                        Color(0xFF050D17),
                         Color(0xFF03060B)
                     )
                 )
@@ -122,48 +131,85 @@ fun HondaOuterFrameBackground(
             val w = size.width
             val h = size.height
 
-            // Linha técnica superior com recorte central do emblema HONDA
-            val topY = h * 0.092f
-            val topDeepY = h * 0.115f
+            // Textura geométrica diagonal sutil (estilo grade automotiva)
+            val step = 52f
+            val texColor = Color(0xFF39D7FF).copy(alpha = 0.032f)
+            var x = -h
+            while (x < w + h) {
+                drawLine(texColor, Offset(x, 0f), Offset(x + h * 0.55f, h), strokeWidth = 1f)
+                x += step
+            }
+
+            // Brilho sutil atrás do velocímetro central
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        AutoDeckColors.AccentCyan.copy(alpha = 0.10f),
+                        Color.Transparent
+                    ),
+                    center = Offset(w * 0.5f, h * 0.49f),
+                    radius = h * 0.46f
+                ),
+                radius = h * 0.46f,
+                center = Offset(w * 0.5f, h * 0.49f)
+            )
+
+            // Linha técnica superior chanfrada sob o logo HONDA + diagonais sutis
+            val topY = h * 0.068f
+            val topNotchY = h * 0.110f
             val topPath = Path().apply {
-                moveTo(w * 0.02f, topY)
-                lineTo(w * 0.25f, topY)
-                lineTo(w * 0.285f, topDeepY)
-                lineTo(w * 0.715f, topDeepY)
-                lineTo(w * 0.75f, topY)
-                lineTo(w * 0.98f, topY)
+                moveTo(w * 0.18f, topY)
+                lineTo(w * 0.255f, topY)
+                lineTo(w * 0.295f, topNotchY)
+                lineTo(w * 0.705f, topNotchY)
+                lineTo(w * 0.745f, topY)
+                lineTo(w * 0.82f, topY)
             }
             drawPath(
                 path = topPath,
                 color = AutoDeckColors.AccentCyan.copy(alpha = 0.22f),
+                style = Stroke(width = 8f, cap = StrokeCap.Round)
+            )
+            drawPath(
+                path = topPath,
+                color = AutoDeckColors.AccentCyan.copy(alpha = 0.85f),
+                style = Stroke(width = 2.0f, cap = StrokeCap.Round)
+            )
+
+            // Linhas laterais suaves até a base
+            drawLine(
+                color = AutoDeckColors.AccentCyan.copy(alpha = 0.25f),
+                start = Offset(w * 0.26f, topY),
+                end = Offset(w * 0.21f, h * 0.23f),
+                strokeWidth = 1.4f
+            )
+            drawLine(
+                color = AutoDeckColors.AccentCyan.copy(alpha = 0.25f),
+                start = Offset(w * 0.74f, topY),
+                end = Offset(w * 0.79f, h * 0.23f),
+                strokeWidth = 1.4f
+            )
+
+            // Moldura inferior envolvendo o dock
+            val botOuterY = h * 0.905f
+            val botInnerY = h * 0.868f
+            val botPath = Path().apply {
+                moveTo(w * 0.045f, botOuterY)
+                lineTo(w * 0.315f, botOuterY)
+                lineTo(w * 0.355f, botInnerY)
+                lineTo(w * 0.645f, botInnerY)
+                lineTo(w * 0.685f, botOuterY)
+                lineTo(w * 0.955f, botOuterY)
+            }
+            drawPath(
+                path = botPath,
+                color = AutoDeckColors.AccentCyan.copy(alpha = 0.20f),
                 style = Stroke(width = 9f, cap = StrokeCap.Round)
             )
             drawPath(
-                path = topPath,
+                path = botPath,
                 color = AutoDeckColors.AccentCyan.copy(alpha = 0.88f),
-                style = Stroke(width = 2.4f, cap = StrokeCap.Round)
-            )
-
-            // Linha técnica inferior trapezoidal envolvendo o dock
-            val botBaseY = h * 0.915f
-            val botTopY = h * 0.868f
-            val botPath = Path().apply {
-                moveTo(w * 0.02f, botBaseY)
-                lineTo(w * 0.34f, botBaseY)
-                lineTo(w * 0.375f, botTopY)
-                lineTo(w * 0.625f, botTopY)
-                lineTo(w * 0.66f, botBaseY)
-                lineTo(w * 0.98f, botBaseY)
-            }
-            drawPath(
-                path = botPath,
-                color = AutoDeckColors.AccentCyan.copy(alpha = 0.22f),
-                style = Stroke(width = 10f, cap = StrokeCap.Round)
-            )
-            drawPath(
-                path = botPath,
-                color = AutoDeckColors.AccentCyan.copy(alpha = 0.92f),
-                style = Stroke(width = 2.6f, cap = StrokeCap.Round)
+                style = Stroke(width = 2.2f, cap = StrokeCap.Round)
             )
         }
 
@@ -171,12 +217,89 @@ fun HondaOuterFrameBackground(
     }
 }
 
+/**
+ * Cabeçalho limpo fiel à referência: emblema [H] HONDA centralizado + 3 pontos discretos no canto superior direito.
+ */
 @Composable
 fun HondaTopHeader(
     uiState: HeadUnitUiState,
-    onTriggerVoice: () -> Unit,
-    onToggleCamera: () -> Unit,
     onOpenSettings: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(54.dp)
+            .padding(horizontal = 24.dp, vertical = 4.dp)
+    ) {
+        // Centro: Emblema [H] + HONDA sans bold largo ciano
+        Row(
+            modifier = Modifier.align(Alignment.Center),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            HondaEmblemLogo(
+                modifier = Modifier
+                    .width(50.dp)
+                    .height(42.dp)
+            )
+            Text(
+                text = "HONDA",
+                style = TextStyle(
+                    color = Color(0xFF7CF5FF),
+                    fontSize = 31.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = FontFamily.SansSerif,
+                    letterSpacing = 5.5.sp,
+                    shadow = Shadow(
+                        color = AutoDeckColors.AccentCyan.copy(alpha = 0.85f),
+                        blurRadius = 22f
+                    )
+                )
+            )
+        }
+
+        // Canto superior direito: 3 pontos discretos (Taramps, OBD, GPS)
+        Row(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onOpenSettings)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StatusMicroDot(
+                active = uiState.audioRoute.linkStatus == LinkStatus.CONNECTED,
+                activeColor = AutoDeckColors.StatusGreen
+            )
+            StatusMicroDot(
+                active = uiState.headUnit.obdStatus == LinkStatus.CONNECTED,
+                activeColor = AutoDeckColors.AccentCyan
+            )
+            StatusMicroDot(
+                active = uiState.gpsState.hasFix,
+                activeColor = AutoDeckColors.AccentBlue
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatusMicroDot(
+    active: Boolean,
+    activeColor: Color
+) {
+    Box(
+        modifier = Modifier
+            .size(7.dp)
+            .clip(CircleShape)
+            .background(if (active) activeColor else Color(0xFF334155))
+    )
+}
+
+@Composable
+fun HondaClockBlock(
+    modifier: Modifier = Modifier
 ) {
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -187,276 +310,158 @@ fun HondaTopHeader(
     }
 
     val timeStr = remember(nowMs / 60_000L) {
-        SimpleDateFormat("HH:mm", Locale("pt", "BR")).format(Date(nowMs))
+        SimpleDateFormat("HH:mm", Locale.forLanguageTag("pt-BR")).format(Date(nowMs))
     }
     val dateStr = remember(nowMs / 60_000L) {
-        SimpleDateFormat("EEE, dd MMM", Locale("pt", "BR"))
+        SimpleDateFormat("EEE, dd MMM", Locale.forLanguageTag("pt-BR"))
             .format(Date(nowMs))
             .replace(".", "")
-            .uppercase(Locale("pt", "BR"))
+            .uppercase(Locale.forLanguageTag("pt-BR"))
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(82.dp)
-            .padding(horizontal = 24.dp, vertical = 6.dp)
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        // Esquerda: Relógio + Data em ciano neon
-        Column(
-            modifier = Modifier.align(Alignment.CenterStart),
-            horizontalAlignment = Alignment.Start
-        ) {
-            Text(
-                text = timeStr,
-                style = TextStyle(
-                    color = Color(0xFF4FF5FF),
-                    fontSize = 34.sp,
-                    fontWeight = FontWeight.Medium,
-                    fontFamily = FontFamily.SansSerif,
-                    shadow = Shadow(
-                        color = AutoDeckColors.AccentCyan.copy(alpha = 0.65f),
-                        blurRadius = 16f
-                    )
+        Text(
+            text = timeStr,
+            style = TextStyle(
+                color = Color(0xFF53F6FF),
+                fontSize = 54.sp,
+                fontWeight = FontWeight.Light,
+                fontFamily = FontFamily.SansSerif,
+                letterSpacing = 1.sp,
+                shadow = Shadow(
+                    color = AutoDeckColors.AccentCyan.copy(alpha = 0.7f),
+                    blurRadius = 18f
                 )
-            )
-            Text(
-                text = dateStr,
-                color = AutoDeckColors.HondaCyanSoft,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.4.sp
-            )
-        }
-
-        // Centro: Emblema H + HONDA com glow
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            HondaEmblemLogo(modifier = Modifier.size(40.dp))
-            Text(
-                text = "HONDA",
-                style = TextStyle(
-                    color = Color(0xFFE0FCFF),
-                    fontSize = 27.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Serif,
-                    letterSpacing = 4.sp,
-                    shadow = Shadow(
-                        color = AutoDeckColors.AccentCyan.copy(alpha = 0.85f),
-                        blurRadius = 20f
-                    )
-                )
-            )
-        }
-
-        // Direita: Chips de status + botão rápido Gemini + Câmera de ré
-        Row(
-            modifier = Modifier.align(Alignment.CenterEnd),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            HeaderStatusChip(
-                label = "TARAMPS",
-                active = uiState.audioRoute.linkStatus == LinkStatus.CONNECTED,
-                activeColor = AutoDeckColors.StatusGreen,
-                onClick = onOpenSettings
-            )
-            val obdHz = if (uiState.obdCycleHz > 0.5) " ${uiState.obdCycleHz.toInt()}Hz" else ""
-            HeaderStatusChip(
-                label = "OBD$obdHz",
-                active = uiState.headUnit.obdStatus == LinkStatus.CONNECTED,
-                activeColor = AutoDeckColors.AccentCyan,
-                onClick = onOpenSettings
-            )
-            HeaderStatusChip(
-                label = if (uiState.gpsState.hasFix) "GPS" else "GPS...",
-                active = uiState.gpsState.hasFix,
-                activeColor = AutoDeckColors.AccentCyan,
-                onClick = onOpenSettings
-            )
-
-            Surface(
-                onClick = onTriggerVoice,
-                shape = RoundedCornerShape(20.dp),
-                color = if (uiState.agentState.isListening) {
-                    AutoDeckColors.AccentCyan.copy(alpha = 0.25f)
-                } else {
-                    AutoDeckColors.SurfaceCard.copy(alpha = 0.9f)
-                },
-                border = BorderStroke(
-                    1.dp,
-                    if (uiState.agentState.isListening) AutoDeckColors.AccentCyan else AutoDeckColors.BorderSubtle
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Mic,
-                        contentDescription = "Assistente Gemini",
-                        tint = if (uiState.agentState.isListening) AutoDeckColors.StatusGreen else AutoDeckColors.AccentCyan,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        text = if (uiState.agentState.isListening) "Ouvindo" else uiState.config.wakeWordPhrase,
-                        color = AutoDeckColors.TextPrimary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
-                }
-            }
-
-            Surface(
-                onClick = onToggleCamera,
-                shape = RoundedCornerShape(20.dp),
-                color = AutoDeckColors.SurfaceCard.copy(alpha = 0.9f),
-                border = BorderStroke(1.dp, AutoDeckColors.BorderSubtle)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Videocam,
-                    contentDescription = "Câmera Traseira",
-                    tint = AutoDeckColors.AccentCyan,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp).size(16.dp)
-                )
-            }
-        }
+            ),
+            textAlign = TextAlign.Center
+        )
+        Text(
+            text = dateStr,
+            color = Color(0xFF8BE8F5),
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 1.5.sp,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
 @Composable
 private fun HondaEmblemLogo(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
+        if (size.width <= 1f || size.height <= 1f) return@Canvas
         val w = size.width
         val h = size.height
-        val stroke = 2.6f
         val rectPath = Path().apply {
-            moveTo(w * 0.14f, h * 0.14f)
-            lineTo(w * 0.86f, h * 0.14f)
-            quadraticTo(w * 0.94f, h * 0.52f, w * 0.84f, h * 0.86f)
-            lineTo(w * 0.16f, h * 0.86f)
-            quadraticTo(w * 0.06f, h * 0.52f, w * 0.14f, h * 0.14f)
+            moveTo(w * 0.14f, h * 0.12f)
+            lineTo(w * 0.86f, h * 0.12f)
+            quadraticTo(w * 0.94f, h * 0.50f, w * 0.84f, h * 0.88f)
+            lineTo(w * 0.16f, h * 0.88f)
+            quadraticTo(w * 0.06f, h * 0.50f, w * 0.14f, h * 0.12f)
             close()
         }
         drawPath(
             path = rectPath,
-            color = AutoDeckColors.AccentCyan.copy(alpha = 0.25f),
-            style = Stroke(width = 7f)
+            color = AutoDeckColors.AccentCyan.copy(alpha = 0.28f),
+            style = Stroke(width = 8f)
         )
         drawPath(
             path = rectPath,
-            color = Color(0xFF70F5FF),
-            style = Stroke(width = stroke)
+            color = Color(0xFF6CF4FF),
+            style = Stroke(width = 2.8f)
         )
 
         val hPath = Path().apply {
-            // Perna esquerda
-            moveTo(w * 0.28f, h * 0.22f)
-            lineTo(w * 0.38f, h * 0.22f)
-            lineTo(w * 0.40f, h * 0.50f)
-            lineTo(w * 0.60f, h * 0.50f)
-            lineTo(w * 0.62f, h * 0.22f)
-            lineTo(w * 0.72f, h * 0.22f)
+            moveTo(w * 0.27f, h * 0.22f)
+            lineTo(w * 0.37f, h * 0.22f)
+            lineTo(w * 0.40f, h * 0.49f)
+            lineTo(w * 0.60f, h * 0.49f)
+            lineTo(w * 0.63f, h * 0.22f)
+            lineTo(w * 0.73f, h * 0.22f)
             lineTo(w * 0.68f, h * 0.78f)
             lineTo(w * 0.58f, h * 0.78f)
-            lineTo(w * 0.58f, h * 0.60f)
-            lineTo(w * 0.42f, h * 0.60f)
+            lineTo(w * 0.58f, h * 0.59f)
+            lineTo(w * 0.42f, h * 0.59f)
             lineTo(w * 0.42f, h * 0.78f)
             lineTo(w * 0.32f, h * 0.78f)
             close()
         }
-        drawPath(path = hPath, color = Color(0xFFA2FAFF))
+        drawPath(path = hPath, color = Color(0xFF9DF8FF))
     }
 }
 
-@Composable
-private fun HeaderStatusChip(
-    label: String,
-    active: Boolean,
-    activeColor: Color,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(AutoDeckColors.SurfaceCard.copy(alpha = 0.85f))
-            .border(1.dp, AutoDeckColors.BorderSubtle.copy(alpha = 0.8f), RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(7.dp)
-                .clip(CircleShape)
-                .background(if (active) activeColor else AutoDeckColors.TextMuted)
-        )
-        Text(
-            text = label,
-            color = if (active) AutoDeckColors.TextPrimary else AutoDeckColors.TextSecondary,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-    }
-}
-
+/**
+ * Dock inferior com 6 ícones contornados fiéis à referência (sem pílula de fundo).
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HondaBottomDock(
     activeTab: MainTab,
     unreadMessages: Int,
-    onSelectTab: (MainTab) -> Unit
+    onSelectTab: (MainTab) -> Unit,
+    onLongPressVoice: () -> Unit,
+    onLongPressCamera: () -> Unit
 ) {
     val items = listOf(
-        Triple(MainTab.HOME, Icons.Rounded.Home, "Início"),
-        Triple(MainTab.NAVIGATION, Icons.Rounded.Map, "Mapa"),
-        Triple(MainTab.MUSIC, Icons.Rounded.MusicNote, "Música"),
-        Triple(MainTab.AGENT_VOICE, Icons.Rounded.Mic, "Gemini"),
-        Triple(MainTab.OBD_SCANNER, Icons.Rounded.DirectionsCar, "OBD2"),
-        Triple(MainTab.SETTINGS, Icons.Rounded.Settings, "Config")
+        Triple(MainTab.HOME, Icons.Outlined.Home, "Início"),
+        Triple(MainTab.NAVIGATION, Icons.Outlined.Map, "Mapa"),
+        Triple(MainTab.MUSIC, Icons.Outlined.MusicNote, "Música"),
+        Triple(MainTab.AGENT_VOICE, Icons.Outlined.Phone, "Voz & WhatsApp"),
+        Triple(MainTab.OBD_SCANNER, Icons.Outlined.DirectionsCar, "OBD2"),
+        Triple(MainTab.SETTINGS, Icons.Outlined.Settings, "Configurações")
     )
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(54.dp),
+            .height(50.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(26.dp),
+            horizontalArrangement = Arrangement.spacedBy(34.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             items.forEach { (tab, icon, label) ->
                 val selected = activeTab == tab
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            if (selected) AutoDeckColors.AccentCyan.copy(alpha = 0.16f)
-                            else Color.Transparent
+                        .clip(RoundedCornerShape(10.dp))
+                        .combinedClickable(
+                            onClick = { onSelectTab(tab) },
+                            onLongClick = {
+                                when (tab) {
+                                    MainTab.AGENT_VOICE -> onLongPressVoice()
+                                    MainTab.OBD_SCANNER -> onLongPressCamera()
+                                    else -> onSelectTab(tab)
+                                }
+                            }
                         )
-                        .clickable { onSelectTab(tab) }
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
                     contentAlignment = Alignment.Center
                 ) {
+                    if (selected) {
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(AutoDeckColors.AccentCyan.copy(alpha = 0.16f))
+                        )
+                    }
                     Icon(
                         imageVector = icon,
                         contentDescription = label,
-                        tint = if (selected) AutoDeckColors.AccentCyan else AutoDeckColors.TextSecondary,
-                        modifier = Modifier.size(25.dp)
+                        tint = if (selected) AutoDeckColors.AccentCyan else Color(0xFF7D93AC),
+                        modifier = Modifier.size(26.dp)
                     )
                     if (tab == MainTab.AGENT_VOICE && unreadMessages > 0) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
-                                .size(9.dp)
+                                .size(8.dp)
                                 .clip(CircleShape)
                                 .background(AutoDeckColors.StatusGreen)
                         )
@@ -468,7 +473,7 @@ fun HondaBottomDock(
 }
 
 /**
- * Card de Navegação (esquerda) com Mini-Mapa Dark Navy em tempo real via OSMDroid + GPS do SM-T500.
+ * Card NAVEGAÇÃO (esquerda): título em cápsula cinza-azulada + mapa CartoDark real + Marker GPS + rodapé Google Map.
  */
 @Composable
 fun OsmDarkMiniMapCard(
@@ -479,110 +484,61 @@ fun OsmDarkMiniMapCard(
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier.fillMaxHeight(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Cabeçalho estilo cápsula "NAVEGAÇÃO >"
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(AutoDeckColors.HondaCardHeader.copy(alpha = 0.92f))
-                .border(1.dp, AutoDeckColors.BorderSubtle, RoundedCornerShape(10.dp))
+                .height(42.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF1A2433).copy(alpha = 0.92f))
+                .border(1.dp, Color(0xFF28394F), RoundedCornerShape(8.dp))
                 .clickable(onClick = onExpandMap)
-                .padding(horizontal = 14.dp, vertical = 9.dp),
+                .padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "NAVEGAÇÃO",
-                color = AutoDeckColors.TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.sp
+                color = Color(0xFFCBD5E1),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Normal,
+                letterSpacing = 0.8.sp
             )
             Icon(
                 imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                 contentDescription = "Expandir Mapa",
-                tint = AutoDeckColors.TextSecondary,
+                tint = Color(0xFF94A3B8),
                 modifier = Modifier.size(18.dp)
             )
         }
 
-        // Caixa do Mini-Mapa
         Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(11.dp))
                 .background(Color(0xFF0A1420))
-                .border(1.dp, AutoDeckColors.BorderSubtle, RoundedCornerShape(14.dp))
+                .border(1.dp, Color(0xFF23384D), RoundedCornerShape(11.dp))
         ) {
             OsmDarkMapSurface(
                 gpsState = gpsState,
-                zoomLevel = 16.2,
+                followGps = true,
                 interactive = false,
+                initialZoom = 16.0,
+                onTapNonInteractive = onExpandMap,
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Rota neon e cursor seta azul no centro
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                if (size.width <= 1f || size.height <= 1f) return@Canvas
-                val cx = size.width * 0.5f
-                val cy = size.height * 0.58f
-
-                val routePath = Path().apply {
-                    moveTo(cx, size.height * 0.94f)
-                    lineTo(cx, cy)
-                    cubicTo(
-                        cx, cy - size.height * 0.14f,
-                        cx + size.width * 0.06f, cy - size.height * 0.25f,
-                        cx + size.width * 0.08f, size.height * 0.04f
-                    )
-                }
-                drawPath(
-                    path = routePath,
-                    color = AutoDeckColors.AccentCyan.copy(alpha = 0.28f),
-                    style = Stroke(width = 16f, cap = StrokeCap.Round)
-                )
-                drawPath(
-                    path = routePath,
-                    color = AutoDeckColors.AccentCyan.copy(alpha = 0.85f),
-                    style = Stroke(width = 5f, cap = StrokeCap.Round)
-                )
-
-                // Halo do cursor
-                drawCircle(
-                    color = AutoDeckColors.AccentBlue.copy(alpha = 0.28f),
-                    radius = 30f,
-                    center = Offset(cx, cy)
-                )
-                drawCircle(
-                    color = AutoDeckColors.AccentCyan.copy(alpha = 0.8f),
-                    radius = 30f,
-                    center = Offset(cx, cy),
-                    style = Stroke(width = 2.2f)
-                )
-
-                // Seta direcional azul
-                val arrow = Path().apply {
-                    moveTo(cx, cy - 17f)
-                    lineTo(cx + 13f, cy + 13f)
-                    lineTo(cx, cy + 6f)
-                    lineTo(cx - 13f, cy + 13f)
-                    close()
-                }
-                drawPath(path = arrow, color = AutoDeckColors.AccentCyan)
-            }
-
-            // Rodapé clicável para abrir Google Maps / Waze
+            // Rodapé translúcido para abrir o Google Maps / Waze
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .background(
                         Brush.verticalGradient(
-                            colors = listOf(Color.Transparent, Color(0xEE071019))
+                            colors = listOf(Color.Transparent, Color(0xEB071019))
                         )
                     )
                     .clickable(onClick = onLaunchPreferredMap)
@@ -594,13 +550,13 @@ fun OsmDarkMiniMapCard(
                     imageVector = Icons.Rounded.Navigation,
                     contentDescription = null,
                     tint = AutoDeckColors.AccentCyan,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(17.dp)
                 )
                 Text(
                     text = preferredMapLabel,
                     color = AutoDeckColors.TextPrimary,
                     fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -610,41 +566,70 @@ fun OsmDarkMiniMapCard(
 }
 
 /**
- * Superfície MapView do OSMDroid com filtro Dark Navy Automotive + suporte offline em cache.
+ * Superfície MapView real do OSMDroid com CartoDark nativo, ciclo de vida completo,
+ * Marker GPS real rotacionado pelo bearing, Polyline de trilha e controle sem resetar zoom/pan.
  */
+@SuppressLint("ClickableViewAccessibility")
 @Composable
 fun OsmDarkMapSurface(
     gpsState: GpsLocationState,
-    zoomLevel: Double,
+    followGps: Boolean,
     interactive: Boolean,
+    initialZoom: Double = 16.0,
+    onUserDragMap: () -> Unit = {},
+    onTapNonInteractive: () -> Unit = {},
     onMapViewReady: (MapView) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val darkMatrixFilter = remember {
-        val invert = ColorMatrix(
-            floatArrayOf(
-                -0.88f, 0f, 0f, 0f, 232f,
-                0f, -0.86f, 0f, 0f, 238f,
-                0f, 0f, -0.75f, 0f, 248f,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-        val tint = ColorMatrix(
-            floatArrayOf(
-                0.70f, 0f, 0f, 0f, 6f,
-                0f, 0.88f, 0f, 0f, 14f,
-                0f, 0f, 1.15f, 0f, 28f,
-                0f, 0f, 0f, 1f, 0f
-            )
-        )
-        invert.postConcat(tint)
-        ColorMatrixColorFilter(invert)
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val arrowDrawable = remember(context) { GpsNavigationTracker.createNavigationArrowDrawable(context) }
+
+    var mapRef by remember { mutableStateOf<MapView?>(null) }
+    var markerRef by remember { mutableStateOf<Marker?>(null) }
+    var trailRef by remember { mutableStateOf<Polyline?>(null) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> runCatching { mapRef?.onResume() }
+                Lifecycle.Event.ON_PAUSE -> runCatching { mapRef?.onPause() }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            runCatching {
+                mapRef?.onPause()
+                mapRef?.onDetach()
+            }
+            mapRef = null
+            markerRef = null
+            trailRef = null
+        }
     }
 
-    var mapRef: MapView? = remember { null }
-    DisposableEffect(Unit) {
-        onDispose {
-            runCatching { mapRef?.onDetach() }
+    // Move câmera apenas quando a posição GPS mudar E followGps estiver ativo (nunca trava o zoom/arraste do usuário)
+    LaunchedEffect(gpsState.latitude, gpsState.longitude, followGps, mapRef) {
+        val map = mapRef ?: return@LaunchedEffect
+        val geo = GeoPoint(gpsState.latitude, gpsState.longitude)
+        runCatching {
+            markerRef?.let { marker ->
+                marker.position = geo
+                if (gpsState.hasFix) {
+                    marker.rotation = gpsState.bearingDeg
+                }
+            }
+            trailRef?.let { poly ->
+                if (gpsState.trailPoints.size >= 2) {
+                    poly.setPoints(gpsState.trailPoints)
+                }
+            }
+            if (followGps) {
+                map.controller.animateTo(geo)
+            }
+            map.invalidate()
         }
     }
 
@@ -652,18 +637,55 @@ fun OsmDarkMapSurface(
         modifier = modifier,
         factory = { ctx ->
             runCatching {
-                org.osmdroid.config.Configuration.getInstance().userAgentValue = ctx.packageName
+                org.osmdroid.config.Configuration.getInstance().userAgentValue =
+                    "HondaDeck/2.0 (Android SM-T500)"
             }
             MapView(ctx).apply {
                 runCatching {
-                    setTileSource(TileSourceFactory.MAPNIK)
+                    setTileSource(GpsNavigationTracker.CARTO_DARK_TILE_SOURCE)
+                    setUseDataConnection(true)
                     setMultiTouchControls(interactive)
                     zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-                    isClickable = interactive
+                    isClickable = true
                     isFocusable = interactive
-                    overlayManager.tilesOverlay.setColorFilter(darkMatrixFilter)
-                    controller.setZoom(zoomLevel)
+
+                    val trail = Polyline(this).apply {
+                        outlinePaint.color = android.graphics.Color.argb(210, 41, 231, 255)
+                        outlinePaint.strokeWidth = 7f
+                        outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+                    }
+                    overlays.add(trail)
+                    trailRef = trail
+
+                    val marker = Marker(this).apply {
+                        position = GeoPoint(gpsState.latitude, gpsState.longitude)
+                        icon = arrowDrawable
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        setInfoWindow(null)
+                        if (gpsState.hasFix) rotation = gpsState.bearingDeg
+                    }
+                    overlays.add(marker)
+                    markerRef = marker
+
+                    controller.setZoom(initialZoom)
                     controller.setCenter(GeoPoint(gpsState.latitude, gpsState.longitude))
+
+                    if (interactive) {
+                        setOnTouchListener { _, ev ->
+                            if (ev.actionMasked == MotionEvent.ACTION_MOVE) {
+                                onUserDragMap()
+                            }
+                            false
+                        }
+                    } else {
+                        setOnTouchListener { _, ev ->
+                            if (ev.actionMasked == MotionEvent.ACTION_UP) {
+                                onTapNonInteractive()
+                            }
+                            true
+                        }
+                    }
+                    onResume()
                 }
                 mapRef = this
                 onMapViewReady(this)
@@ -672,18 +694,14 @@ fun OsmDarkMapSurface(
         update = { map ->
             runCatching {
                 map.setMultiTouchControls(interactive)
-                map.isClickable = interactive
-                map.overlayManager.tilesOverlay.setColorFilter(darkMatrixFilter)
-                map.controller.setZoom(zoomLevel)
-                map.controller.animateTo(GeoPoint(gpsState.latitude, gpsState.longitude))
-                map.mapOrientation = if (gpsState.hasFix) -gpsState.bearingDeg else 0f
             }
         }
     )
 }
 
 /**
- * Cockpit Central Honda: Velocímetro circular 60 FPS + Arco RPM + Marchas + Combustível.
+ * Cockpit Central Honda fiel à imagem: arco 145°/250°, faixas internas, velocidade Light 58sp,
+ * MARCHA dentro da abertura do arco e COMBUSTÍVEL fino com E/F abaixo da barra.
  */
 @Composable
 fun HondaCenterGaugeCluster(
@@ -694,7 +712,6 @@ fun HondaCenterGaugeCluster(
     estimatedGear: Int?,
     isReverseActive: Boolean,
     fuelPercent: Float,
-    estimatedRangeKm: Double?,
     modifier: Modifier = Modifier
 ) {
     val animatedSpeed by animateFloatAsState(
@@ -713,390 +730,394 @@ fun HondaCenterGaugeCluster(
         label = "HondaFuelAnim"
     )
 
-    Box(
+    Column(
         modifier = modifier.fillMaxHeight(),
-        contentAlignment = Alignment.Center
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.SpaceBetween
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
-            // Velocímetro + Arco RPM + Marchas
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    if (size.width <= 1f || size.height <= 1f) return@Canvas
-                    val diameter = (minOf(size.width, size.height) * 0.94f).coerceAtLeast(180f)
-                    val radius = diameter / 2f
-                    val center = Offset(size.width / 2f, size.height * 0.50f)
-                    val arcTopLeft = Offset(center.x - radius, center.y - radius)
-                    val arcSize = Size(diameter, diameter)
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                if (size.width <= 1f || size.height <= 1f) return@Canvas
+                val diameter = (minOf(size.width, size.height) * 0.90f).coerceAtLeast(180f)
+                val radius = diameter / 2f
+                val center = Offset(size.width / 2f, size.height * 0.50f)
+                val arcTopLeft = Offset(center.x - radius, center.y - radius)
+                val arcSize = Size(diameter, diameter)
 
-                    val startAngle = 135f
-                    val sweepTotal = 270f
+                val startAngle = 145f
+                val sweepTotal = 250f
 
-                    // Glow radial suave de fundo
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                AutoDeckColors.AccentCyan.copy(alpha = 0.09f),
-                                Color.Transparent
-                            ),
-                            center = center,
-                            radius = radius * 1.05f
+                // Brilho suave atrás do dial
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            AutoDeckColors.AccentCyan.copy(alpha = 0.08f),
+                            Color.Transparent
                         ),
-                        radius = radius * 1.05f,
+                        center = center,
+                        radius = radius * 1.04f
+                    ),
+                    radius = radius * 1.04f,
+                    center = center
+                )
+
+                // Divisão tricolor: verde 38%, amarelo 28%, vermelho 34%
+                val greenSweep = sweepTotal * 0.38f
+                val yellowSweep = sweepTotal * 0.28f
+                val redSweep = sweepTotal * 0.34f
+
+                // Halo neon externo
+                drawArc(
+                    color = AutoDeckColors.StatusGreen.copy(alpha = 0.24f),
+                    startAngle = startAngle,
+                    sweepAngle = greenSweep,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 18f, cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = AutoDeckColors.StatusAmber.copy(alpha = 0.24f),
+                    startAngle = startAngle + greenSweep,
+                    sweepAngle = yellowSweep,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 18f, cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = AutoDeckColors.StatusRed.copy(alpha = 0.24f),
+                    startAngle = startAngle + greenSweep + yellowSweep,
+                    sweepAngle = redSweep,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 18f, cap = StrokeCap.Round)
+                )
+
+                // Arco principal tricolor
+                drawArc(
+                    color = AutoDeckColors.StatusGreen,
+                    startAngle = startAngle,
+                    sweepAngle = greenSweep - 2f,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 6.5f, cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = AutoDeckColors.StatusAmber,
+                    startAngle = startAngle + greenSweep,
+                    sweepAngle = yellowSweep - 2f,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 6.5f, cap = StrokeCap.Round)
+                )
+                drawArc(
+                    color = AutoDeckColors.StatusRed,
+                    startAngle = startAngle + greenSweep + yellowSweep,
+                    sweepAngle = redSweep,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 6.5f, cap = StrokeCap.Round)
+                )
+
+                // Moldura metálica escura entre o arco externo e a escala
+                val bezelR = radius * 0.91f
+                drawArc(
+                    color = Color(0xFF172738),
+                    startAngle = startAngle,
+                    sweepAngle = sweepTotal,
+                    useCenter = false,
+                    topLeft = Offset(center.x - bezelR, center.y - bezelR),
+                    size = Size(bezelR * 2f, bezelR * 2f),
+                    style = Stroke(width = 6f)
+                )
+
+                // Faixas internas sutis (verde início, vermelho fim)
+                val bandR = radius * 0.77f
+                val bandTopLeft = Offset(center.x - bandR, center.y - bandR)
+                val bandSize = Size(bandR * 2f, bandR * 2f)
+                drawArc(
+                    color = AutoDeckColors.StatusGreen.copy(alpha = 0.14f),
+                    startAngle = startAngle,
+                    sweepAngle = greenSweep,
+                    useCenter = false,
+                    topLeft = bandTopLeft,
+                    size = bandSize,
+                    style = Stroke(width = radius * 0.22f)
+                )
+                drawArc(
+                    color = AutoDeckColors.StatusRed.copy(alpha = 0.14f),
+                    startAngle = startAngle + greenSweep + yellowSweep,
+                    sweepAngle = redSweep,
+                    useCenter = false,
+                    topLeft = bandTopLeft,
+                    size = bandSize,
+                    style = Stroke(width = radius * 0.22f)
+                )
+
+                // Ticks e números usando sp.toPx()
+                val step = 20
+                val numSteps = maxSpeedKmh / step
+                val labelPx = 15.sp.toPx()
+                val textPaint = android.graphics.Paint().apply {
+                    color = android.graphics.Color.argb(235, 226, 238, 248)
+                    textSize = labelPx
+                    textAlign = android.graphics.Paint.Align.CENTER
+                    isAntiAlias = true
+                }
+                for (i in 0..(numSteps * 2)) {
+                    val frac = i / (numSteps * 2f)
+                    val deg = startAngle + sweepTotal * frac
+                    val rad = deg * PI / 180.0
+                    val isMajor = i % 2 == 0
+                    val rOuter = radius * 0.875f
+                    val rInner = if (isMajor) radius * 0.79f else radius * 0.835f
+                    drawLine(
+                        color = Color.White.copy(alpha = if (isMajor) 0.85f else 0.40f),
+                        start = Offset(
+                            center.x + (rInner * cos(rad)).toFloat(),
+                            center.y + (rInner * sin(rad)).toFloat()
+                        ),
+                        end = Offset(
+                            center.x + (rOuter * cos(rad)).toFloat(),
+                            center.y + (rOuter * sin(rad)).toFloat()
+                        ),
+                        strokeWidth = if (isMajor) 2.4f else 1.2f,
+                        cap = StrokeCap.Round
+                    )
+                    if (isMajor) {
+                        val labelVal = (i / 2) * step
+                        val rLabel = radius * 0.675f
+                        val lx = center.x + (rLabel * cos(rad)).toFloat()
+                        val ly = center.y + (rLabel * sin(rad)).toFloat() + labelPx * 0.35f
+                        drawContext.canvas.nativeCanvas.drawText(
+                            labelVal.toString(),
+                            lx,
+                            ly,
+                            textPaint
+                        )
+                    }
+                }
+
+                // Arco interno azul neon (RPM / Progresso) com ponto luminoso APENAS nele
+                val innerR = radius * 0.45f
+                val innerTopLeft = Offset(center.x - innerR, center.y - innerR)
+                val innerSize = Size(innerR * 2f, innerR * 2f)
+                drawArc(
+                    color = Color(0xFF0E2942),
+                    startAngle = 148f,
+                    sweepAngle = 244f,
+                    useCenter = false,
+                    topLeft = innerTopLeft,
+                    size = innerSize,
+                    style = Stroke(width = 10f, cap = StrokeCap.Round)
+                )
+                val activeFrac = if (rpm > 50f) {
+                    (animatedRpm / 7000f).coerceIn(0.05f, 1f)
+                } else {
+                    (animatedSpeed / maxSpeedKmh.toFloat()).coerceIn(0.05f, 1f)
+                }
+                val innerSweep = 244f * activeFrac
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        colors = listOf(AutoDeckColors.AccentBlue, AutoDeckColors.AccentCyan),
                         center = center
-                    )
+                    ),
+                    startAngle = 148f,
+                    sweepAngle = innerSweep,
+                    useCenter = false,
+                    topLeft = innerTopLeft,
+                    size = innerSize,
+                    style = Stroke(width = 10f, cap = StrokeCap.Round)
+                )
+                val innerTipRad = ((148f + innerSweep) * PI / 180.0)
+                val innerTip = Offset(
+                    center.x + (innerR * cos(innerTipRad)).toFloat(),
+                    center.y + (innerR * sin(innerTipRad)).toFloat()
+                )
+                drawCircle(color = AutoDeckColors.AccentCyan.copy(alpha = 0.55f), radius = 8f, center = innerTip)
+                drawCircle(color = Color.White, radius = 3.2f, center = innerTip)
+            }
 
-                    // Trilho externo tricolor (Verde -> Amarelo -> Vermelho)
-                    val greenSweep = sweepTotal * 0.40f
-                    val yellowSweep = sweepTotal * 0.32f
-                    val redSweep = sweepTotal * 0.28f
-
-                    // Glow de fundo do arco
-                    drawArc(
-                        color = AutoDeckColors.StatusGreen.copy(alpha = 0.22f),
-                        startAngle = startAngle,
-                        sweepAngle = greenSweep,
-                        useCenter = false,
-                        topLeft = arcTopLeft,
-                        size = arcSize,
-                        style = Stroke(width = 18f, cap = StrokeCap.Round)
-                    )
-                    drawArc(
-                        color = AutoDeckColors.StatusAmber.copy(alpha = 0.22f),
-                        startAngle = startAngle + greenSweep,
-                        sweepAngle = yellowSweep,
-                        useCenter = false,
-                        topLeft = arcTopLeft,
-                        size = arcSize,
-                        style = Stroke(width = 18f, cap = StrokeCap.Round)
-                    )
-                    drawArc(
-                        color = AutoDeckColors.StatusRed.copy(alpha = 0.22f),
-                        startAngle = startAngle + greenSweep + yellowSweep,
-                        sweepAngle = redSweep,
-                        useCenter = false,
-                        topLeft = arcTopLeft,
-                        size = arcSize,
-                        style = Stroke(width = 18f, cap = StrokeCap.Round)
-                    )
-
-                    // Arco colorido principal
-                    drawArc(
-                        color = AutoDeckColors.StatusGreen,
-                        startAngle = startAngle,
-                        sweepAngle = greenSweep - 3f,
-                        useCenter = false,
-                        topLeft = arcTopLeft,
-                        size = arcSize,
-                        style = Stroke(width = 7f, cap = StrokeCap.Round)
-                    )
-                    drawArc(
-                        color = AutoDeckColors.StatusAmber,
-                        startAngle = startAngle + greenSweep + 1f,
-                        sweepAngle = yellowSweep - 3f,
-                        useCenter = false,
-                        topLeft = arcTopLeft,
-                        size = arcSize,
-                        style = Stroke(width = 7f, cap = StrokeCap.Round)
-                    )
-                    drawArc(
-                        color = AutoDeckColors.StatusRed,
-                        startAngle = startAngle + greenSweep + yellowSweep + 1f,
-                        sweepAngle = redSweep - 2f,
-                        useCenter = false,
-                        topLeft = arcTopLeft,
-                        size = arcSize,
-                        style = Stroke(width = 7f, cap = StrokeCap.Round)
-                    )
-
-                    // Halo de brilho na velocidade atual
-                    val speedFrac = (animatedSpeed / maxSpeedKmh.toFloat()).coerceIn(0f, 1f)
-                    val speedSweep = sweepTotal * speedFrac
-                    if (speedSweep > 2f) {
-                        val tipColor = when {
-                            speedFrac < 0.40f -> AutoDeckColors.StatusGreen
-                            speedFrac < 0.72f -> AutoDeckColors.StatusAmber
-                            else -> AutoDeckColors.StatusRed
-                        }
-                        val tipRad = ((startAngle + speedSweep) * PI / 180.0)
-                        val tipPt = Offset(
-                            x = center.x + (radius * cos(tipRad)).toFloat(),
-                            y = center.y + (radius * sin(tipRad)).toFloat()
+            // Velocidade central 58sp Light + "km/h"
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.offset(y = (-8).dp)
+            ) {
+                Text(
+                    text = animatedSpeed.toInt().toString(),
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 56.sp,
+                        fontWeight = FontWeight.Light,
+                        shadow = Shadow(
+                            color = AutoDeckColors.AccentCyan.copy(alpha = 0.45f),
+                            blurRadius = 12f
                         )
-                        drawCircle(
-                            color = tipColor.copy(alpha = 0.55f),
-                            radius = 12f,
-                            center = tipPt
-                        )
-                        drawCircle(
-                            color = Color.White,
-                            radius = 4.5f,
-                            center = tipPt
-                        )
-                    }
-
-                    // Ticks e números da escala (0 .. maxSpeedKmh)
-                    val step = 20
-                    val numSteps = maxSpeedKmh / step
-                    val textPaint = android.graphics.Paint().apply {
-                        color = android.graphics.Color.argb(230, 210, 232, 245)
-                        textSize = (radius * 0.135f).coerceIn(18f, 30f)
-                        textAlign = android.graphics.Paint.Align.CENTER
-                        isAntiAlias = true
-                    }
-                    for (i in 0..(numSteps * 2)) {
-                        val frac = i / (numSteps * 2f)
-                        val deg = startAngle + sweepTotal * frac
-                        val rad = deg * PI / 180.0
-                        val isMajor = i % 2 == 0
-                        val rOuter = radius * 0.90f
-                        val rInner = if (isMajor) radius * 0.81f else radius * 0.855f
-                        drawLine(
-                            color = Color.White.copy(alpha = if (isMajor) 0.80f else 0.42f),
-                            start = Offset(
-                                center.x + (rInner * cos(rad)).toFloat(),
-                                center.y + (rInner * sin(rad)).toFloat()
-                            ),
-                            end = Offset(
-                                center.x + (rOuter * cos(rad)).toFloat(),
-                                center.y + (rOuter * sin(rad)).toFloat()
-                            ),
-                            strokeWidth = if (isMajor) 2.6f else 1.4f,
-                            cap = StrokeCap.Round
-                        )
-                        if (isMajor) {
-                            val labelVal = (i / 2) * step
-                            val rLabel = radius * 0.69f
-                            val lx = center.x + (rLabel * cos(rad)).toFloat()
-                            val ly = center.y + (rLabel * sin(rad)).toFloat() + textPaint.textSize * 0.35f
-                            drawContext.canvas.nativeCanvas.drawText(
-                                labelVal.toString(),
-                                lx,
-                                ly,
-                                textPaint
-                            )
-                        }
-                    }
-
-                    // Arco interno azul neon (RPM)
-                    val innerR = radius * 0.48f
-                    val innerTopLeft = Offset(center.x - innerR, center.y - innerR)
-                    val innerSize = Size(innerR * 2f, innerR * 2f)
-                    drawArc(
-                        color = Color(0xFF0E2942),
-                        startAngle = 140f,
-                        sweepAngle = 260f,
-                        useCenter = false,
-                        topLeft = innerTopLeft,
-                        size = innerSize,
-                        style = Stroke(width = 11f, cap = StrokeCap.Round)
                     )
-                    val rpmFrac = (animatedRpm / 7000f).coerceIn(0.03f, 1f)
-                    val rpmSweep = 260f * rpmFrac
-                    drawArc(
-                        brush = Brush.sweepGradient(
-                            colors = listOf(
-                                AutoDeckColors.AccentBlue,
-                                AutoDeckColors.AccentCyan
-                            ),
-                            center = center
-                        ),
-                        startAngle = 140f,
-                        sweepAngle = rpmSweep,
-                        useCenter = false,
-                        topLeft = innerTopLeft,
-                        size = innerSize,
-                        style = Stroke(width = 11f, cap = StrokeCap.Round)
-                    )
+                )
+                Text(
+                    text = "km/h",
+                    color = Color(0xFF94A3B8),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Normal
+                )
+            }
+
+            // MARCHA posicionada na abertura inferior do arco
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "MARCHA",
+                    color = Color(0xFF83B9CD),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.8.sp
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                val gears = (1..transmission.forwardGears).map { it.toString() } + "R"
+                val activeGearStr = when {
+                    isReverseActive -> "R"
+                    estimatedGear != null && estimatedGear in 1..transmission.forwardGears -> estimatedGear.toString()
+                    else -> null
                 }
-
-                // Número central km/h
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(bottom = 14.dp)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(9.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = animatedSpeed.toInt().toString(),
-                        style = TextStyle(
-                            color = Color.White,
-                            fontSize = 48.sp,
-                            fontWeight = FontWeight.Bold,
-                            shadow = Shadow(
-                                color = AutoDeckColors.AccentCyan.copy(alpha = 0.55f),
-                                blurRadius = 14f
-                            )
-                        )
-                    )
-                    Text(
-                        text = "km/h",
-                        color = AutoDeckColors.TextSecondary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                // Indicador MARCHA posicionado na abertura inferior do arco
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "MARCHA",
-                        color = AutoDeckColors.HondaCyanSoft,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 2.sp
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    val gears = (1..transmission.forwardGears).map { it.toString() } + "R"
-                    val activeGearStr = when {
-                        isReverseActive -> "R"
-                        estimatedGear != null && estimatedGear in 1..transmission.forwardGears -> estimatedGear.toString()
-                        else -> null
-                    }
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        gears.forEach { g ->
-                            val isActive = g == activeGearStr
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(
-                                        if (isActive) AutoDeckColors.AccentCyan.copy(alpha = 0.22f)
-                                        else Color.Transparent
-                                    )
-                                    .then(
-                                        if (isActive) {
-                                            Modifier.border(
-                                                1.5.dp,
-                                                AutoDeckColors.AccentCyan,
-                                                RoundedCornerShape(6.dp)
-                                            )
-                                        } else {
-                                            Modifier
-                                        }
-                                    )
-                                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = g,
-                                    color = if (isActive) Color.White else AutoDeckColors.TextMuted,
-                                    fontSize = if (isActive) 17.sp else 15.sp,
-                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium
+                    gears.forEach { g ->
+                        val isActive = g == activeGearStr
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(5.dp))
+                                .then(
+                                    if (isActive) {
+                                        Modifier.border(
+                                            1.4.dp,
+                                            AutoDeckColors.AccentCyan,
+                                            RoundedCornerShape(5.dp)
+                                        )
+                                    } else {
+                                        Modifier
+                                    }
                                 )
-                            }
+                                .padding(horizontal = 7.dp, vertical = 1.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = g,
+                                color = if (isActive) Color.White else Color(0xFF647B92),
+                                fontSize = 17.sp,
+                                fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                            )
                         }
                     }
                 }
             }
+        }
 
-            // Bloco inferior: COMBUSTÍVEL (E ---- F) com moldura trapezoidal sutil
-            Box(
+        // COMBUSTÍVEL entre linhas diagonais com E e F abaixo das pontas da barra
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.72f)
+                .height(62.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                if (size.width <= 1f || size.height <= 1f) return@Canvas
+                val w = size.width
+                val h = size.height
+                val sideLines = Path().apply {
+                    moveTo(w * 0.16f, 0f)
+                    lineTo(w * 0.02f, h)
+                    moveTo(w * 0.84f, 0f)
+                    lineTo(w * 0.98f, h)
+                }
+                drawPath(
+                    path = sideLines,
+                    color = AutoDeckColors.AccentCyan.copy(alpha = 0.35f),
+                    style = Stroke(width = 1.8f)
+                )
+            }
+
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth(0.76f)
-                    .height(66.dp),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .padding(horizontal = 36.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val w = size.width
-                    val h = size.height
-                    val sideLines = Path().apply {
-                        moveTo(w * 0.14f, 0f)
-                        lineTo(w * 0.02f, h)
-                        moveTo(w * 0.86f, 0f)
-                        lineTo(w * 0.98f, h)
-                    }
-                    drawPath(
-                        path = sideLines,
-                        color = AutoDeckColors.AccentCyan.copy(alpha = 0.35f),
-                        style = Stroke(width = 2f)
+                Text(
+                    text = "COMBUSTÍVEL",
+                    color = Color(0xFF9AC5D8),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.5.sp
+                )
+                Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(9.dp)
+                ) {
+                    if (size.width <= 1f || size.height <= 1f) return@Canvas
+                    val barH = 5.5f
+                    val top = (size.height - barH) / 2f
+                    drawRoundRect(
+                        color = Color(0xFF152538),
+                        topLeft = Offset(0f, top),
+                        size = Size(size.width, barH),
+                        cornerRadius = CornerRadius(4f, 4f)
+                    )
+                    val maxW = size.width.coerceAtLeast(1f)
+                    val fillW = (size.width * animatedFuel).coerceIn(0f, maxW)
+                    drawRoundRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(
+                                AutoDeckColors.StatusRed,
+                                AutoDeckColors.FuelOrange,
+                                AutoDeckColors.StatusAmber,
+                                AutoDeckColors.AccentCyan
+                            )
+                        ),
+                        topLeft = Offset(0f, top),
+                        size = Size(fillW, barH),
+                        cornerRadius = CornerRadius(4f, 4f)
+                    )
+                    // Marcador vertical fino na ponta do nível
+                    drawLine(
+                        color = Color.White,
+                        start = Offset(fillW, 0f),
+                        end = Offset(fillW, size.height),
+                        strokeWidth = 2.4f,
+                        cap = StrokeCap.Round
                     )
                 }
-
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "COMBUSTÍVEL",
-                        color = AutoDeckColors.HondaCyanSoft,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 1.6.sp
+                    Text("E", color = AutoDeckColors.FuelOrange, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Icon(
+                        imageVector = Icons.Rounded.LocalGasStation,
+                        contentDescription = null,
+                        tint = AutoDeckColors.HondaCyanSoft,
+                        modifier = Modifier.size(15.dp)
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("E", color = AutoDeckColors.FuelOrange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Canvas(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(10.dp)
-                        ) {
-                            if (size.width <= 1f || size.height <= 1f) return@Canvas
-                            val barH = 7f
-                            val top = (size.height - barH) / 2f
-                            drawRoundRect(
-                                color = Color(0xFF132234),
-                                topLeft = Offset(0f, top),
-                                size = Size(size.width, barH),
-                                cornerRadius = CornerRadius(6f, 6f)
-                            )
-                            val maxW = size.width.coerceAtLeast(1f)
-                            val fillW = (size.width * animatedFuel).coerceIn(0f, maxW)
-                            drawRoundRect(
-                                brush = Brush.horizontalGradient(
-                                    colors = listOf(
-                                        AutoDeckColors.FuelOrange,
-                                        AutoDeckColors.StatusAmber,
-                                        AutoDeckColors.AccentCyan
-                                    )
-                                ),
-                                topLeft = Offset(0f, top),
-                                size = Size(fillW, barH),
-                                cornerRadius = CornerRadius(6f, 6f)
-                            )
-                            drawCircle(
-                                color = Color.White,
-                                radius = 5f,
-                                center = Offset(fillW, size.height / 2f)
-                            )
-                        }
-                        Text("F", color = AutoDeckColors.AccentCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.LocalGasStation,
-                            contentDescription = null,
-                            tint = AutoDeckColors.HondaCyanSoft,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        val rangeLabel = estimatedRangeKm?.let { "~${it.toInt()} km" } ?: "${fuelPercent.toInt()}%"
-                        Text(
-                            text = rangeLabel,
-                            color = AutoDeckColors.TextSecondary,
-                            fontSize = 11.sp
-                        )
-                    }
+                    Text("F", color = AutoDeckColors.AccentCyan, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -1104,7 +1125,8 @@ fun HondaCenterGaugeCluster(
 }
 
 /**
- * Card MÚSICA (direita superior) ligado em tempo real ao Spotify / MediaSession do tablet.
+ * Card MÚSICA fiel à imagem: capa 82dp, sem linha de app extra, barra customizada em Canvas,
+ * botões FastRewind / círculo fino Play-Pause / FastForward.
  */
 @Composable
 fun HondaMusicCard(
@@ -1119,17 +1141,17 @@ fun HondaMusicCard(
 ) {
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Cabeçalho MÚSICA ...
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(AutoDeckColors.HondaCardHeader.copy(alpha = 0.92f))
-                .border(1.dp, AutoDeckColors.BorderSubtle, RoundedCornerShape(10.dp))
+                .height(42.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF1A2433).copy(alpha = 0.92f))
+                .border(1.dp, Color(0xFF28394F), RoundedCornerShape(8.dp))
                 .clickable(onClick = onOpenMusicTab)
-                .padding(horizontal = 14.dp, vertical = 9.dp),
+                .padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1140,34 +1162,33 @@ fun HondaMusicCard(
                 Icon(
                     imageVector = Icons.Rounded.MusicNote,
                     contentDescription = null,
-                    tint = AutoDeckColors.StatusRed,
+                    tint = Color(0xFFF87171),
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
                     text = "MÚSICA",
-                    color = AutoDeckColors.TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 1.sp
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Normal,
+                    letterSpacing = 0.8.sp
                 )
             }
             Icon(
                 imageVector = Icons.Rounded.MoreHoriz,
                 contentDescription = "Abrir Central de Música",
-                tint = AutoDeckColors.TextSecondary,
+                tint = Color(0xFF94A3B8),
                 modifier = Modifier.size(18.dp)
             )
         }
 
-        // Corpo do Player
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(AutoDeckColors.SurfaceCard.copy(alpha = 0.90f))
-                .border(1.dp, AutoDeckColors.BorderSubtle, RoundedCornerShape(14.dp))
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .border(1.dp, Color(0xFF23384D), RoundedCornerShape(12.dp))
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
@@ -1175,18 +1196,18 @@ fun HondaMusicCard(
                     .fillMaxWidth()
                     .clickable(onClick = onLaunchMusicApp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(62.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .size(78.dp)
+                        .clip(RoundedCornerShape(8.dp))
                         .background(
                             Brush.linearGradient(
-                                listOf(Color(0xFF1F3B5C), Color(0xFF0E1D2F))
+                                listOf(Color(0xFF243B55), Color(0xFF101D2C))
                             )
                         )
-                        .border(1.dp, AutoDeckColors.AccentCyan.copy(alpha = 0.4f), RoundedCornerShape(10.dp)),
+                        .border(1.dp, Color(0xFF334C66), RoundedCornerShape(8.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     val bmp = mediaState.coverBitmap
@@ -1202,38 +1223,34 @@ fun HondaMusicCard(
                             imageVector = Icons.Rounded.MusicNote,
                             contentDescription = null,
                             tint = AutoDeckColors.AccentCyan,
-                            modifier = Modifier.size(30.dp)
+                            modifier = Modifier.size(34.dp)
                         )
                     }
                 }
 
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
                     Text(
                         text = mediaState.title,
                         color = AutoDeckColors.TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = mediaState.artist,
-                        color = AutoDeckColors.TextSecondary,
+                        color = Color(0xFF94A3B8),
                         fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = mediaState.appLabel,
-                        color = AutoDeckColors.AccentCyan.copy(alpha = 0.85f),
-                        fontSize = 11.sp,
-                        maxLines = 1
-                    )
                 }
             }
 
-            // Barra de progresso + tempo
+            // Barra de progresso customizada em Canvas
             Column(modifier = Modifier.fillMaxWidth()) {
                 val dur = mediaState.durationMs.coerceAtLeast(1L)
                 val progress = if (mediaState.durationMs > 0L) {
@@ -1241,30 +1258,24 @@ fun HondaMusicCard(
                 } else {
                     0f
                 }
-                Slider(
-                    value = progress,
-                    onValueChange = { frac ->
-                        if (mediaState.durationMs > 0L) {
-                            onSeekTo((frac * mediaState.durationMs).toLong())
-                        }
-                    },
-                    colors = SliderDefaults.colors(
-                        thumbColor = Color.White,
-                        activeTrackColor = Color.White.copy(alpha = 0.9f),
-                        inactiveTrackColor = AutoDeckColors.BorderSubtle
-                    ),
-                    modifier = Modifier.height(22.dp)
+                HondaMusicProgressBar(
+                    progress = progress,
+                    enabled = mediaState.canSeek && mediaState.durationMs > 0L,
+                    onSeekFraction = { frac ->
+                        onSeekTo((frac * mediaState.durationMs).toLong())
+                    }
                 )
+                Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(formatDurationMs(mediaState.positionMs), color = AutoDeckColors.TextMuted, fontSize = 10.sp)
-                    Text(formatDurationMs(mediaState.durationMs), color = AutoDeckColors.TextMuted, fontSize = 10.sp)
+                    Text(formatDurationMs(mediaState.positionMs), color = Color(0xFF7D93AC), fontSize = 10.sp)
+                    Text(formatDurationMs(mediaState.durationMs), color = Color(0xFF7D93AC), fontSize = 10.sp)
                 }
             }
 
-            // Controles Anterior / Play-Pause / Próxima
+            // Controles ⏪ ⏸/▶ ⏩
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
@@ -1272,19 +1283,18 @@ fun HondaMusicCard(
             ) {
                 IconButton(onClick = onPrevious) {
                     Icon(
-                        imageVector = Icons.Rounded.SkipPrevious,
+                        imageVector = Icons.Rounded.FastRewind,
                         contentDescription = "Anterior",
-                        tint = AutoDeckColors.TextPrimary,
+                        tint = Color(0xFFE2E8F0),
                         modifier = Modifier.size(28.dp)
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(16.dp))
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(46.dp)
                         .clip(CircleShape)
-                        .background(AutoDeckColors.SurfaceElevated)
-                        .border(1.5.dp, AutoDeckColors.AccentCyan.copy(alpha = 0.8f), CircleShape)
+                        .border(1.2.dp, Color(0xFFCBD5E1), CircleShape)
                         .clickable(onClick = onTogglePlayPause),
                     contentAlignment = Alignment.Center
                 ) {
@@ -1295,12 +1305,12 @@ fun HondaMusicCard(
                         modifier = Modifier.size(24.dp)
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(16.dp))
                 IconButton(onClick = onNext) {
                     Icon(
-                        imageVector = Icons.Rounded.SkipNext,
+                        imageVector = Icons.Rounded.FastForward,
                         contentDescription = "Próxima",
-                        tint = AutoDeckColors.TextPrimary,
+                        tint = Color(0xFFE2E8F0),
                         modifier = Modifier.size(28.dp)
                     )
                 }
@@ -1309,8 +1319,69 @@ fun HondaMusicCard(
     }
 }
 
+@Composable
+fun HondaMusicProgressBar(
+    progress: Float,
+    enabled: Boolean,
+    onSeekFraction: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(16.dp)
+            .then(
+                if (enabled) {
+                    Modifier
+                        .pointerInput(Unit) {
+                            detectTapGestures { offset ->
+                                if (size.width > 0) {
+                                    onSeekFraction((offset.x / size.width.toFloat()).coerceIn(0f, 1f))
+                                }
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectHorizontalDragGestures { change, _ ->
+                                change.consume()
+                                if (size.width > 0) {
+                                    onSeekFraction((change.position.x / size.width.toFloat()).coerceIn(0f, 1f))
+                                }
+                            }
+                        }
+                } else {
+                    Modifier
+                }
+            )
+    ) {
+        if (size.width <= 1f || size.height <= 1f) return@Canvas
+        val cy = size.height / 2f
+        drawLine(
+            color = Color(0xFF283A4E),
+            start = Offset(0f, cy),
+            end = Offset(size.width, cy),
+            strokeWidth = 3f,
+            cap = StrokeCap.Round
+        )
+        val activeX = (size.width * progress.coerceIn(0f, 1f))
+        if (activeX > 0f) {
+            drawLine(
+                color = Color(0xFFE2E8F0),
+                start = Offset(0f, cy),
+                end = Offset(activeX, cy),
+                strokeWidth = 3f,
+                cap = StrokeCap.Round
+            )
+        }
+        drawCircle(
+            color = Color.White,
+            radius = 5.5f,
+            center = Offset(activeX, cy)
+        )
+    }
+}
+
 /**
- * Card MONITORAMENTO (direita inferior): Voltagem, Temp. Motor e Uso do Motor em 3 colunas.
+ * Card MONITORAMENTO fiel à referência: sem divisórias verticais, ícones ciano 36dp e valores 16sp Regular #6FD8FF.
  */
 @Composable
 fun HondaMonitoringCard(
@@ -1323,30 +1394,31 @@ fun HondaMonitoringCard(
 ) {
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(AutoDeckColors.HondaCardHeader.copy(alpha = 0.92f))
-                .border(1.dp, AutoDeckColors.BorderSubtle, RoundedCornerShape(10.dp))
+                .height(42.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF1A2433).copy(alpha = 0.92f))
+                .border(1.dp, Color(0xFF28394F), RoundedCornerShape(8.dp))
                 .clickable(onClick = onOpenObdScanner)
-                .padding(horizontal = 14.dp, vertical = 9.dp),
+                .padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "MONITORAMENTO",
-                color = AutoDeckColors.TextPrimary,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.sp
+                color = Color(0xFFCBD5E1),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Normal,
+                letterSpacing = 0.8.sp
             )
             Icon(
                 imageVector = Icons.Rounded.MoreHoriz,
                 contentDescription = "Abrir Scanner OBD-II",
-                tint = AutoDeckColors.TextSecondary,
+                tint = Color(0xFF94A3B8),
                 modifier = Modifier.size(18.dp)
             )
         }
@@ -1355,11 +1427,11 @@ fun HondaMonitoringCard(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(AutoDeckColors.SurfaceCard.copy(alpha = 0.90f))
-                .border(1.dp, AutoDeckColors.BorderSubtle, RoundedCornerShape(14.dp))
+                .border(1.dp, Color(0xFF23384D), RoundedCornerShape(12.dp))
                 .clickable(onClick = onOpenObdScanner)
-                .padding(horizontal = 10.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1369,17 +1441,10 @@ fun HondaMonitoringCard(
                 isStale = isStale,
                 valueColor = when {
                     batteryVoltageV != null && batteryVoltageV < 12.0 -> AutoDeckColors.StatusAmber
-                    else -> Color(0xFF7DE8FF)
+                    else -> Color(0xFF6FD8FF)
                 },
-                iconDrawer = { DrawBatteryNeonIcon(Modifier.size(34.dp)) },
+                iconDrawer = { DrawBatteryNeonIcon(Modifier.size(36.dp)) },
                 modifier = Modifier.weight(1f)
-            )
-
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .fillMaxHeight(0.75f)
-                    .background(AutoDeckColors.BorderSubtle.copy(alpha = 0.6f))
             )
 
             MonitoringGaugeItem(
@@ -1388,25 +1453,18 @@ fun HondaMonitoringCard(
                 isStale = isStale,
                 valueColor = when {
                     coolantTempC != null && coolantTempC >= 105.0 -> AutoDeckColors.StatusRed
-                    else -> Color(0xFF7DE8FF)
+                    else -> Color(0xFF6FD8FF)
                 },
-                iconDrawer = { DrawCoolantTempNeonIcon(Modifier.size(34.dp)) },
+                iconDrawer = { DrawCoolantTempNeonIcon(Modifier.size(36.dp)) },
                 modifier = Modifier.weight(1f)
-            )
-
-            Box(
-                modifier = Modifier
-                    .width(1.dp)
-                    .fillMaxHeight(0.75f)
-                    .background(AutoDeckColors.BorderSubtle.copy(alpha = 0.6f))
             )
 
             MonitoringGaugeItem(
                 label = "Uso do Motor",
                 value = engineLoadPct?.let { "${it.toInt()}%" } ?: "--",
                 isStale = isStale,
-                valueColor = Color(0xFF7DE8FF),
-                iconDrawer = { DrawEngineLoadNeonIcon(engineLoadPct ?: 25.0, Modifier.size(34.dp)) },
+                valueColor = Color(0xFF6FD8FF),
+                iconDrawer = { DrawEngineLoadNeonIcon(engineLoadPct ?: 25.0, Modifier.size(36.dp)) },
                 modifier = Modifier.weight(1f)
             )
         }
@@ -1425,20 +1483,20 @@ private fun MonitoringGaugeItem(
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         iconDrawer()
         Text(
             text = label,
-            color = AutoDeckColors.TextSecondary,
+            color = Color(0xFF94A3B8),
             fontSize = 11.sp,
             maxLines = 1
         )
         Text(
             text = value,
             color = if (isStale) AutoDeckColors.TextMuted else valueColor,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Normal,
             maxLines = 1
         )
     }
@@ -1447,64 +1505,61 @@ private fun MonitoringGaugeItem(
 @Composable
 private fun DrawBatteryNeonIcon(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
+        if (size.width <= 1f || size.height <= 1f) return@Canvas
         val w = size.width
         val h = size.height
         val cyan = AutoDeckColors.AccentCyan
-        // Polos
-        drawRect(cyan, Offset(w * 0.22f, h * 0.16f), Size(w * 0.16f, h * 0.10f))
-        drawRect(cyan, Offset(w * 0.62f, h * 0.16f), Size(w * 0.16f, h * 0.10f))
-        // Corpo da bateria
+        drawRect(cyan, Offset(w * 0.22f, h * 0.18f), Size(w * 0.16f, h * 0.08f))
+        drawRect(cyan, Offset(w * 0.62f, h * 0.18f), Size(w * 0.16f, h * 0.08f))
         drawRoundRect(
             color = cyan,
             topLeft = Offset(w * 0.12f, h * 0.26f),
-            size = Size(w * 0.76f, h * 0.56f),
-            cornerRadius = CornerRadius(6f, 6f),
-            style = Stroke(width = 3f)
+            size = Size(w * 0.76f, h * 0.54f),
+            cornerRadius = CornerRadius(5f, 5f),
+            style = Stroke(width = 2.6f)
         )
-        // Sinal - e +
-        drawLine(cyan, Offset(w * 0.24f, h * 0.54f), Offset(w * 0.38f, h * 0.54f), 3f, StrokeCap.Round)
-        drawLine(cyan, Offset(w * 0.60f, h * 0.54f), Offset(w * 0.74f, h * 0.54f), 3f, StrokeCap.Round)
-        drawLine(cyan, Offset(w * 0.67f, h * 0.44f), Offset(w * 0.67f, h * 0.64f), 3f, StrokeCap.Round)
+        drawLine(cyan, Offset(w * 0.24f, h * 0.53f), Offset(w * 0.38f, h * 0.53f), 2.5f, StrokeCap.Round)
+        drawLine(cyan, Offset(w * 0.60f, h * 0.53f), Offset(w * 0.74f, h * 0.53f), 2.5f, StrokeCap.Round)
+        drawLine(cyan, Offset(w * 0.67f, h * 0.44f), Offset(w * 0.67f, h * 0.62f), 2.5f, StrokeCap.Round)
     }
 }
 
 @Composable
 private fun DrawCoolantTempNeonIcon(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
+        if (size.width <= 1f || size.height <= 1f) return@Canvas
         val w = size.width
         val h = size.height
         val cyan = AutoDeckColors.AccentCyan
-        // Haste do termômetro
-        drawLine(cyan, Offset(w * 0.44f, h * 0.16f), Offset(w * 0.44f, h * 0.62f), 4f, StrokeCap.Round)
-        drawCircle(cyan, radius = w * 0.11f, center = Offset(w * 0.44f, h * 0.66f))
-        // Escalas
-        drawLine(cyan, Offset(w * 0.56f, h * 0.24f), Offset(w * 0.70f, h * 0.24f), 2.5f, StrokeCap.Round)
-        drawLine(cyan, Offset(w * 0.56f, h * 0.38f), Offset(w * 0.70f, h * 0.38f), 2.5f, StrokeCap.Round)
-        drawLine(cyan, Offset(w * 0.56f, h * 0.52f), Offset(w * 0.70f, h * 0.52f), 2.5f, StrokeCap.Round)
-        // Onda de líquido na base
+        drawLine(cyan, Offset(w * 0.44f, h * 0.16f), Offset(w * 0.44f, h * 0.62f), 3.4f, StrokeCap.Round)
+        drawCircle(cyan, radius = w * 0.10f, center = Offset(w * 0.44f, h * 0.66f))
+        drawLine(cyan, Offset(w * 0.56f, h * 0.24f), Offset(w * 0.70f, h * 0.24f), 2.2f, StrokeCap.Round)
+        drawLine(cyan, Offset(w * 0.56f, h * 0.38f), Offset(w * 0.70f, h * 0.38f), 2.2f, StrokeCap.Round)
+        drawLine(cyan, Offset(w * 0.56f, h * 0.52f), Offset(w * 0.70f, h * 0.52f), 2.2f, StrokeCap.Round)
         val wave = Path().apply {
             moveTo(w * 0.14f, h * 0.84f)
             quadraticTo(w * 0.30f, h * 0.76f, w * 0.48f, h * 0.84f)
             quadraticTo(w * 0.66f, h * 0.92f, w * 0.86f, h * 0.82f)
         }
-        drawPath(wave, cyan, style = Stroke(width = 2.8f, cap = StrokeCap.Round))
+        drawPath(wave, cyan, style = Stroke(width = 2.4f, cap = StrokeCap.Round))
     }
 }
 
 @Composable
 private fun DrawEngineLoadNeonIcon(loadPct: Double, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
+        if (size.width <= 1f || size.height <= 1f) return@Canvas
         val w = size.width
         val h = size.height
         val cyan = AutoDeckColors.AccentCyan
         drawArc(
-            color = cyan.copy(alpha = 0.35f),
+            color = cyan.copy(alpha = 0.38f),
             startAngle = 150f,
             sweepAngle = 240f,
             useCenter = false,
             topLeft = Offset(w * 0.14f, h * 0.18f),
             size = Size(w * 0.72f, h * 0.72f),
-            style = Stroke(width = 4f, cap = StrokeCap.Round)
+            style = Stroke(width = 3.2f, cap = StrokeCap.Round)
         )
         val frac = (loadPct / 100.0).toFloat().coerceIn(0.05f, 1f)
         drawArc(
@@ -1514,21 +1569,20 @@ private fun DrawEngineLoadNeonIcon(loadPct: Double, modifier: Modifier = Modifie
             useCenter = false,
             topLeft = Offset(w * 0.14f, h * 0.18f),
             size = Size(w * 0.72f, h * 0.72f),
-            style = Stroke(width = 4.5f, cap = StrokeCap.Round)
+            style = Stroke(width = 3.6f, cap = StrokeCap.Round)
         )
-        // Ponteiro
         val angleRad = ((150f + 240f * frac) * PI / 180.0)
         val cx = w * 0.5f
         val cy = h * 0.54f
-        drawCircle(cyan, radius = 3.5f, center = Offset(cx, cy))
+        drawCircle(cyan, radius = 3.0f, center = Offset(cx, cy))
         drawLine(
             color = Color.White,
             start = Offset(cx, cy),
             end = Offset(
-                cx + (w * 0.25f * cos(angleRad)).toFloat(),
-                cy + (w * 0.25f * sin(angleRad)).toFloat()
+                cx + (w * 0.24f * cos(angleRad)).toFloat(),
+                cy + (w * 0.24f * sin(angleRad)).toFloat()
             ),
-            strokeWidth = 2.6f,
+            strokeWidth = 2.4f,
             cap = StrokeCap.Round
         )
     }

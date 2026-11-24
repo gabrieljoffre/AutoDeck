@@ -1,9 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Carlinkit CPC200-CCPA / CarPlay + Android Auto (VID 0x1314 = 4884) -->
-    <usb-device vendor-id="4884" product-id="5408" />
-    <usb-device vendor-id="4884" product-id="5409" />
-
     <!-- Câmeras / Captura UVC Padrão (USB Video Class = 14 / 0x0E) -->
     <usb-device class="14" />
 

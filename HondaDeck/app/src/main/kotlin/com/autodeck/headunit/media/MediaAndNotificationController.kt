@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
@@ -32,6 +33,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 
 data class InstalledAppOption(
     val packageName: String,
@@ -39,7 +45,7 @@ data class InstalledAppOption(
 )
 
 data class MediaPlaybackState(
-    val title: String = "Toque para abrir o Spotify",
+    val title: String = "Toque para tocar no Spotify",
     val artist: String = "Nenhuma faixa ativa",
     val album: String = "",
     val coverBitmap: Bitmap? = null,
@@ -48,7 +54,9 @@ data class MediaPlaybackState(
     val durationMs: Long = 0L,
     val activePackage: String = "com.spotify.music",
     val appLabel: String = "Spotify",
-    val hasNotificationAccess: Boolean = true,
+    val hasNotificationAccess: Boolean = false,
+    val hasActiveTrack: Boolean = false,
+    val canSeek: Boolean = false,
     val lastUpdatedAtElapsedMs: Long = 0L
 )
 
@@ -68,19 +76,21 @@ data class WhatsAppNotificationItem(
 }
 
 /**
- * Controla a reprodução de música do tablet (Spotify por padrão ou app configurado),
- * captura metadados/capa em tempo real via MediaSessionManager + broadcasts do Spotify
- * e gerencia mensagens recebidas (WhatsApp) com resposta direta via RemoteInput.
+ * Controla a reprodução de música do tablet (Spotify por padrão ou app configurado):
+ * - Usa MediaSessionManager quando instalado via ADB com NotificationListener ativo.
+ * - Usa broadcasts públicos do Spotify + MEDIA_BUTTON explícito para o pacote + busca automática
+ *   de capa do álbum via API pública quando rodando via APK de navegador (sem Play Protect block).
  */
 class MediaAndNotificationController private constructor(private val appContext: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private val sessionManager = appContext.getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
+    private val artworkCache = ConcurrentHashMap<String, Bitmap>()
 
     private val _mediaState = MutableStateFlow(
         MediaPlaybackState(
-            hasNotificationAccess = true
+            hasNotificationAccess = HondaNotificationMediaService.isPermissionGranted(appContext)
         )
     )
     val mediaState: StateFlow<MediaPlaybackState> = _mediaState.asStateFlow()
@@ -95,6 +105,7 @@ class MediaAndNotificationController private constructor(private val appContext:
     private var sessionsListenerRegistered = false
     private var spotifyBroadcastRegistered = false
     private var tickerJob: Job? = null
+    private var artworkFetchJob: Job? = null
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) {
@@ -106,6 +117,8 @@ class MediaAndNotificationController private constructor(private val appContext:
         }
 
         override fun onSessionDestroyed() {
+            activeController = null
+            _mediaState.update { it.copy(canSeek = false) }
             refreshActiveMediaSessions()
         }
     }
@@ -117,32 +130,54 @@ class MediaAndNotificationController private constructor(private val appContext:
     private val spotifyBroadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                "com.spotify.music.metadatachanged" -> {
+                "com.spotify.music.metadatachanged",
+                "com.android.music.metadatachanged" -> {
                     val track = intent.getStringExtra("track").orEmpty()
                     val artist = intent.getStringExtra("artist").orEmpty()
                     val album = intent.getStringExtra("album").orEmpty()
-                    val lengthMs = intent.getIntExtra("length", 0).toLong().coerceAtLeast(0L)
+                    val lengthMs = intent.getIntExtra("length", 0).toLong()
+                        .takeIf { it > 0L }
+                        ?: intent.getLongExtra("duration", 0L).coerceAtLeast(0L)
                     if (track.isNotBlank()) {
+                        val isSameTrack = _mediaState.value.title == track &&
+                            _mediaState.value.artist == artist.ifBlank { preferredMusicLabel }
+                        val cachedArt = artworkCache[artCacheKey(track, artist)]
                         _mediaState.update {
                             it.copy(
                                 title = track,
-                                artist = artist.ifBlank { "Spotify" },
+                                artist = artist.ifBlank { preferredMusicLabel },
                                 album = album,
+                                coverBitmap = if (isSameTrack) (it.coverBitmap ?: cachedArt) else cachedArt,
                                 durationMs = if (lengthMs > 0L) lengthMs else it.durationMs,
-                                activePackage = "com.spotify.music",
-                                appLabel = "Spotify",
+                                activePackage = if (intent.action?.startsWith("com.spotify") == true) {
+                                    "com.spotify.music"
+                                } else {
+                                    preferredMusicPackage
+                                },
+                                appLabel = if (intent.action?.startsWith("com.spotify") == true) {
+                                    "Spotify"
+                                } else {
+                                    preferredMusicLabel
+                                },
+                                hasActiveTrack = true,
                                 lastUpdatedAtElapsedMs = SystemClock.elapsedRealtime()
                             )
                         }
+                        if (cachedArt == null) {
+                            fetchAlbumArtAsync(track, artist)
+                        }
                     }
                 }
-                "com.spotify.music.playbackstatechanged" -> {
+                "com.spotify.music.playbackstatechanged",
+                "com.android.music.playstatechanged" -> {
                     val playing = intent.getBooleanExtra("playing", false)
-                    val pos = intent.getIntExtra("playbackPosition", 0).toLong().coerceAtLeast(0L)
+                    val pos = intent.getIntExtra("playbackPosition", -1).takeIf { it >= 0 }?.toLong()
+                        ?: intent.getLongExtra("position", 0L).coerceAtLeast(0L)
                     _mediaState.update {
                         it.copy(
                             isPlaying = playing,
                             positionMs = pos,
+                            hasActiveTrack = it.hasActiveTrack || playing,
                             lastUpdatedAtElapsedMs = SystemClock.elapsedRealtime()
                         )
                     }
@@ -160,10 +195,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     fun setPreferredMusicApp(packageName: String, label: String) {
         preferredMusicPackage = packageName
         preferredMusicLabel = label
-        if (_mediaState.value.title == "Toque para abrir o Spotify" || _mediaState.value.lastUpdatedAtElapsedMs == 0L) {
+        if (!_mediaState.value.hasActiveTrack) {
             _mediaState.update {
                 it.copy(
-                    title = "Toque para abrir $label",
+                    title = "Toque para tocar no $label",
                     activePackage = packageName,
                     appLabel = label
                 )
@@ -182,12 +217,17 @@ class MediaAndNotificationController private constructor(private val appContext:
     fun onListenerDisconnected() {
         listenerComponent = null
         sessionsListenerRegistered = false
-        _mediaState.update { it.copy(hasNotificationAccess = true) }
+        _mediaState.update {
+            it.copy(
+                hasNotificationAccess = HondaNotificationMediaService.isPermissionGranted(appContext),
+                canSeek = false
+            )
+        }
     }
 
     fun refreshAccessAndSessions() {
         val granted = HondaNotificationMediaService.isPermissionGranted(appContext)
-        _mediaState.update { it.copy(hasNotificationAccess = true) }
+        _mediaState.update { it.copy(hasNotificationAccess = granted) }
         if (granted) {
             val comp = listenerComponent ?: HondaNotificationMediaService.componentName(appContext)
             listenerComponent = comp
@@ -201,8 +241,25 @@ class MediaAndNotificationController private constructor(private val appContext:
         if (ctrl != null) {
             val playing = ctrl.playbackState?.state == PlaybackState.STATE_PLAYING
             if (playing) ctrl.transportControls.pause() else ctrl.transportControls.play()
+            return
+        }
+
+        // Se ainda não há música ativa tocando, envia PLAY e acorda o app se estiver fechado
+        if (!_mediaState.value.hasActiveTrack) {
+            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+            if (audioManager?.isMusicActive != true) {
+                launchPreferredMusicApp()
+                scope.launch {
+                    delay(1_300L)
+                    dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+                }
+            }
         } else {
-            dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            val nextPlaying = !_mediaState.value.isPlaying
+            dispatchMediaKey(
+                if (nextPlaying) KeyEvent.KEYCODE_MEDIA_PLAY else KeyEvent.KEYCODE_MEDIA_PAUSE
+            )
+            _mediaState.update { it.copy(isPlaying = nextPlaying) }
         }
     }
 
@@ -212,6 +269,15 @@ class MediaAndNotificationController private constructor(private val appContext:
             ctrl.transportControls.play()
         } else {
             dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+            if (!_mediaState.value.hasActiveTrack && audioManager?.isMusicActive != true) {
+                launchPreferredMusicApp()
+                scope.launch {
+                    delay(1_300L)
+                    dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY)
+                }
+            } else {
+                _mediaState.update { it.copy(isPlaying = true) }
+            }
         }
     }
 
@@ -221,6 +287,7 @@ class MediaAndNotificationController private constructor(private val appContext:
             ctrl.transportControls.pause()
         } else {
             dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+            _mediaState.update { it.copy(isPlaying = false) }
         }
     }
 
@@ -246,20 +313,15 @@ class MediaAndNotificationController private constructor(private val appContext:
         activeController?.transportControls?.seekTo(positionMs.coerceAtLeast(0L))
     }
 
+    /**
+     * Prepara a música na ignição sem roubar a tela do painel HondaDeck,
+     * disparando comando de mídia silencioso apenas se autoPlay == true.
+     */
     fun warmupPreferredMusicApp(autoPlay: Boolean) {
-        val pkg = preferredMusicPackage.ifBlank { "com.spotify.music" }
-        runCatching {
-            val launchIntent = appContext.packageManager.getLaunchIntentForPackage(pkg)
-            if (launchIntent != null && autoPlay) {
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                appContext.startActivity(launchIntent)
-            }
-        }
-        if (autoPlay) {
-            scope.launch {
-                delay(1_200L)
-                play()
-            }
+        if (!autoPlay) return
+        scope.launch {
+            delay(800L)
+            play()
         }
     }
 
@@ -464,6 +526,8 @@ class MediaAndNotificationController private constructor(private val appContext:
         val album = meta.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty()
         val cover = meta.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: meta.getBitmap(MediaMetadata.METADATA_KEY_ART)
+            ?: meta.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
+            ?: artworkCache[artCacheKey(title, artist)]
         val duration = meta.getLong(MediaMetadata.METADATA_KEY_DURATION).coerceAtLeast(0L)
         val isPlaying = pb?.state == PlaybackState.STATE_PLAYING
         val position = computeCurrentPosition(pb, duration)
@@ -476,16 +540,63 @@ class MediaAndNotificationController private constructor(private val appContext:
                 title = title,
                 artist = artist,
                 album = album,
-                coverBitmap = cover ?: it.coverBitmap,
+                coverBitmap = cover,
                 isPlaying = isPlaying,
                 positionMs = position,
                 durationMs = duration,
                 activePackage = pkg,
                 appLabel = label,
+                hasActiveTrack = true,
+                canSeek = true,
                 lastUpdatedAtElapsedMs = SystemClock.elapsedRealtime()
             )
         }
+        if (cover == null) {
+            fetchAlbumArtAsync(title, artist)
+        }
     }
+
+    private fun fetchAlbumArtAsync(track: String, artist: String) {
+        val key = artCacheKey(track, artist)
+        if (artworkCache.containsKey(key)) return
+        artworkFetchJob?.cancel()
+        artworkFetchJob = scope.launch(Dispatchers.IO) {
+            val bmp = runCatching {
+                val query = URLEncoder.encode("$track $artist".trim(), "UTF-8")
+                val url = "https://itunes.apple.com/search?term=$query&entity=song&limit=1"
+                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 4_000
+                    readTimeout = 5_000
+                }
+                val body = conn.inputStream.bufferedReader().readText()
+                conn.disconnect()
+                val results = JSONObject(body).optJSONArray("results") ?: return@runCatching null
+                if (results.length() == 0) return@runCatching null
+                val artUrl = results.getJSONObject(0).optString("artworkUrl100")
+                    .replace("100x100bb", "300x300bb")
+                if (artUrl.isBlank()) return@runCatching null
+                val imgConn = (URL(artUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 4_000
+                    readTimeout = 5_000
+                }
+                val decoded = BitmapFactory.decodeStream(imgConn.inputStream)
+                imgConn.disconnect()
+                decoded
+            }.getOrNull() ?: return@launch
+
+            artworkCache[key] = bmp
+            _mediaState.update { cur ->
+                if (cur.title == track && cur.coverBitmap == null) {
+                    cur.copy(coverBitmap = bmp)
+                } else {
+                    cur
+                }
+            }
+        }
+    }
+
+    private fun artCacheKey(track: String, artist: String): String =
+        "${track.trim().lowercase()}|${artist.trim().lowercase()}"
 
     private fun computeCurrentPosition(pb: PlaybackState?, durationMs: Long): Long {
         if (pb == null) return 0L
@@ -540,6 +651,9 @@ class MediaAndNotificationController private constructor(private val appContext:
         val filter = IntentFilter().apply {
             addAction("com.spotify.music.metadatachanged")
             addAction("com.spotify.music.playbackstatechanged")
+            addAction("com.spotify.music.queuechanged")
+            addAction("com.android.music.metachanged")
+            addAction("com.android.music.playstatechanged")
         }
         ContextCompat.registerReceiver(
             appContext,
@@ -551,11 +665,21 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     private fun dispatchMediaKey(keyCode: Int) {
-        val manager = audioManager ?: return
         val down = KeyEvent(KeyEvent.ACTION_DOWN, keyCode)
         val up = KeyEvent(KeyEvent.ACTION_UP, keyCode)
-        manager.dispatchMediaKeyEvent(down)
-        manager.dispatchMediaKeyEvent(up)
+        audioManager?.let { mgr ->
+            mgr.dispatchMediaKeyEvent(down)
+            mgr.dispatchMediaKeyEvent(up)
+        }
+        // Envia também broadcast direcionado para o player configurado caso não haja sessão ativa
+        val pkg = preferredMusicPackage.ifBlank { "com.spotify.music" }
+        listOf(down, up).forEach { ev ->
+            val mediaBtn = Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                setPackage(pkg)
+                putExtra(Intent.EXTRA_KEY_EVENT, ev)
+            }
+            runCatching { appContext.sendBroadcast(mediaBtn) }
+        }
     }
 
     companion object {

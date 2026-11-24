@@ -43,20 +43,24 @@ data class HeadUnitState(
     val duckAudioOnReverse: Boolean = true,
     val obdFastTurboMode: Boolean = true,
     val isReverseOverlayVisible: Boolean = false,
+    val isHardwareReverseActive: Boolean = false,
     val shouldDuckAudio: Boolean = false,
     val btDiscoveryAllowed: Boolean = true,
     val activeObdProfile: ObdPollingProfile = ObdPollingProfile.HOME_TURBO
 )
 
 /**
- * Árbitro determinístico central do HondaDeck que coordena Câmera de Ré USB,
+ * Árbitro determinístico thread-safe do HondaDeck que coordena Câmera de Ré USB,
  * OBD-II BT SPP em modo HOME_TURBO e Áudio/Ignição BT (Taramps), garantindo
  * prioridade total da câmera de ré e zero interferência no áudio A2DP.
  */
 class HeadUnitCoordinator(
     private val reverseStateMachine: ReverseStateMachine = ReverseStateMachine(),
-    var alertThresholds: AlertThresholds = AlertThresholds()
+    @Volatile var alertThresholds: AlertThresholds = AlertThresholds()
 ) {
+    private val stateLock = Any()
+
+    @Volatile
     private var currentState = HeadUnitState()
 
     val state: HeadUnitState
@@ -124,12 +128,12 @@ class HeadUnitCoordinator(
         return updateDerived { it.copy(powerConnected = connected) }
     }
 
-    fun onCameraSample(analysis: SignalAnalysis, nowMs: Long): HeadUnitState {
+    fun onCameraSample(analysis: SignalAnalysis, nowMs: Long): HeadUnitState = synchronized(stateLock) {
         val nextCameraState = reverseStateMachine.onVideoSignalSample(
             hasSignal = analysis.hasActiveSignal,
             nowMs = nowMs
         )
-        return updateDerived {
+        updateDerivedLocked {
             it.copy(
                 cameraState = nextCameraState,
                 cameraSignalDebug = analysis
@@ -137,35 +141,39 @@ class HeadUnitCoordinator(
         }
     }
 
-    fun onUsbCameraAttached(nowMs: Long): HeadUnitState {
+    fun onUsbCameraAttached(nowMs: Long): HeadUnitState = synchronized(stateLock) {
         val nextCameraState = reverseStateMachine.onUsbCameraAttached(nowMs)
-        return updateDerived { it.copy(cameraState = nextCameraState) }
+        updateDerivedLocked { it.copy(cameraState = nextCameraState) }
     }
 
-    fun onUsbCameraDetached(): HeadUnitState {
+    fun onUsbCameraDetached(): HeadUnitState = synchronized(stateLock) {
         val nextCameraState = reverseStateMachine.onUsbCameraDetached()
-        return updateDerived { it.copy(cameraState = nextCameraState) }
+        updateDerivedLocked { it.copy(cameraState = nextCameraState) }
     }
 
-    fun toggleManualCameraPreview(): HeadUnitState {
+    fun toggleManualCameraPreview(): HeadUnitState = synchronized(stateLock) {
         val nextCameraState = reverseStateMachine.toggleManualPreview()
-        return updateDerived { it.copy(cameraState = nextCameraState) }
+        updateDerivedLocked { it.copy(cameraState = nextCameraState) }
     }
 
-    fun exitManualCameraPreview(): HeadUnitState {
+    fun exitManualCameraPreview(): HeadUnitState = synchronized(stateLock) {
         val nextCameraState = reverseStateMachine.exitManualPreview()
-        return updateDerived { it.copy(cameraState = nextCameraState) }
+        updateDerivedLocked { it.copy(cameraState = nextCameraState) }
     }
 
-    private fun updateDerived(transform: (HeadUnitState) -> HeadUnitState): HeadUnitState {
+    private fun updateDerived(transform: (HeadUnitState) -> HeadUnitState): HeadUnitState =
+        synchronized(stateLock) {
+            updateDerivedLocked(transform)
+        }
+
+    private fun updateDerivedLocked(transform: (HeadUnitState) -> HeadUnitState): HeadUnitState {
         val updated = transform(currentState)
-        val reverseVisible = updated.cameraState == ReverseCameraState.ACTIVE ||
-            updated.cameraState == ReverseCameraState.CONFIRMING_LOSS ||
+        val hardwareReverse = updated.cameraState == ReverseCameraState.ACTIVE ||
+            updated.cameraState == ReverseCameraState.CONFIRMING_LOSS
+        val reverseVisible = hardwareReverse ||
             updated.cameraState == ReverseCameraState.MANUAL_PREVIEW
 
-        val duckAudio = updated.duckAudioOnReverse &&
-            (updated.cameraState == ReverseCameraState.ACTIVE ||
-                updated.cameraState == ReverseCameraState.CONFIRMING_LOSS)
+        val duckAudio = updated.duckAudioOnReverse && hardwareReverse
 
         // Nunca permite BT discovery após a 1ª configuração ou com o áudio conectado
         val discoveryAllowed = !updated.setupCompleted && updated.audioBtStatus != LinkStatus.CONNECTED
@@ -178,6 +186,7 @@ class HeadUnitCoordinator(
 
         currentState = updated.copy(
             isReverseOverlayVisible = reverseVisible,
+            isHardwareReverseActive = hardwareReverse,
             shouldDuckAudio = duckAudio,
             btDiscoveryAllowed = discoveryAllowed,
             activeObdProfile = pollingProfile

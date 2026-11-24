@@ -83,35 +83,14 @@ class IgnitionBluetoothMonitor(
     val status: StateFlow<IgnitionStatus> = _status.asStateFlow()
 
     private var standbyTimerJob: Job? = null
-    private var registered = false
+    private var lastIgnitionMacOrKey: String = ""
+    private var lastIgnitionConnected: Boolean? = null
+    private var lastIgnitionEventMs: Long = 0L
 
-    private val dynamicReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            IgnitionBluetoothReceiver().onReceive(context, intent)
-        }
-    }
-
-    fun start() {
-        if (registered) return
-        val filter = IntentFilter().apply {
-            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
-            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
-            addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
-        }
-        ContextCompat.registerReceiver(
-            appContext,
-            dynamicReceiver,
-            filter,
-            ContextCompat.RECEIVER_EXPORTED
-        )
-        registered = true
-    }
+    fun start() = Unit
 
     fun stop() {
         standbyTimerJob?.cancel()
-        if (!registered) return
-        runCatching { appContext.unregisterReceiver(dynamicReceiver) }
-        registered = false
     }
 
     fun handleBluetoothEvent(
@@ -122,6 +101,18 @@ class IgnitionBluetoothMonitor(
     ) {
         if (!config.ignitionTriggerEnabled) return
         if (!matchesConfiguredDevice(mac, name, config)) return
+
+        val key = mac.ifBlank { name }.uppercase()
+        val now = System.currentTimeMillis()
+        if (lastIgnitionConnected == connected &&
+            lastIgnitionMacOrKey == key &&
+            now - lastIgnitionEventMs < 3_000L
+        ) {
+            return
+        }
+        lastIgnitionConnected = connected
+        lastIgnitionMacOrKey = key
+        lastIgnitionEventMs = now
 
         val label = name.ifBlank { mac.ifBlank { config.ignitionBtName } }
         if (connected) {

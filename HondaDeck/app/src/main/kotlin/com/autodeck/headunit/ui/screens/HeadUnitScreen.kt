@@ -5,6 +5,7 @@ import android.view.Surface
 import android.view.TextureView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,7 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Message
+import androidx.compose.material.icons.automirrored.rounded.Message
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -41,17 +42,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.autodeck.headunit.R
 import com.autodeck.headunit.media.WhatsAppNotificationItem
 import com.autodeck.headunit.service.HeadUnitUiState
 import com.autodeck.headunit.ui.HeadUnitViewModel
@@ -73,11 +78,9 @@ fun HeadUnitScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         HondaOuterFrameBackground {
             Column(modifier = Modifier.fillMaxSize()) {
-                // Cabeçalho Superior (Relógio + HONDA + Chips + Voz/Ré)
+                // Cabeçalho Superior ([H] HONDA + Micro Pontos de Status)
                 HondaTopHeader(
                     uiState = uiState,
-                    onTriggerVoice = { viewModel.triggerVoiceAgent() },
-                    onToggleCamera = { viewModel.toggleManualCameraPreview() },
                     onOpenSettings = { viewModel.selectTab(MainTab.SETTINGS) }
                 )
 
@@ -86,7 +89,7 @@ fun HeadUnitScreen(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .padding(horizontal = 22.dp, vertical = 4.dp)
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
                 ) {
                     when (headUnit.activeTab) {
                         MainTab.HOME -> HomeDashboardPanel(
@@ -163,6 +166,7 @@ fun HeadUnitScreen(
                                 onCalibrateNoSignal = { viewModel.calibrateCameraNoSignal() },
                                 onClearNoSignal = { viewModel.clearNoSignalCalibration() },
                                 onTestReverse = { viewModel.toggleSimulatedReverse() },
+                                onTestManualCamera = { viewModel.toggleManualCameraPreview() },
                                 onReopenWizard = { viewModel.reopenSetup() }
                             )
                         }
@@ -194,13 +198,29 @@ fun HeadUnitScreen(
                     }
                 }
 
-                // Dock Inferior Trapezoidal Neon
+                // Dock Inferior Outlined Neon
                 HondaBottomDock(
                     activeTab = headUnit.activeTab,
                     unreadMessages = uiState.whatsAppMessages.count { !it.isReadByAgent },
-                    onSelectTab = { viewModel.selectTab(it) }
+                    onSelectTab = { viewModel.selectTab(it) },
+                    onLongPressVoice = { viewModel.triggerVoiceAgent() },
+                    onLongPressCamera = { viewModel.toggleManualCameraPreview() }
                 )
             }
+        }
+
+        if (uiState.config.debugReferenceOverlay &&
+            headUnit.activeTab == MainTab.HOME &&
+            !headUnit.isReverseOverlayVisible
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.ref_home),
+                contentDescription = null,
+                contentScale = ContentScale.FillBounds,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(0.38f)
+            )
         }
 
         // Overlay 100% tela cheia da Câmera de Ré (prioridade máxima)
@@ -267,23 +287,41 @@ private fun HomeDashboardPanel(
 ) {
     val snap = uiState.headUnit.obdSnapshot
     val derived = snap.derived
-    val speed = (derived.correctedSpeedKmh ?: snap.speedKmh ?: 0.0).toFloat()
+    val speed = (
+        derived.correctedSpeedKmh
+            ?: snap.speedKmh
+            ?: if (uiState.gpsState.hasFix) uiState.gpsState.gpsSpeedKmh.toDouble() else 0.0
+        ).toFloat()
     val rpm = (snap.rpm ?: 0.0).toFloat()
     val fuelPct = (snap.fuelLevelPct ?: derived.virtualTankPercent).toFloat()
 
     Row(
         modifier = Modifier.fillMaxSize(),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Coluna Esquerda: Card NAVEGAÇÃO >
-        OsmDarkMiniMapCard(
-            gpsState = uiState.gpsState,
-            preferredMapLabel = uiState.config.preferredMapLabel,
-            onExpandMap = { onSelectTab(MainTab.NAVIGATION) },
-            onLaunchPreferredMap = onLaunchMapApp,
-            modifier = Modifier.weight(0.27f)
-        )
+        // Coluna Esquerda: Relógio Digital + Card NAVEGAÇÃO >
+        Column(
+            modifier = Modifier
+                .weight(0.26f)
+                .fillMaxSize()
+        ) {
+            HondaClockBlock(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.27f)
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            OsmDarkMiniMapCard(
+                gpsState = uiState.gpsState,
+                preferredMapLabel = uiState.config.preferredMapLabel,
+                onExpandMap = { onSelectTab(MainTab.NAVIGATION) },
+                onLaunchPreferredMap = onLaunchMapApp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(0.73f)
+            )
+        }
 
         // Coluna Central: Velocímetro Neon + Marchas + Combustível
         HondaCenterGaugeCluster(
@@ -292,19 +330,18 @@ private fun HomeDashboardPanel(
             maxSpeedKmh = uiState.config.speedometerMaxKmh,
             transmission = uiState.config.transmissionType,
             estimatedGear = derived.estimatedGear,
-            isReverseActive = uiState.headUnit.isReverseOverlayVisible,
+            isReverseActive = uiState.headUnit.isHardwareReverseActive,
             fuelPercent = fuelPct,
-            estimatedRangeKm = derived.estimatedRangeKm,
-            modifier = Modifier.weight(0.43f)
+            modifier = Modifier.weight(0.47f)
         )
 
         // Coluna Direita: MÚSICA (em cima) + MONITORAMENTO (embaixo)
         Column(
             modifier = Modifier
-                .weight(0.30f)
-                .fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .weight(0.27f)
+                .fillMaxSize()
         ) {
+            Spacer(modifier = Modifier.height(30.dp))
             HondaMusicCard(
                 mediaState = uiState.mediaState,
                 onTogglePlayPause = onTogglePlayPause,
@@ -313,9 +350,9 @@ private fun HomeDashboardPanel(
                 onSeekTo = onSeekMusic,
                 onOpenMusicTab = { onSelectTab(MainTab.MUSIC) },
                 onLaunchMusicApp = onLaunchMusicApp,
-                modifier = Modifier.weight(1.32f)
+                modifier = Modifier.weight(1.48f)
             )
-
+            Spacer(modifier = Modifier.height(14.dp))
             HondaMonitoringCard(
                 batteryVoltageV = snap.batteryVoltageV,
                 coolantTempC = snap.coolantTempC,
@@ -347,7 +384,7 @@ private fun WhatsAppTopBanner(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(Icons.Rounded.Message, null, tint = AutoDeckColors.StatusGreen)
+            Icon(Icons.AutoMirrored.Rounded.Message, null, tint = AutoDeckColors.StatusGreen)
             Column(modifier = Modifier.weight(1f)) {
                 Text("${item.sender} (${item.appLabel})", color = AutoDeckColors.AccentCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 Text(item.message, color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

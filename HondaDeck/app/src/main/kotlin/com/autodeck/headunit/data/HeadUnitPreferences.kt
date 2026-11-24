@@ -76,7 +76,8 @@ data class HeadUnitConfig(
     val guidelines: GuidelineCalibration = GuidelineCalibration(),
     val alertThresholds: AlertThresholds = AlertThresholds(),
     val tripDistanceKm: Double = 0.0,
-    val tripFuelLiters: Double = 0.0
+    val tripFuelLiters: Double = 0.0,
+    val debugReferenceOverlay: Boolean = false
 )
 
 class HeadUnitPreferences(context: Context) {
@@ -161,7 +162,8 @@ class HeadUnitPreferences(context: Context) {
                 batteryHighV = prefs.getFloat(KEY_ALERT_BATT_HIGH, 15.3f).toDouble()
             ),
             tripDistanceKm = prefs.getFloat(KEY_TRIP_DIST_KM, 0f).toDouble(),
-            tripFuelLiters = prefs.getFloat(KEY_TRIP_FUEL_L, 0f).toDouble()
+            tripFuelLiters = prefs.getFloat(KEY_TRIP_FUEL_L, 0f).toDouble(),
+            debugReferenceOverlay = prefs.getBoolean(KEY_DEBUG_REF_OVERLAY, false)
         )
     }
 
@@ -249,6 +251,7 @@ class HeadUnitPreferences(context: Context) {
 
             putFloat(KEY_TRIP_DIST_KM, config.tripDistanceKm.toFloat())
             putFloat(KEY_TRIP_FUEL_L, config.tripFuelLiters.toFloat())
+            putBoolean(KEY_DEBUG_REF_OVERLAY, config.debugReferenceOverlay)
         }
     }
 
@@ -326,5 +329,6 @@ class HeadUnitPreferences(context: Context) {
         const val KEY_TIRE_CORRECTION_FACTOR = "tire_correction_factor"
         const val KEY_VIRTUAL_TANK_CAP_L = "virtual_tank_cap_l"
         const val KEY_VIRTUAL_TANK_REM_L = "virtual_tank_rem_l"
+        const val KEY_DEBUG_REF_OVERLAY = "debug_ref_overlay"
     }
 }

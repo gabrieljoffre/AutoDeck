@@ -108,7 +108,14 @@ class HeadUnitForegroundService : Service() {
 
                 if (reverseVisible && inBackground) {
                     floatingHud.hide()
-                    showReverseOverlayIfPermitted()
+                    if (Settings.canDrawOverlays(this@HeadUnitForegroundService)) {
+                        val bringFront = Intent(this@HeadUnitForegroundService, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        }
+                        runCatching { startActivity(bringFront) }
+                    } else {
+                        showReverseOverlayIfPermitted()
+                    }
                 } else {
                     removeReverseSystemOverlay()
                     if (showHud) {

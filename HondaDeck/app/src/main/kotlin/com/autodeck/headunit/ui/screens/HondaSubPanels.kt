@@ -16,6 +16,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Message
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
@@ -43,9 +46,9 @@ import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.LocalGasStation
-import androidx.compose.material.icons.rounded.Message
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Navigation
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -71,7 +74,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -94,7 +96,6 @@ import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.VoiceAssistantMode
 import com.autodeck.headunit.hardware.CameraHardwareStatus
 import com.autodeck.headunit.hardware.UsbDeviceRole
-import com.autodeck.headunit.media.HondaNotificationMediaService
 import com.autodeck.headunit.media.WhatsAppNotificationItem
 import com.autodeck.headunit.service.CameraDebugState
 import com.autodeck.headunit.service.HeadUnitUiState
@@ -120,7 +121,7 @@ fun NavigationFullPanel(
     onNavigateDestination: (String) -> Unit,
     onDownloadOfflineRegion: (MapView) -> Unit
 ) {
-    var zoom by remember { mutableDoubleStateOf(16.0) }
+    var followGps by remember { mutableStateOf(true) }
     var destinationText by remember { mutableStateOf("") }
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
 
@@ -139,8 +140,10 @@ fun NavigationFullPanel(
         ) {
             OsmDarkMapSurface(
                 gpsState = uiState.gpsState,
-                zoomLevel = zoom,
+                followGps = followGps,
                 interactive = true,
+                initialZoom = 16.0,
+                onUserDragMap = { followGps = false },
                 onMapViewReady = { mapViewRef = it },
                 modifier = Modifier.fillMaxSize()
             )
@@ -164,7 +167,11 @@ fun NavigationFullPanel(
                     modifier = Modifier.size(16.dp)
                 )
                 Text(
-                    text = "${uiState.gpsState.providerLabel} • ${"%.4f".format(uiState.gpsState.latitude)}, ${"%.4f".format(uiState.gpsState.longitude)}",
+                    text = if (uiState.gpsState.hasFix) {
+                        "${uiState.gpsState.providerLabel} • ${"%.4f".format(uiState.gpsState.latitude)}, ${"%.4f".format(uiState.gpsState.longitude)}"
+                    } else {
+                        "Aguardando sinal GPS (${uiState.gpsState.providerLabel})..."
+                    },
                     color = AutoDeckColors.TextPrimary,
                     fontSize = 12.sp
                 )
@@ -174,10 +181,38 @@ fun NavigationFullPanel(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(12.dp),
+                horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (!followGps) {
+                    Surface(
+                        onClick = { followGps = true },
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color(0xE80A1624),
+                        border = BorderStroke(1.dp, AutoDeckColors.AccentCyan)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MyLocation,
+                                contentDescription = "Centralizar GPS",
+                                tint = AutoDeckColors.AccentCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Centralizar GPS",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
                 Surface(
-                    onClick = { zoom = (zoom + 1.0).coerceAtMost(19.0) },
+                    onClick = { mapViewRef?.controller?.zoomIn() },
                     shape = CircleShape,
                     color = Color(0xE00A1624),
                     border = BorderStroke(1.dp, AutoDeckColors.AccentCyan.copy(alpha = 0.6f))
@@ -185,7 +220,7 @@ fun NavigationFullPanel(
                     Icon(Icons.Rounded.Add, "Zoom +", tint = Color.White, modifier = Modifier.padding(10.dp))
                 }
                 Surface(
-                    onClick = { zoom = (zoom - 1.0).coerceAtLeast(10.0) },
+                    onClick = { mapViewRef?.controller?.zoomOut() },
                     shape = CircleShape,
                     color = Color(0xE00A1624),
                     border = BorderStroke(1.dp, AutoDeckColors.AccentCyan.copy(alpha = 0.6f))
@@ -368,20 +403,28 @@ fun MusicCenterPanel(
                                 maxLines = 1
                             )
                         }
+                        if (!media.hasActiveTrack) {
+                            Text(
+                                text = "Toque em Play ou abra o ${uiState.config.preferredMusicLabel}. No Spotify, ative 'Status de transmissão de dispositivo' nas Configurações para exibir faixa e capa.",
+                                color = AutoDeckColors.TextSecondary,
+                                fontSize = 11.sp
+                            )
+                        }
                     }
                 }
 
                 Column(modifier = Modifier.fillMaxWidth()) {
                     val dur = media.durationMs.coerceAtLeast(1L)
                     val frac = if (media.durationMs > 0L) (media.positionMs.toFloat() / dur).coerceIn(0f, 1f) else 0f
-                    Slider(
-                        value = frac,
-                        onValueChange = { if (media.durationMs > 0L) onSeekTo((it * media.durationMs).toLong()) },
-                        colors = SliderDefaults.colors(
-                            thumbColor = AutoDeckColors.AccentCyan,
-                            activeTrackColor = AutoDeckColors.AccentCyan
-                        )
+                    HondaMusicProgressBar(
+                        progress = frac,
+                        enabled = media.canSeek && media.durationMs > 0L,
+                        onSeekFraction = { f ->
+                            if (media.durationMs > 0L) onSeekTo((f * media.durationMs).toLong())
+                        },
+                        modifier = Modifier.fillMaxWidth()
                     )
+                    Spacer(modifier = Modifier.height(6.dp))
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(formatDurationMs(media.positionMs), color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
                         Text(formatDurationMs(media.durationMs), color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
@@ -455,21 +498,17 @@ fun MusicCenterPanel(
 
                 if (!media.hasNotificationAccess) {
                     Card(
-                        colors = CardDefaults.cardColors(containerColor = AutoDeckColors.StatusAmber.copy(alpha = 0.14f)),
-                        border = BorderStroke(1.dp, AutoDeckColors.StatusAmber.copy(alpha = 0.6f))
+                        colors = CardDefaults.cardColors(containerColor = AutoDeckColors.AccentCyan.copy(alpha = 0.10f)),
+                        border = BorderStroke(1.dp, AutoDeckColors.AccentCyan.copy(alpha = 0.45f))
                     ) {
                         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                text = "Para ver a capa do álbum e barra de tempo do Spotify na Home, libere o Acesso a Notificações:",
+                                text = "Modo compatível com Play Protect: o HondaDeck recebe música e capa automaticamente pelo Spotify Broadcast. No Spotify, ative 'Status de transmissão de dispositivo'.",
                                 color = AutoDeckColors.TextPrimary,
                                 fontSize = 12.sp
                             )
-                            OutlinedButton(
-                                onClick = {
-                                    runCatching { context.startActivity(HondaNotificationMediaService.buildSettingsIntent()) }
-                                }
-                            ) {
-                                Text("Liberar Acesso ao Spotify")
+                            OutlinedButton(onClick = onLaunchMusicApp) {
+                                Text("Abrir ${uiState.config.preferredMusicLabel}")
                             }
                         }
                     }
@@ -673,7 +712,7 @@ fun GeminiAgentPanel(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Icon(Icons.Rounded.Message, null, tint = AutoDeckColors.StatusGreen, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Rounded.Message, null, tint = AutoDeckColors.StatusGreen, modifier = Modifier.size(18.dp))
                         Text("WhatsApp & Mensagens", color = AutoDeckColors.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     }
                     TextButton(onClick = onLaunchWhatsApp) { Text("Abrir App") }
@@ -698,7 +737,7 @@ fun GeminiAgentPanel(
                             text = if (uiState.mediaState.hasNotificationAccess) {
                                 "Nenhuma mensagem recebida ainda. Quando chegar WhatsApp no tablet, aparecerá aqui."
                             } else {
-                                "Libere o Acesso a Notificações nas Configurações para que o Gemini leia e responda seu WhatsApp por voz."
+                                "Modo compatível com Play Protect: a captura automática de notificações fica desabilitada neste APK para evitar bloqueio na instalação. Use 'Abrir App' acima para abrir o WhatsApp."
                             },
                             color = AutoDeckColors.TextSecondary,
                             fontSize = 12.sp
@@ -958,6 +997,7 @@ fun ObdScannerPanel(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HondaSettingsPanel(
     uiState: HeadUnitUiState,
@@ -972,12 +1012,17 @@ fun HondaSettingsPanel(
     onCalibrateNoSignal: () -> Boolean,
     onClearNoSignal: () -> Unit,
     onTestReverse: () -> Unit,
-    onReopenWizard: () -> Unit
+    onReopenWizard: () -> Unit,
+    onTestManualCamera: () -> Unit = onTestReverse
 ) {
     val context = LocalContext.current
     val cfg = uiState.config
     var calibrationMsg by remember { mutableStateOf<String?>(null) }
     var showApiKey by remember { mutableStateOf(false) }
+    var apiKeyDraft by remember(cfg.geminiApiKey) { mutableStateOf(cfg.geminiApiKey) }
+    var wakeWordDraft by remember(cfg.wakeWordPhrase) { mutableStateOf(cfg.wakeWordPhrase) }
+    val apiKeyDirty = apiKeyDraft.trim() != cfg.geminiApiKey
+    val wakeWordDirty = wakeWordDraft.trim() != cfg.wakeWordPhrase
 
     Column(
         modifier = Modifier
@@ -988,7 +1033,10 @@ fun HondaSettingsPanel(
         // 1. Aplicativos Padrão & Cápsula Flutuante
         SettingsSectionCard(title = "1. Aplicativos Padrão & Cápsula Flutuante") {
             Text("App padrão de Música (card MÚSICA da Home):", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 uiState.installedMusicApps.forEach { app ->
                     FilterChip(
                         selected = cfg.preferredMusicPackage == app.packageName,
@@ -1003,7 +1051,10 @@ fun HondaSettingsPanel(
             }
 
             Text("App padrão de Mapa (card NAVEGAÇÃO da Home):", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 uiState.installedMapApps.forEach { app ->
                     FilterChip(
                         selected = cfg.preferredMapPackage == app.packageName,
@@ -1079,8 +1130,11 @@ fun HondaSettingsPanel(
             if (uiState.pairedBluetoothDevices.isEmpty()) {
                 Text("Nenhum dispositivo Bluetooth pareado encontrado.", color = AutoDeckColors.StatusAmber, fontSize = 12.sp)
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    uiState.pairedBluetoothDevices.take(6).forEach { dev ->
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    uiState.pairedBluetoothDevices.take(8).forEach { dev ->
                         val isMatch = cfg.ignitionBtMac.equals(dev.macAddress, ignoreCase = true) ||
                             (cfg.ignitionBtMac.isBlank() && dev.name.contains(cfg.ignitionBtName, ignoreCase = true))
                         FilterChip(
@@ -1096,7 +1150,10 @@ fun HondaSettingsPanel(
             }
 
             Text("Atraso para entrar em Standby ao desligar a chave:", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 listOf(5, 8, 15, 30).forEach { sec ->
                     FilterChip(
                         selected = cfg.ignitionOffStandbyDelaySec == sec,
@@ -1104,7 +1161,6 @@ fun HondaSettingsPanel(
                         label = { Text("${sec}s") }
                     )
                 }
-                Spacer(modifier = Modifier.weight(1f))
                 OutlinedButton(onClick = onEnterStandbyNow) {
                     Icon(Icons.Rounded.PowerSettingsNew, null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
@@ -1116,7 +1172,10 @@ fun HondaSettingsPanel(
         // 3. Agente Gemini & Assistente de Voz
         SettingsSectionCard(title = "3. Agente Gemini, Voz & WhatsApp") {
             Text("Modo do Assistente:", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 VoiceAssistantMode.entries.forEach { mode ->
                     FilterChip(
                         selected = cfg.voiceAssistantMode == mode,
@@ -1128,8 +1187,8 @@ fun HondaSettingsPanel(
 
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = cfg.geminiApiKey,
-                    onValueChange = { key -> onUpdateConfig { it.copy(geminiApiKey = key.trim()) } },
+                    value = apiKeyDraft,
+                    onValueChange = { apiKeyDraft = it },
                     label = { Text("Google Gemini API Key") },
                     visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
                     singleLine = true,
@@ -1138,10 +1197,19 @@ fun HondaSettingsPanel(
                 OutlinedButton(onClick = { showApiKey = !showApiKey }) {
                     Text(if (showApiKey) "Ocultar" else "Mostrar")
                 }
+                Button(
+                    onClick = { onUpdateConfig { it.copy(geminiApiKey = apiKeyDraft.trim()) } },
+                    enabled = apiKeyDirty
+                ) {
+                    Text(if (apiKeyDirty) "Salvar" else "Salvo")
+                }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Modelo Gemini:", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
+            Text("Modelo Gemini:", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 listOf("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash").forEach { m ->
                     FilterChip(
                         selected = cfg.geminiModel == m,
@@ -1158,13 +1226,25 @@ fun HondaSettingsPanel(
                 onCheckedChange = { enabled -> onUpdateConfig { it.copy(wakeWordEnabled = enabled) } }
             )
 
-            OutlinedTextField(
-                value = cfg.wakeWordPhrase,
-                onValueChange = { phrase -> onUpdateConfig { it.copy(wakeWordPhrase = phrase) } },
-                label = { Text("Frase de ativação (ex: ok honda, ei civic)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = wakeWordDraft,
+                    onValueChange = { wakeWordDraft = it },
+                    label = { Text("Frase de ativação (ex: ok honda, ei civic)") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(
+                    onClick = {
+                        val cleaned = wakeWordDraft.trim().ifBlank { "ok honda" }
+                        wakeWordDraft = cleaned
+                        onUpdateConfig { it.copy(wakeWordPhrase = cleaned) }
+                    },
+                    enabled = wakeWordDirty
+                ) {
+                    Text(if (wakeWordDirty) "Salvar" else "Salvo")
+                }
+            }
 
             SettingsSwitchRow(
                 title = "Conversa contínua após resposta do Gemini",
@@ -1192,7 +1272,10 @@ fun HondaSettingsPanel(
             )
 
             Text("Escala máxima do velocímetro na Home:", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 listOf(160, 180, 200, 220).forEach { maxKmh ->
                     FilterChip(
                         selected = cfg.speedometerMaxKmh == maxKmh,
@@ -1203,7 +1286,10 @@ fun HondaSettingsPanel(
             }
 
             Text("Câmbio do Civic (cálculo de marchas):", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 TransmissionType.entries.forEach { t ->
                     FilterChip(
                         selected = cfg.transmissionType == t,
@@ -1214,8 +1300,11 @@ fun HondaSettingsPanel(
             }
 
             Text("Adaptador Bluetooth ELM327:", color = AutoDeckColors.TextSecondary, fontSize = 12.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                uiState.pairedBluetoothDevices.take(6).forEach { dev ->
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                uiState.pairedBluetoothDevices.take(8).forEach { dev ->
                     FilterChip(
                         selected = cfg.obdDeviceMac == dev.macAddress,
                         onClick = {
@@ -1229,6 +1318,16 @@ fun HondaSettingsPanel(
 
         // 5. Câmera de Ré (USB) & Sistema
         SettingsSectionCard(title = "5. Câmera de Ré EasyCap USB & Sistema") {
+            Text(
+                text = buildString {
+                    append("GPS: ${if (uiState.gpsState.hasFix) "FIX (${uiState.gpsState.providerLabel})" else uiState.gpsState.providerLabel}")
+                    append("  •  Câmera: ${uiState.cameraHardware.connectedDeviceLabel}${if (uiState.cameraHardware.isStreamingVideo) " (Ativa)" else ""}")
+                    append("  •  Spotify: ${if (uiState.mediaState.hasActiveTrack) "Ativa (${uiState.mediaState.title})" else "Aguardando broadcast"}")
+                },
+                color = AutoDeckColors.AccentCyan,
+                fontSize = 11.sp
+            )
+
             SettingsSwitchRow(
                 title = "Simulador de Câmera (Bancada)",
                 checked = cfg.useSimulatedCamera,
@@ -1238,6 +1337,12 @@ fun HondaSettingsPanel(
                 title = "HondaDeck como Tela Inicial (Launcher HOME do tablet)",
                 checked = cfg.launcherModeEnabled,
                 onCheckedChange = onToggleLauncherMode
+            )
+            SettingsSwitchRow(
+                title = "Sobrepor imagem de referência na Home (40%)",
+                subtitle = "Ajuda a conferir o alinhamento visual da Home com a imagem-alvo",
+                checked = cfg.debugReferenceOverlay,
+                onCheckedChange = { enabled -> onUpdateConfig { it.copy(debugReferenceOverlay = enabled) } }
             )
 
             CameraInputControlRow(
@@ -1249,12 +1354,16 @@ fun HondaSettingsPanel(
                 onSetCameraStandardNtsc = onSetCameraStandardNtsc
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(onClick = {
                     val ok = onCalibrateNoSignal()
                     calibrationMsg = if (ok) "Frame 'Sem Sinal' calibrado!" else "Conecte a câmera ou ative o simulador antes."
                 }) { Text("Calibrar 'Sem Sinal'") }
                 OutlinedButton(onClick = onClearNoSignal) { Text("Limpar Calibração") }
+                OutlinedButton(onClick = onTestManualCamera) { Text("Testar Câmera Traseira") }
                 OutlinedButton(onClick = onTestReverse) { Text("Testar Ré (Sim)") }
                 OutlinedButton(onClick = onReopenWizard) { Text("Reabrir Assistente") }
             }

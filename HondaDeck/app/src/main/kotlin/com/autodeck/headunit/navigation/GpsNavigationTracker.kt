@@ -5,6 +5,11 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.drawable.BitmapDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -21,12 +26,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.cachemanager.CacheManager
+import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.BoundingBox
+import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import java.io.File
+import kotlin.math.abs
 
 data class GpsLocationState(
-    val latitude: Double = -23.55052,   // Posição inicial padrão até o primeiro fix GPS
+    val latitude: Double = -23.55052,
     val longitude: Double = -46.63331,
     val bearingDeg: Float = 0f,
     val gpsSpeedKmh: Float = 0f,
@@ -34,13 +42,14 @@ data class GpsLocationState(
     val hasFix: Boolean = false,
     val hasPermission: Boolean = false,
     val providerLabel: String = "Aguardando GPS",
-    val offlineDownloadStatus: String = "Cache offline pronto",
-    val offlineDownloading: Boolean = false
+    val offlineDownloadStatus: String = "Cache offline ativo",
+    val offlineDownloading: Boolean = false,
+    val trailPoints: List<GeoPoint> = emptyList()
 )
 
 /**
- * Gerencia o GPS por hardware do Galaxy Tab A7 (SM-T500), configura cache offline
- * de mapas (OSMDroid) e dispara rotas no Google Maps / Waze.
+ * Gerencia o GPS por hardware do Galaxy Tab A7 (SM-T500), configura tiles escuros CartoDark
+ * com cache em disco para uso offline e dispara rotas no Google Maps / Waze.
  */
 class GpsNavigationTracker(
     private val appContext: Context,
@@ -52,6 +61,8 @@ class GpsNavigationTracker(
     val state: StateFlow<GpsLocationState> = _state.asStateFlow()
 
     private var listening = false
+    private var lastTrailLat: Double? = null
+    private var lastTrailLon: Double? = null
 
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
@@ -76,8 +87,7 @@ class GpsNavigationTracker(
             val tileCache = File(osmBase, "tiles").apply { mkdirs() }
             cfg.osmdroidBasePath = osmBase
             cfg.osmdroidTileCache = tileCache
-            cfg.userAgentValue = appContext.packageName
-            // Cache generoso para funcionar offline por dias
+            cfg.userAgentValue = "HondaDeck/2.0 (Android SM-T500)"
             cfg.tileFileSystemCacheMaxBytes = 512L * 1024L * 1024L
             cfg.tileFileSystemCacheTrimBytes = 400L * 1024L * 1024L
         }
@@ -109,7 +119,7 @@ class GpsNavigationTracker(
         }
 
         if (listening) return
-        listening = true
+        var registeredAny = false
         runCatching {
             if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
                 lm.requestLocationUpdates(
@@ -119,6 +129,7 @@ class GpsNavigationTracker(
                     listener,
                     Looper.getMainLooper()
                 )
+                registeredAny = true
             }
             if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
                 lm.requestLocationUpdates(
@@ -128,12 +139,34 @@ class GpsNavigationTracker(
                     listener,
                     Looper.getMainLooper()
                 )
+                registeredAny = true
             }
+        }
+        listening = registeredAny
+        if (!registeredAny) {
+            _state.update { it.copy(providerLabel = "Ligue a Localização do tablet") }
         }
     }
 
     private fun applyLocation(loc: Location, isCachedLastKnown: Boolean = false) {
+        val prevLat = lastTrailLat
+        val prevLon = lastTrailLon
+        val shouldAppendTrail = !isCachedLastKnown && (
+            prevLat == null || prevLon == null ||
+                abs(loc.latitude - prevLat) > 0.00007 ||
+                abs(loc.longitude - prevLon) > 0.00007
+            )
+        if (shouldAppendTrail) {
+            lastTrailLat = loc.latitude
+            lastTrailLon = loc.longitude
+        }
+
         _state.update { prev ->
+            val nextTrail = if (shouldAppendTrail) {
+                (prev.trailPoints + GeoPoint(loc.latitude, loc.longitude)).takeLast(60)
+            } else {
+                prev.trailPoints
+            }
             prev.copy(
                 latitude = loc.latitude,
                 longitude = loc.longitude,
@@ -145,12 +178,13 @@ class GpsNavigationTracker(
                     "Última posição GPS"
                 } else {
                     "GPS ${loc.accuracy.toInt()}m"
-                }
+                },
+                trailPoints = nextTrail
             )
         }
     }
 
-    fun downloadOfflineRegionAroundCurrentPosition(mapView: MapView, radiusKm: Double = 8.0) {
+    fun downloadOfflineRegionAroundCurrentPosition(mapView: MapView, radiusKm: Double = 6.0) {
         if (_state.value.offlineDownloading) return
         val cur = _state.value
         val latDelta = radiusKm / 111.0
@@ -165,7 +199,7 @@ class GpsNavigationTracker(
         _state.update {
             it.copy(
                 offlineDownloading = true,
-                offlineDownloadStatus = "Baixando mapa offline (~${radiusKm.toInt()} km)..."
+                offlineDownloadStatus = "Baixando mapa escuro (~${radiusKm.toInt()} km)..."
             )
         }
 
@@ -176,13 +210,13 @@ class GpsNavigationTracker(
                     appContext,
                     box,
                     12,
-                    16,
+                    15,
                     object : CacheManager.CacheManagerCallback {
                         override fun onTaskComplete() {
                             _state.update {
                                 it.copy(
                                     offlineDownloading = false,
-                                    offlineDownloadStatus = "Mapa offline da região salvo no tablet!"
+                                    offlineDownloadStatus = "Mapa escuro da região salvo no tablet!"
                                 )
                             }
                         }
@@ -192,7 +226,7 @@ class GpsNavigationTracker(
                                 it.copy(
                                     offlineDownloading = false,
                                     offlineDownloadStatus = if (errors > 0) {
-                                        "Cache concluído com $errors blocos pendentes (verifique internet)."
+                                        "Cache parcial ($errors blocos pendentes)."
                                     } else {
                                         "Mapa offline salvo."
                                     }
@@ -265,5 +299,56 @@ class GpsNavigationTracker(
         if (!listening) return
         runCatching { locationManager?.removeUpdates(listener) }
         listening = false
+    }
+
+    companion object {
+        val CARTO_DARK_TILE_SOURCE: XYTileSource = XYTileSource(
+            "CartoDark",
+            0,
+            19,
+            256,
+            ".png",
+            arrayOf(
+                "https://a.basemaps.cartocdn.com/dark_all/",
+                "https://b.basemaps.cartocdn.com/dark_all/",
+                "https://c.basemaps.cartocdn.com/dark_all/"
+            ),
+            "© OpenStreetMap © CARTO"
+        )
+
+        fun createNavigationArrowDrawable(context: Context): BitmapDrawable {
+            val sizePx = (58 * context.resources.displayMetrics.density).toInt().coerceAtLeast(48)
+            val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            val cx = sizePx / 2f
+            val cy = sizePx / 2f
+
+            val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.argb(72, 41, 231, 255)
+                style = Paint.Style.FILL
+            }
+            canvas.drawCircle(cx, cy, sizePx * 0.44f, haloPaint)
+
+            val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.argb(215, 41, 231, 255)
+                style = Paint.Style.STROKE
+                strokeWidth = sizePx * 0.045f
+            }
+            canvas.drawCircle(cx, cy, sizePx * 0.44f, ringPaint)
+
+            val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.rgb(41, 231, 255)
+                style = Paint.Style.FILL
+            }
+            val arrow = Path().apply {
+                moveTo(cx, cy - sizePx * 0.27f)
+                lineTo(cx + sizePx * 0.20f, cy + sizePx * 0.20f)
+                lineTo(cx, cy + sizePx * 0.09f)
+                lineTo(cx - sizePx * 0.20f, cy + sizePx * 0.20f)
+                close()
+            }
+            canvas.drawPath(arrow, arrowPaint)
+            return BitmapDrawable(context.resources, bmp)
+        }
     }
 }

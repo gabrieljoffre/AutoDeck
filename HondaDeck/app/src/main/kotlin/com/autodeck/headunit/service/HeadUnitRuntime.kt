@@ -54,6 +54,7 @@ import com.autodeck.protocol.obd2.ObdSnapshot
 import com.autodeck.protocol.obd2.SupportedPidCapabilities
 import com.autodeck.protocol.obd2.TireSpec
 import com.autodeck.protocol.obd2.TransmissionType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -164,6 +165,9 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     private var peakSpeedKmh: Double = 0.0
     private var peakCoolantTempC: Double? = null
     private var pendingDtcCount: Int = 0
+
+    @Volatile
+    private var lastRequestedCameraStream: Boolean? = null
 
     init {
         val loadedConfig = preferences.load()
@@ -310,6 +314,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         coordinator.updatePowerConnected(true)
         publishState()
 
+        gpsTracker.refreshPermissionAndStart()
         if (!_uiState.value.isAppInForeground) {
             val intent = Intent(appContext, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -329,6 +334,12 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
 
     private fun handleIgnitionStandby() {
         mediaController.pause()
+        gpsTracker.stop()
+        carAgent.stopListening()
+        lastRequestedCameraStream = false
+        scope.launch(Dispatchers.IO) {
+            usbCamera.setReverseOverlayVisible(false)
+        }
         coordinator.updatePowerConnected(false)
         publishState()
     }
@@ -962,6 +973,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                             ObdPollingProfile.DOCK_BASIC -> 30L
                         }
                         delay(cadenceDelay)
+                    } catch (ce: CancellationException) {
+                        throw ce
                     } catch (_: Exception) {
                         transport.disconnect()
                         break
@@ -1017,7 +1030,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
             peakSpeedKmh = peakSpeedKmh,
             peakCoolantTempC = peakCoolantTempC,
             pendingDtcCount = pendingDtcCount,
-            isReverseActive = coordinator.state.isReverseOverlayVisible
+            isReverseActive = coordinator.state.isHardwareReverseActive
         )
     }
 
@@ -1049,7 +1062,13 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     private fun publishState() {
         val state = coordinator.state
         val simCam = _uiState.value.config.useSimulatedCamera
-        usbCamera.setReverseOverlayVisible(state.isReverseOverlayVisible && !simCam)
+        val wantStream = state.isReverseOverlayVisible && !simCam
+        if (wantStream != lastRequestedCameraStream) {
+            lastRequestedCameraStream = wantStream
+            scope.launch(Dispatchers.IO) {
+                usbCamera.setReverseOverlayVisible(wantStream)
+            }
+        }
         if (state.shouldDuckAudio) {
             audioMonitor.requestReverseDucking()
         } else {

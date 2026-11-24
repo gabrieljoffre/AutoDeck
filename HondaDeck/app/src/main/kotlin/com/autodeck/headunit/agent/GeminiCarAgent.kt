@@ -494,13 +494,14 @@ class GeminiCarAgent(
         }
 
         val apiResult = runCatching {
-            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/${cfg.geminiModel}:generateContent?key=${cfg.geminiApiKey.trim()}"
+            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/${cfg.geminiModel}:generateContent"
             val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 7_000
                 readTimeout = 12_000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                setRequestProperty("x-goog-api-key", cfg.geminiApiKey.trim())
             }
             OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
                 writer.write(body.toString())
@@ -654,7 +655,7 @@ class GeminiCarAgent(
                     AgentReplyResult("Retomando a música.", badge, isOffline = true)
                 }
             }
-            q.contains("tocar") || q.contains("continuar musica") || q.contains("play") -> {
+            Regex("\\btocar\\b").containsMatchIn(q) || q.contains("continuar musica") || Regex("\\bplay\\b").containsMatchIn(q) -> {
                 val badge = host.controlMusic("MUSIC_PLAY")
                 AgentReplyResult("Tocando música agora.", badge, isOffline = true)
             }
@@ -727,7 +728,7 @@ class GeminiCarAgent(
                     isOffline = true
                 )
             }
-            q.contains("camera") || q.contains("re") -> {
+            Regex("\\bcamera\\b").containsMatchIn(q) || q.contains("camera de re") || q.contains("camera traseira") -> {
                 val badge = host.toggleReverseCamera()
                 AgentReplyResult("Alternando visualização da câmera.", badge, isOffline = true)
             }
