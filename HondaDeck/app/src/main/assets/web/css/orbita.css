@@ -947,11 +947,9 @@ button:active {
   margin-top: 4px;
 }
 
+/* Pedido do usuário: sem números abaixo do KM/H no velocímetro central (o RPM já aparece no anel). */
 .gauge-rpm-num {
-  font-family: 'Chakra Petch', sans-serif;
-  font-size: 14px;
-  color: var(--green);
-  margin-top: 10px;
+  display: none !important;
 }
 
 .gauge-gears {
@@ -4014,4 +4012,172 @@ button:active {
 .wx-empty {
   color: var(--text-muted);
   font-size: 14px;
+}
+
+/* ======================== PONTE CELULAR (TOPO, CHAMADA, VOZ, AJUSTES) ======================== */
+.status-phone-btn {
+  padding: 0;
+  cursor: pointer;
+}
+
+.status-phone-btn.on {
+  color: var(--green);
+  border-color: rgba(34, 197, 94, 0.34);
+  background: rgba(34, 197, 94, 0.1);
+}
+
+.status-phone-btn.connecting {
+  color: var(--yellow);
+  border-color: rgba(250, 204, 21, 0.34);
+  background: rgba(250, 204, 21, 0.1);
+}
+
+.call-banner {
+  position: fixed;
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4100;
+  min-width: 460px;
+  max-width: 720px;
+  padding: 12px 18px;
+  border-radius: 18px;
+  background: rgba(12, 18, 28, 0.96);
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.72), 0 0 0 4px rgba(34, 197, 94, 0.12);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.call-banner.ringing {
+  border-color: var(--accent);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.72), 0 0 0 4px var(--a20);
+}
+
+.call-icon-box {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: rgba(34, 197, 94, 0.16);
+  color: var(--green);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.call-texts {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.call-status-label {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--green);
+}
+
+.call-caller-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.call-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.call-btn {
+  min-height: 48px;
+  padding: 0 20px;
+  border-radius: 14px;
+  border: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.call-btn.answer {
+  background: var(--green);
+  color: #052e16;
+}
+
+.call-btn.end {
+  background: var(--rose);
+}
+
+.voice-note-pill {
+  position: fixed;
+  bottom: 106px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4050;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(12, 18, 28, 0.96);
+  border: 1px solid rgba(244, 63, 94, 0.55);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.voice-note-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--rose);
+  animation: pulseSoft 0.9s ease-in-out infinite;
+}
+
+.voice-note-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.phone-status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--rose);
+  flex-shrink: 0;
+}
+
+.phone-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phone-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.phone-chip.ok {
+  background: rgba(34, 197, 94, 0.14);
+  color: var(--green);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.phone-chip.warn {
+  background: rgba(250, 204, 21, 0.14);
+  color: var(--yellow);
+  border: 1px solid rgba(250, 204, 21, 0.3);
 }

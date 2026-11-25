@@ -13,7 +13,7 @@ import { initBackground, setBackgroundAccent, setBackgroundSpeed, setBackgroundM
 import { initGauge, updateGaugeTargets } from './gauge.js';
 import { initMap, setMapMode, setMapAccent, updateMapState } from './map.js';
 import { initMusic, updateMusic, focusFullMusicSearch } from './music.js';
-import { initDock, updateDock, updateNotification, setDockActiveMode, showToast } from './dock.js';
+import { initDock, updateDock, updateNotification, updateCallBanner, updateVoiceNotePill, setDockActiveMode, showToast } from './dock.js';
 import { initCopilot, updateCopilot, updateCopilotLevel, onAgentReply } from './copilot.js';
 import { initSettings, updateSettings, setSettingsVisible, showSettingsTab } from './settings.js';
 import { initCalendarCard, updateCalendarCard, openCalendarCard, closeCalendarCard } from './calendar-card.js';
@@ -74,9 +74,13 @@ function nowMs() {
 }
 
 function renderClock() {
-  const { time, date } = formatClockAndDate(nowMs());
+  const now = nowMs();
+  const { time, date } = formatClockAndDate(now);
   setText($('clock-time'), time);
   setText($('clock-date'), date);
+  if (state?.phone?.call?.status === 'ACTIVE') {
+    updateCallBanner(state.phone, now);
+  }
 }
 
 function renderWeather(w) {
@@ -95,6 +99,19 @@ function renderWeather(w) {
 }
 
 function renderStatus(st) {
+  const phonePill = $('status-phone');
+  if (phonePill) {
+    const connected = Boolean(st.phone);
+    const pState = String(st.phoneState || 'DISCONNECTED').toUpperCase();
+    phonePill.classList.toggle('on', connected);
+    phonePill.classList.toggle('connecting', !connected && (pState === 'CONNECTING' || pState === 'DISCOVERING' || pState === 'PAIRING'));
+    const pLabel = connected
+      ? `Celular conectado: ${st.phoneName || 'HondaDeck Ponte'}`
+      : 'Celular desconectado · toque para parear';
+    if (phonePill.getAttribute('aria-label') !== pLabel) phonePill.setAttribute('aria-label', pLabel);
+    if (phonePill.title !== pLabel) phonePill.title = pLabel;
+  }
+
   $('status-wifi').classList.toggle('on', Boolean(st.wifi));
   const bt = $('status-bt');
   bt.classList.toggle('on', Boolean(st.bluetooth));
@@ -175,6 +192,8 @@ function onState(next) {
   updateDock(next);
   updateCopilot(next);
   updateNotification(next.notification);
+  updateCallBanner(next.phone, nowMs());
+  updateVoiceNotePill(next.phone);
   updateSettings(next);
   updateCalendarCard(next, nowMs());
   updateWeatherCard(next.weather);
@@ -242,6 +261,12 @@ async function boot() {
   $('weather-box')?.addEventListener('click', () => {
     closeCalendarCard();
     openWeatherCard();
+  });
+  $('status-phone')?.addEventListener('click', () => {
+    closeCalendarCard();
+    closeWeatherCard();
+    switchMode('settings');
+    showSettingsTab('phone');
   });
 
   switchMode('home', { silent: true });

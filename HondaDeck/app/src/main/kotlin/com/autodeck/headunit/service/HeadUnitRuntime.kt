@@ -10,6 +10,13 @@ import com.autodeck.headunit.MainActivity
 import com.autodeck.headunit.agent.AgentUiState
 import com.autodeck.headunit.agent.CarAgentHostBridge
 import com.autodeck.headunit.agent.GeminiCarAgent
+import com.autodeck.headunit.agent.ResolvedPhoneRecipient
+import com.autodeck.headunit.phone.PhoneLinkClient
+import com.autodeck.headunit.phone.PhoneLinkClientEvent
+import com.autodeck.headunit.phone.PhoneLinkUiState
+import com.autodeck.headunit.phone.VoiceNoteRecorder
+import com.autodeck.protocol.phone.BrazilPhoneNumber
+import com.autodeck.protocol.phone.PhoneCallStatus
 import com.autodeck.headunit.agent.copilot.CopilotIntentParser
 import com.autodeck.headunit.agent.copilot.FavoriteRef
 import com.autodeck.headunit.agent.copilot.VolumeDirection
@@ -150,7 +157,8 @@ data class HeadUnitUiState(
     val spotifyRecentSearches: List<String> = emptyList(),
     val favoritePlaces: List<FavoritePlace> = emptyList(),
     val recentPlaces: List<RecentPlace> = emptyList(),
-    val placeSearch: PlaceSearchState = PlaceSearchState()
+    val placeSearch: PlaceSearchState = PlaceSearchState(),
+    val phoneLink: PhoneLinkUiState = PhoneLinkUiState()
 )
 
 /**
@@ -212,6 +220,9 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         scope = scope,
         host = this
     )
+
+    private val phoneLinkClient = PhoneLinkClient(appContext, scope)
+    private val voiceNoteRecorder = VoiceNoteRecorder(appContext)
 
     private val usbHubCoordinator: UsbHubCoordinator = UsbHubCoordinator(
         context = appContext,
@@ -279,6 +290,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         usbHubCoordinator.start()
         audioMonitor.start()
         ignitionMonitor.start()
+        phoneLinkClient.start()
         observeAllFlows()
         startCameraSignalMonitoring(loadedConfig.useSimulatedCamera)
 
@@ -800,6 +812,52 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     fun dismissWhatsApp(key: String) = mediaController.dismissMessage(key)
     fun launchWhatsApp(): Boolean = mediaController.launchWhatsApp()
 
+    // --- Ponte Celular (HondaDeck Ponte) ---
+    fun pairPhoneWithPin(pin: String, hostOverride: String? = null) {
+        scope.launch {
+            val res = phoneLinkClient.pairWithPin(pin, hostOverride)
+            res.onSuccess { msg -> emitWebEvent("toast", msg) }
+                .onFailure { err -> emitWebEvent("error", err.message ?: "Falha ao parear celular") }
+        }
+    }
+
+    fun unpairPhone() = phoneLinkClient.unpair()
+    fun discoverPhone() = phoneLinkClient.triggerDiscoveryProbe()
+    fun reconnectPhone() = phoneLinkClient.requestReconnect()
+
+    fun answerPhoneCallFromUi() {
+        scope.launch {
+            phoneLinkClient.answerCall()
+                .onSuccess { emitWebEvent("toast", it) }
+                .onFailure { emitWebEvent("error", it.message ?: "Não foi possível atender") }
+        }
+    }
+
+    fun endPhoneCallFromUi() {
+        scope.launch {
+            phoneLinkClient.endCall()
+                .onSuccess { emitWebEvent("toast", it) }
+                .onFailure { emitWebEvent("error", it.message ?: "Não foi possível desligar") }
+        }
+    }
+
+    fun cancelVoiceNoteRecording() {
+        voiceNoteRecorder.cancel()
+        phoneLinkClient.setVoiceNoteRecordingState(false, "")
+    }
+
+    fun dismissCurrentNotification() {
+        val unreadPhone = _uiState.value.phoneLink.messages.firstOrNull { !it.isRead }
+        if (unreadPhone != null) {
+            phoneLinkClient.dismissMessage(unreadPhone.id)
+            return
+        }
+        val unreadLocal = _uiState.value.whatsAppMessages.firstOrNull { !it.isReadByAgent }
+        if (unreadLocal != null) {
+            dismissWhatsApp(unreadLocal.key)
+        }
+    }
+
     // --- CarAgentHostBridge ---
     override fun getConfig(): HeadUnitConfig = _uiState.value.config
     override fun getHeadUnitState(): HeadUnitState = coordinator.state
@@ -1086,7 +1144,205 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         CalendarRepository.formatAgendaSummary(_uiState.value.calendar, dayOffset)
 
     override fun markMessagesRead() {
+        phoneLinkClient.markLatestMessageRead()
         mediaController.messages.value.firstOrNull()?.let { mediaController.markMessageRead(it.key) }
+    }
+
+    override fun isPhoneConnected(): Boolean = _uiState.value.phoneLink.isConnected
+
+    override fun getPhoneSummary(): String {
+        val p = _uiState.value.phoneLink
+        if (!p.isConnected) {
+            return if (p.paired) "Pareado com ${p.phoneName}, mas desconectado agora." else "Não pareado."
+        }
+        val bits = mutableListOf("Conectado a ${p.phoneName}")
+        if (p.phoneLocked) bits += "celular bloqueado"
+        if (p.callState.isInCall) {
+            val who = p.callState.displayName.ifBlank { p.callState.number.ifBlank { "desconhecido" } }
+            val stateLabel = when (p.callState.status) {
+                PhoneCallStatus.RINGING -> "tocando chamada de $who"
+                PhoneCallStatus.DIALING -> "discando para $who"
+                PhoneCallStatus.ACTIVE -> "em chamada com $who"
+                else -> ""
+            }
+            if (stateLabel.isNotBlank()) bits += stateLabel
+        }
+        val unread = p.messages.firstOrNull { !it.isRead }
+        if (unread != null) {
+            bits += "mensagem recente de ${unread.sender} (${unread.appLabel})"
+        }
+        return bits.joinToString(" · ")
+    }
+
+    override fun getLatestPhoneMessageSummary(): Pair<String, String>? {
+        val phoneMsg = _uiState.value.phoneLink.messages.firstOrNull { !it.isRead }
+            ?: _uiState.value.phoneLink.messages.firstOrNull()
+        if (phoneMsg != null) return phoneMsg.id to phoneMsg.sender
+        val local = mediaController.messages.value.firstOrNull()
+        return local?.let { it.key to it.sender }
+    }
+
+    override suspend fun resolvePhoneRecipient(recipient: String): ResolvedPhoneRecipient {
+        val clean = recipient.trim()
+        if (clean.isEmpty()) {
+            return ResolvedPhoneRecipient(ok = false, errorMessage = "Informe o contato ou número.")
+        }
+        val normNum = BrazilPhoneNumber.normalizeForDial(clean)
+        if (normNum != null && BrazilPhoneNumber.looksLikePhoneNumber(clean)) {
+            return ResolvedPhoneRecipient(
+                ok = true,
+                displayName = BrazilPhoneNumber.formatDisplay(normNum),
+                normalizedNumber = normNum,
+                hasWhatsApp = true
+            )
+        }
+        if (!phoneLinkClient.state.value.isConnected) {
+            return ResolvedPhoneRecipient(
+                ok = false,
+                errorMessage = "Celular não está conectado ao HondaDeck Ponte. Conecte em Ajustes › Celular."
+            )
+        }
+        val contacts = phoneLinkClient.searchContacts(clean).getOrElse { err ->
+            return ResolvedPhoneRecipient(ok = false, errorMessage = err.message ?: "Erro ao buscar contatos no celular.")
+        }
+        if (contacts.isEmpty()) {
+            return ResolvedPhoneRecipient(ok = false, errorMessage = "Não encontrei \"$clean\" nos contatos do celular.")
+        }
+        val normClean = CopilotIntentParser.normalize(clean)
+        val exact = contacts.firstOrNull { CopilotIntentParser.normalize(it.name) == normClean }
+        val distinctNames = contacts.map { it.name }.distinct()
+        if (exact != null || distinctNames.size == 1) {
+            val chosen = exact ?: contacts.first()
+            return ResolvedPhoneRecipient(
+                ok = true,
+                displayName = chosen.name,
+                normalizedNumber = chosen.normalizedPhone,
+                hasWhatsApp = chosen.hasWhatsApp,
+                voipDataId = chosen.whatsAppVoipDataId
+            )
+        }
+        val options = distinctNames.take(4).joinToString(", ")
+        return ResolvedPhoneRecipient(
+            ok = false,
+            errorMessage = "Encontrei mais de um contato parecido: $options. Qual deles você quer?",
+            multipleCandidates = contacts.take(4)
+        )
+    }
+
+    override suspend fun sendWhatsAppTextViaPhone(recipient: String, text: String): String {
+        val resolved = resolvePhoneRecipient(recipient)
+        if (!resolved.ok) return resolved.errorMessage ?: "Não foi possível resolver o contato."
+        return phoneLinkClient.sendWhatsAppText(
+            number = resolved.normalizedNumber,
+            text = text,
+            contactName = resolved.displayName
+        ).fold(
+            onSuccess = { msg ->
+                emitWebEvent("toast", msg)
+                msg
+            },
+            onFailure = { err -> err.message ?: "Não foi possível enviar no WhatsApp." }
+        )
+    }
+
+    override suspend fun recordAndSendWhatsAppVoiceViaPhone(recipient: String): String {
+        val resolved = resolvePhoneRecipient(recipient)
+        if (!resolved.ok) return resolved.errorMessage ?: "Não foi possível resolver o contato."
+
+        phoneLinkClient.setVoiceNoteRecordingState(true, "Gravando áudio para ${resolved.displayName}…")
+        emitWebEvent("toast", "Gravando mensagem de voz para ${resolved.displayName}…")
+        val recorded = voiceNoteRecorder.recordUntilSilence { rec, _, elapsedMs ->
+            if (rec) {
+                val sec = (elapsedMs / 1000L).toInt()
+                phoneLinkClient.setVoiceNoteRecordingState(true, "Gravando… (${sec}s)")
+            } else {
+                phoneLinkClient.setVoiceNoteRecordingState(false, "")
+            }
+        }
+        phoneLinkClient.setVoiceNoteRecordingState(false, "")
+
+        val note = recorded.getOrElse { err ->
+            return err.message ?: "Não foi possível gravar a mensagem de voz."
+        }
+        return try {
+            phoneLinkClient.sendWhatsAppVoice(
+                number = resolved.normalizedNumber,
+                audioFile = note.file,
+                mimeType = note.mimeType,
+                contactName = resolved.displayName
+            ).fold(
+                onSuccess = { msg ->
+                    emitWebEvent("toast", msg)
+                    msg
+                },
+                onFailure = { err -> err.message ?: "Não foi possível enviar o áudio no WhatsApp." }
+            )
+        } finally {
+            runCatching { note.file.delete() }
+        }
+    }
+
+    override suspend fun dialPhoneViaPhone(recipient: String): String {
+        val resolved = resolvePhoneRecipient(recipient)
+        if (!resolved.ok) return resolved.errorMessage ?: "Não foi possível encontrar o contato."
+        return phoneLinkClient.dialCall(
+            number = resolved.normalizedNumber,
+            contact = resolved.displayName
+        ).fold(
+            onSuccess = { msg ->
+                emitWebEvent("toast", msg)
+                msg
+            },
+            onFailure = { err -> err.message ?: "Não foi possível iniciar a ligação." }
+        )
+    }
+
+    override suspend fun callWhatsAppViaPhone(recipient: String): String {
+        val resolved = resolvePhoneRecipient(recipient)
+        if (!resolved.ok) return resolved.errorMessage ?: "Não foi possível encontrar o contato."
+        return phoneLinkClient.callWhatsApp(
+            number = resolved.normalizedNumber,
+            contactName = resolved.displayName,
+            voipDataId = resolved.voipDataId
+        ).fold(
+            onSuccess = { msg ->
+                emitWebEvent("toast", msg)
+                msg
+            },
+            onFailure = { err -> err.message ?: "Não foi possível iniciar a ligação no WhatsApp." }
+        )
+    }
+
+    override suspend fun answerPhoneCall(): String =
+        phoneLinkClient.answerCall().getOrElse { it.message ?: "Não foi possível atender a chamada." }
+
+    override suspend fun endPhoneCall(): String =
+        phoneLinkClient.endCall().getOrElse { it.message ?: "Não foi possível encerrar a chamada." }
+
+    override fun readPhoneMessages(): String {
+        val phoneMsgs = _uiState.value.phoneLink.messages
+        val latestPhone = phoneMsgs.firstOrNull { !it.isRead } ?: phoneMsgs.firstOrNull()
+        if (latestPhone != null) {
+            phoneLinkClient.markMessageRead(latestPhone.id)
+            return "Mensagem de ${latestPhone.sender} no ${latestPhone.appLabel}: ${latestPhone.text}"
+        }
+        return readAndMarkWhatsApp()
+    }
+
+    override suspend fun replyPhoneMessage(messageId: String?, text: String): String {
+        val targetId = messageId?.takeIf { it.isNotBlank() }
+            ?: _uiState.value.phoneLink.messages.firstOrNull { !it.isRead }?.id
+            ?: _uiState.value.phoneLink.messages.firstOrNull()?.id
+        if (targetId != null && phoneLinkClient.state.value.isConnected) {
+            return phoneLinkClient.replyMessage(targetId, text).fold(
+                onSuccess = { msg ->
+                    emitWebEvent("toast", msg)
+                    msg
+                },
+                onFailure = { err -> err.message ?: "Não foi possível responder a mensagem." }
+            )
+        }
+        return replyLatestWhatsApp(text)
     }
 
     // --- Câmera & OBD2 ---
@@ -1424,6 +1680,24 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         scope.launch {
             ignitionMonitor.status.collect { ign ->
                 _uiState.update { it.copy(ignitionStatus = ign) }
+            }
+        }
+        scope.launch {
+            phoneLinkClient.state.collect { phone ->
+                _uiState.update { it.copy(phoneLink = phone) }
+            }
+        }
+        scope.launch {
+            phoneLinkClient.events.collect { ev ->
+                when (ev) {
+                    is PhoneLinkClientEvent.Toast -> {
+                        emitWebEvent(if (ev.isError) "error" else "toast", ev.text)
+                    }
+                    is PhoneLinkClientEvent.MessageReceived -> {
+                        emitWebEvent("toast", "${ev.message.appLabel} · ${ev.message.sender}: ${ev.message.text.take(60)}")
+                    }
+                    is PhoneLinkClientEvent.CallStateChanged -> Unit
+                }
             }
         }
         scope.launch {

@@ -63,6 +63,12 @@ sealed interface CopilotIntent {
     data class SetMapTheme(val theme: String) : CopilotIntent
     data class ReplyWhatsApp(val text: String) : CopilotIntent
     data object ReadWhatsApp : CopilotIntent
+    data class SendWhatsApp(val recipient: String, val text: String) : CopilotIntent
+    data class SendWhatsAppAudio(val recipient: String) : CopilotIntent
+    data class CallPhone(val recipient: String) : CopilotIntent
+    data class CallWhatsApp(val recipient: String) : CopilotIntent
+    data object AnswerCall : CopilotIntent
+    data object EndCall : CopilotIntent
     data object Weather : CopilotIntent
     data class CalendarAgenda(val dayOffset: Int = 0) : CopilotIntent
     data object Report : CopilotIntent
@@ -125,8 +131,41 @@ object CopilotIntentParser {
         Regex("""^(?:por\s+favor\s+)?(?:mandar|manda|mande|enviar|envia|envie)\s+(?:uma\s+)?(?:resposta|mensagem)\s+(?:(?:no|pelo|pro)\s+(?:whatsapp|zap)\s+)?(?:(?:dizendo|falando)[\s:,-]+|:\s*)(.+)$""")
     )
 
+    // Enviar mensagem de áudio no WhatsApp (antes de enviar texto no WhatsApp!)
+    private val SEND_WHATSAPP_AUDIO_PATTERNS = listOf(
+        Regex("""^(?:por\s+favor\s+)?(?:mandar|manda|mande|enviar|envia|envie|gravar|grava|grave)\s+(?:um\s+|uma\s+)?(?:audio|mensagem\s+de\s+voz|recado\s+de\s+voz)(?:\s+(?:no|pelo|via)\s+(?:whatsapp|zap))?\s+(?:para|pra|pro|a|ao)\s+(?:o\s+|a\s+)?(.+?)(?:\s+(?:no|pelo|via)\s+(?:whatsapp|zap))?$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:mandar|manda|mande|enviar|envia|envie)\s+(?:no|pelo|via)\s+(?:whatsapp|zap)\s+(?:um\s+|uma\s+)?(?:audio|mensagem\s+de\s+voz)\s+(?:para|pra|pro|a|ao)\s+(?:o\s+|a\s+)?(.+)$""")
+    )
+
+    // Enviar mensagem de texto no WhatsApp para um contato ou número
+    private val SEND_WHATSAPP_TEXT_PATTERNS = listOf(
+        Regex("""^(?:por\s+favor\s+)?(?:mandar|manda|mande|enviar|envia|envie)\s+(?:uma?\s+)?(?:mensagem\s+(?:no\s+|pelo\s+|via\s+)?(?:whatsapp|zap)|whatsapp|zap|mensagem|recado)\s+(?:para|pra|pro|a|ao)\s+(?:o\s+|a\s+)?(.+?)\s+(?:dizendo|falando|que|com\s+o\s+texto)[\s:,-]+(.+)$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:mandar|manda|mande|enviar|envia|envie)\s+(?:uma?\s+)?(?:mensagem\s+(?:no\s+|pelo\s+|via\s+)?(?:whatsapp|zap)|whatsapp|zap|mensagem)\s+(?:para|pra|pro|a|ao)\s+(?:o\s+|a\s+)?([^:]+):\s*(.+)$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:mandar|manda|mande|enviar|envia|envie)\s+(?:para|pra|pro)\s+(?:o\s+|a\s+)?(.+?)\s+(?:no|pelo|via)\s+(?:whatsapp|zap)\s+(?:dizendo|falando|que)[\s:,-]+(.+)$""")
+    )
+
+    // Ligações de voz no WhatsApp (antes de ligação telefônica comum!)
+    private val CALL_WHATSAPP_PATTERNS = listOf(
+        Regex("""^(?:por\s+favor\s+)?(?:ligar|liga|ligue|chamar|chama|chame|fazer\s+(?:uma\s+)?ligacao(?:\s+de\s+voz)?|faz\s+(?:uma\s+)?ligacao(?:\s+de\s+voz)?|ligacao\s+de\s+voz)\s+(?:no|pelo|via|do)\s+(?:whatsapp|zap)\s+(?:para|pra|pro|a|ao)\s+(?:o\s+|a\s+)?(.+)$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:ligar|liga|ligue|chamar|chama|chame|fazer\s+(?:uma\s+)?ligacao(?:\s+de\s+voz)?)\s+(?:para|pra|pro|a|ao)\s+(?:o\s+|a\s+)?(.+?)\s+(?:no|pelo|via)\s+(?:whatsapp|zap)$""")
+    )
+
+    // Ligações pela linha do celular
+    private val CALL_PHONE_PATTERNS = listOf(
+        Regex("""^(?:por\s+favor\s+)?(?:ligar|liga|ligue|telefonar|telefona|telefone|discar|disca|fazer\s+(?:uma\s+)?ligacao|faz\s+(?:uma\s+)?ligacao)\s+(?:para|pra|pro|a|ao)\s+(?:o\s+|a\s+)?(.+)$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:chamar|chama|chame)\s+(?:o\s+|a\s+)?(.+?)\s+no\s+(?:telefone|celular)$""")
+    )
+
+    // Atender / Desligar chamada
+    private val ANSWER_CALL_REGEX = Regex(
+        """^(?:por\s+favor\s+)?(?:atender|atende|atenda|aceitar|aceita|aceite)(?:\s+(?:a\s+|o\s+)?(?:ligacao|chamada|telefone|celular))?$"""
+    )
+    private val END_CALL_REGEX = Regex(
+        """^(?:por\s+favor\s+)?(?:desligar|desliga|desligue|encerrar|encerra|encerre|rejeitar|rejeita|recusar|recusa)(?:\s+(?:a\s+|o\s+)?(?:ligacao|chamada|telefone))?$"""
+    )
+
     private val READ_WHATSAPP_REGEX = Regex(
-        """\b(?:ler|leia|le|ouvir|ouca|ver|mostrar|tem)\s+(?:as\s+|os\s+|a\s+|ultima\s+|novas\s+)?(?:mensagens|mensagem|whatsapp|zap|notificacoes|notificacao|recados|recado)\b|\b(?:whatsapp|mensagens\s+do\s+whatsapp|novas\s+mensagens)\b"""
+        """\b(?:ler|leia|le|ouvir|ouca|ver|mostrar|tem)\s+(?:as\s+|os\s+|a\s+|ultima\s+|novas\s+)?(?:mensagens|mensagem|whatsapp|zap|notificacoes|notificacao|recados|recado|sms)\b|\b(?:whatsapp|mensagens\s+do\s+whatsapp|novas\s+mensagens)\b"""
     )
 
     // Diário de abastecimento
@@ -300,7 +339,24 @@ object CopilotIntentParser {
             return CopilotIntent.ForgetConversations
         }
 
-        // 2. Responder WhatsApp ANTES de ler WhatsApp e antes de rota/música
+        // 2. Mensagens e chamadas (Ponte celular): enviar áudio/texto > responder > ligar WhatsApp/telefone > atender/desligar > ler
+        for (pat in SEND_WHATSAPP_AUDIO_PATTERNS) {
+            val m = pat.find(q)
+            if (m != null) {
+                val recipient = m.groupValues[1].trim()
+                if (recipient.isNotEmpty()) return CopilotIntent.SendWhatsAppAudio(recipient)
+            }
+        }
+        for (pat in SEND_WHATSAPP_TEXT_PATTERNS) {
+            val m = pat.find(q)
+            if (m != null) {
+                val recipient = m.groupValues[1].trim()
+                val body = m.groupValues[2].trim()
+                if (recipient.isNotEmpty() && body.isNotEmpty()) {
+                    return CopilotIntent.SendWhatsApp(recipient = recipient, text = body)
+                }
+            }
+        }
         for (pat in REPLY_WHATSAPP_PATTERNS) {
             val m = pat.find(q)
             if (m != null) {
@@ -308,8 +364,30 @@ object CopilotIntentParser {
                 if (reply.isNotEmpty()) return CopilotIntent.ReplyWhatsApp(reply)
             }
         }
+        if (ANSWER_CALL_REGEX.matches(q)) {
+            return CopilotIntent.AnswerCall
+        }
+        if (END_CALL_REGEX.matches(q)) {
+            return CopilotIntent.EndCall
+        }
+        for (pat in CALL_WHATSAPP_PATTERNS) {
+            val m = pat.find(q)
+            if (m != null) {
+                val recipient = m.groupValues[1].trim()
+                if (recipient.isNotEmpty()) return CopilotIntent.CallWhatsApp(recipient)
+            }
+        }
+        for (pat in CALL_PHONE_PATTERNS) {
+            val m = pat.find(q)
+            if (m != null) {
+                val recipient = m.groupValues[1].trim()
+                if (recipient.isNotEmpty() && recipient !in UI_SCREEN_NAMES) {
+                    return CopilotIntent.CallPhone(recipient)
+                }
+            }
+        }
 
-        // 3. Ler WhatsApp
+        // 3. Ler WhatsApp / Mensagens
         if (READ_WHATSAPP_REGEX.containsMatchIn(q)) {
             return CopilotIntent.ReadWhatsApp
         }

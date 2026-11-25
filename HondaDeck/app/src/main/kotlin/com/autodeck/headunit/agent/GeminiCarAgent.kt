@@ -44,6 +44,8 @@ import com.autodeck.headunit.media.WhatsAppNotificationItem
 import com.autodeck.protocol.coordinator.HeadUnitState
 import com.autodeck.protocol.coordinator.MainTab
 import com.autodeck.protocol.obd2.FuelLogCalculator
+import com.autodeck.protocol.phone.BrazilPhoneNumber
+import com.autodeck.protocol.phone.PhoneContact
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -94,6 +96,16 @@ data class AgentUiState(
             isOfflineEngine = true
         )
     )
+)
+
+data class ResolvedPhoneRecipient(
+    val ok: Boolean,
+    val displayName: String = "",
+    val normalizedNumber: String = "",
+    val hasWhatsApp: Boolean = false,
+    val voipDataId: Long? = null,
+    val errorMessage: String? = null,
+    val multipleCandidates: List<PhoneContact> = emptyList()
 )
 
 interface CarAgentHostBridge {
@@ -192,6 +204,58 @@ interface CarAgentHostBridge {
     /** Ajusta o volume principal do tablet. */
     fun adjustVolume(direction: VolumeDirection, value: Int? = null): String = "Volume"
 
+    // --- Ponte Celular (WhatsApp, ligações, SMS via HondaDeck Ponte) ---
+    fun isPhoneConnected(): Boolean = false
+
+    fun getPhoneSummary(): String = "Celular não conectado."
+
+    fun getLatestPhoneMessageSummary(): Pair<String, String>? = null
+
+    suspend fun resolvePhoneRecipient(recipient: String): ResolvedPhoneRecipient {
+        val clean = recipient.trim()
+        if (clean.isEmpty()) {
+            return ResolvedPhoneRecipient(ok = false, errorMessage = "Informe o nome do contato ou número.")
+        }
+        val norm = BrazilPhoneNumber.normalizeForDial(clean)
+        if (norm != null && BrazilPhoneNumber.looksLikePhoneNumber(clean)) {
+            return ResolvedPhoneRecipient(
+                ok = true,
+                displayName = BrazilPhoneNumber.formatDisplay(norm),
+                normalizedNumber = norm
+            )
+        }
+        if (!isPhoneConnected()) {
+            return ResolvedPhoneRecipient(
+                ok = false,
+                errorMessage = "Celular não conectado ao HondaDeck Ponte. Pareie em Ajustes › Celular."
+            )
+        }
+        return ResolvedPhoneRecipient(ok = false, errorMessage = "Contato \"$clean\" não encontrado.")
+    }
+
+    suspend fun sendWhatsAppTextViaPhone(recipient: String, text: String): String =
+        "Celular não conectado ao HondaDeck Ponte."
+
+    suspend fun recordAndSendWhatsAppVoiceViaPhone(recipient: String): String =
+        "Celular não conectado ao HondaDeck Ponte."
+
+    suspend fun dialPhoneViaPhone(recipient: String): String =
+        "Celular não conectado ao HondaDeck Ponte."
+
+    suspend fun callWhatsAppViaPhone(recipient: String): String =
+        "Celular não conectado ao HondaDeck Ponte."
+
+    suspend fun answerPhoneCall(): String =
+        "Celular não conectado ao HondaDeck Ponte."
+
+    suspend fun endPhoneCall(): String =
+        "Celular não conectado ao HondaDeck Ponte."
+
+    fun readPhoneMessages(): String = readAndMarkWhatsApp()
+
+    suspend fun replyPhoneMessage(messageId: String?, text: String): String =
+        replyLatestWhatsApp(text)
+
     /** Relatório completo do veículo (motor, consumo, diário, manutenção e clima). */
     fun buildCarReport(): String {
         val hu = getHeadUnitState()
@@ -255,6 +319,32 @@ class GeminiCarAgent(
     private var liveSession: GeminiLiveSession? = null
     @Volatile
     private var liveSessionActive: Boolean = false
+
+    private sealed interface PendingPhoneAction {
+        val createdAtMs: Long
+        data class SendWhatsApp(
+            val recipient: String,
+            val displayName: String,
+            val text: String,
+            override val createdAtMs: Long = System.currentTimeMillis()
+        ) : PendingPhoneAction
+
+        data class SendWhatsAppAudio(
+            val recipient: String,
+            val displayName: String,
+            override val createdAtMs: Long = System.currentTimeMillis()
+        ) : PendingPhoneAction
+
+        data class ReplyMessage(
+            val messageId: String?,
+            val sender: String,
+            val text: String,
+            override val createdAtMs: Long = System.currentTimeMillis()
+        ) : PendingPhoneAction
+    }
+
+    @Volatile
+    private var pendingPhoneAction: PendingPhoneAction? = null
 
     private fun isLiveBusy(): Boolean = liveSessionActive || liveSession?.isActive() == true
 
@@ -483,7 +573,17 @@ class GeminiCarAgent(
                     return GeminiLiveTools.executeTool(
                         call = call,
                         host = host,
-                        onClearMemory = { clearConversationMemory() }
+                        onClearMemory = { clearConversationMemory() },
+                        onRecordVoiceNote = { recipient ->
+                            val active = liveSession
+                            if (active != null && active.isActive()) {
+                                active.withPausedAudioInput {
+                                    host.recordAndSendWhatsAppVoiceViaPhone(recipient)
+                                }
+                            } else {
+                                host.recordAndSendWhatsAppVoiceViaPhone(recipient)
+                            }
+                        }
                     )
                 }
 
@@ -644,14 +744,13 @@ class GeminiCarAgent(
     }
 
     fun readLatestWhatsAppAloud() {
-        val msgs = host.getWhatsAppMessages()
-        if (msgs.isEmpty()) {
-            val reply = "Nenhuma mensagem nova do WhatsApp no momento."
-            appendMessage(AgentChatMessage(isUser = false, text = reply, isOfflineEngine = true))
-            speak(reply)
+        val phoneReply = host.readPhoneMessages()
+        if (!phoneReply.contains("Nenhuma mensagem", ignoreCase = true) || host.getWhatsAppMessages().isEmpty()) {
+            appendMessage(AgentChatMessage(isUser = false, text = phoneReply, actionBadge = "Mensagens", isOfflineEngine = true))
+            speak(phoneReply)
             return
         }
-        val latest = msgs.first()
+        val latest = host.getWhatsAppMessages().first()
         host.markMessagesRead()
         val reply = "Mensagem de ${latest.sender} no ${latest.appLabel}: ${latest.message}"
         appendMessage(AgentChatMessage(isUser = false, text = reply, actionBadge = "WhatsApp", isOfflineEngine = true))
@@ -880,6 +979,40 @@ class GeminiCarAgent(
     private fun processQuery(userText: String, speakReply: Boolean) {
         scope.launch {
             refreshConnectivityBadge()
+            // Confirmação pendente de envio no WhatsApp / resposta de mensagem ("sim" / "não")
+            val activePending = pendingPhoneAction?.takeIf { System.currentTimeMillis() - it.createdAtMs <= 90_000L }
+            if (activePending != null) {
+                val normAns = CopilotIntentParser.normalize(userText)
+                if (isAffirmativeConfirmation(normAns)) {
+                    pendingPhoneAction = null
+                    _state.update { it.copy(isThinking = true, userText = userText, statusText = "Executando no celular…") }
+                    val res = executePendingPhoneAction(activePending)
+                    _state.update {
+                        it.copy(
+                            isThinking = false,
+                            userText = userText,
+                            replyText = res.replyText,
+                            statusText = res.actionBadge ?: "Pronto."
+                        )
+                    }
+                    appendMessage(AgentChatMessage(isUser = false, text = res.replyText, actionBadge = res.actionBadge, isOfflineEngine = true))
+                    if (speakReply && ttsReady) speak(res.replyText)
+                    return@launch
+                } else if (isNegativeConfirmation(normAns)) {
+                    pendingPhoneAction = null
+                    val cancelMsg = "Tudo bem, envio cancelado."
+                    _state.update { it.copy(isThinking = false, userText = userText, replyText = cancelMsg, statusText = "Cancelado") }
+                    appendMessage(AgentChatMessage(isUser = false, text = cancelMsg, isOfflineEngine = true))
+                    if (speakReply && ttsReady) speak(cancelMsg)
+                    return@launch
+                } else {
+                    // Nova intenção diferente: limpa pendência antiga
+                    pendingPhoneAction = null
+                }
+            } else {
+                pendingPhoneAction = null
+            }
+
             val cfg = host.getConfig()
             val online = _state.value.isOnlineAvailable
             val parsedIntent = CopilotIntentParser.parse(userText, host.getFavoritePlaces())
@@ -1015,7 +1148,7 @@ class GeminiCarAgent(
         )
 
         // Passo 2: ferramentas próprias via function calling (funciona no plano gratuito)
-        val ownTools = JSONArray(WebKnowledgeTools.GEMINI_TOOLS_JSON)
+        val ownTools = buildCombinedFunctionTools()
         var toolModel = cfg.geminiModel
         val toolLoopReply = GeminiToolLoop.runSuspend(
             contentsJson = contents.toString(),
@@ -1091,8 +1224,84 @@ class GeminiCarAgent(
                 val offset = if (dia.contains("amanh")) 1 else 0
                 host.getCalendarAgendaSummary(offset)
             }
+            "enviar_whatsapp",
+            "enviar_audio_whatsapp",
+            "ligar",
+            "ligar_whatsapp",
+            "atender",
+            "desligar",
+            "ler_mensagens",
+            "responder_mensagem" -> {
+                val liveCall = LiveFunctionCall(id = "txt-tool", name = name, argsJson = argsJson)
+                // Se for pedido sem confirmação, também arma pendingPhoneAction para o fluxo texto aceitar "sim"
+                if (name == "enviar_whatsapp" && args?.optBoolean("confirmado") != true) {
+                    val target = args?.optStrictString("contato")?.trim()?.takeIf { it.isNotBlank() }
+                        ?: args?.optStrictString("numero")?.trim().orEmpty()
+                    val texto = args?.optStrictString("texto")?.trim().orEmpty()
+                    if (target.isNotBlank() && texto.isNotBlank()) {
+                        val resolved = host.resolvePhoneRecipient(target)
+                        if (resolved.ok) {
+                            pendingPhoneAction = PendingPhoneAction.SendWhatsApp(
+                                recipient = resolved.normalizedNumber,
+                                displayName = resolved.displayName,
+                                text = texto
+                            )
+                        }
+                    }
+                } else if (name == "enviar_audio_whatsapp" && args?.optBoolean("confirmado") != true) {
+                    val target = args?.optStrictString("contato")?.trim()?.takeIf { it.isNotBlank() }
+                        ?: args?.optStrictString("numero")?.trim().orEmpty()
+                    if (target.isNotBlank()) {
+                        val resolved = host.resolvePhoneRecipient(target)
+                        if (resolved.ok) {
+                            pendingPhoneAction = PendingPhoneAction.SendWhatsAppAudio(
+                                recipient = resolved.normalizedNumber,
+                                displayName = resolved.displayName
+                            )
+                        }
+                    }
+                } else if (name == "responder_mensagem" && args?.optBoolean("confirmado") != true) {
+                    val msg = args?.optStrictString("mensagem")?.trim().orEmpty()
+                    val msgId = args?.optStrictString("id")?.trim()?.takeIf { it.isNotBlank() }
+                    val latest = host.getLatestPhoneMessageSummary()
+                    if (msg.isNotBlank() && latest != null) {
+                        pendingPhoneAction = PendingPhoneAction.ReplyMessage(
+                            messageId = msgId ?: latest.first,
+                            sender = latest.second,
+                            text = msg
+                        )
+                    }
+                }
+                GeminiLiveTools.executeTool(
+                    call = liveCall,
+                    host = host,
+                    onClearMemory = { clearConversationMemory() }
+                ).result
+            }
             else -> "Ferramenta desconhecida: $name"
         }
+    }
+
+    private fun buildCombinedFunctionTools(): JSONArray {
+        val baseDecls = JSONArray(WebKnowledgeTools.FUNCTION_DECLARATIONS_ARRAY_JSON)
+        val liveDecls = GeminiLiveTools.buildFunctionDeclarations()
+        val phoneNames = setOf(
+            "enviar_whatsapp",
+            "enviar_audio_whatsapp",
+            "ligar",
+            "ligar_whatsapp",
+            "atender",
+            "desligar",
+            "ler_mensagens",
+            "responder_mensagem"
+        )
+        for (i in 0 until liveDecls.length()) {
+            val fn = liveDecls.optJSONObject(i) ?: continue
+            if (fn.optString("name") in phoneNames) {
+                baseDecls.put(fn)
+            }
+        }
+        return JSONArray().put(JSONObject().put("functionDeclarations", baseDecls))
     }
 
     private fun performGeminiPost(model: String, body: JSONObject, apiKey: String): Result<String> {
@@ -1209,9 +1418,14 @@ class GeminiCarAgent(
 
             Você tem acesso a ferramentas de internet (notícias, Wikipédia, clima, busca de lugares, dados do carro). Use-as quando precisar de fatos atuais ou externos.
 
+            CELULAR (HONDADECK PONTE):
+            - ${host.getPhoneSummary()}
+
             WHATSAPP RECEBIDO:
             - ${if (latestMsg != null) "De ${latestMsg.sender}: \"${latestMsg.message}\"" else "Nenhuma mensagem pendente"}
             
+            REGRA OBRIGATÓRIA DE CONFIRMAÇÃO: antes de enviar WhatsApp de texto, áudio ou responder mensagem, SEMPRE confirme com o motorista destinatário e texto (ex.: "Mando para Ana: 'tô chegando'?") e só execute após ele dizer "sim".
+
             Se o usuário pedir para executar uma ação no carro ou app, responda normalmente e inclua na última linha:
             ACTION_JSON:{"action":"NOME_DA_ACAO","arg":"VALOR_OPCIONAL"}
             Ações válidas:
@@ -1219,7 +1433,9 @@ class GeminiCarAgent(
             - MUSIC_SEARCH (arg = nome da música ou artista para tocar no painel)
             - OPEN_MAP | MAP_SEARCH (arg = tipo de lugar ou nome para buscar no mapa do app)
             - NAVIGATE (arg = destino, favorito ou endereço; traça rota dentro do app) | STOP_ROUTE (encerra rota ativa)
-            - READ_WHATSAPP | REPLY_WHATSAPP (arg = texto exato da resposta)
+            - READ_WHATSAPP | READ_MESSAGES | REPLY_WHATSAPP | REPLY_MESSAGE (arg = texto exato da resposta)
+            - SEND_WHATSAPP (arg = JSON {"contato":"Ana","texto":"tô chegando"}) | SEND_WHATSAPP_AUDIO (arg = contato ou número)
+            - CALL_PHONE (arg = contato ou número) | CALL_WHATSAPP (arg = contato ou número) | ANSWER_CALL | END_CALL
             - SWITCH_TAB (arg = HOME, NAVIGATION, MUSIC, AGENT_VOICE, OBD_SCANNER, SETTINGS)
             - OPEN_CAMERA | CLOSE_CAMERA
             - REPORT (relatório completo do veículo) | WEATHER (resumo do clima)
@@ -1267,11 +1483,27 @@ class GeminiCarAgent(
                 clearConversationMemory()
                 "Memória limpa"
             }
-            "READ_WHATSAPP" -> {
-                host.markMessagesRead()
-                "WhatsApp lido"
+            "READ_WHATSAPP", "READ_MESSAGES" -> {
+                host.readPhoneMessages()
+                "Mensagens lidas"
             }
-            "REPLY_WHATSAPP" -> if (arg.isNotBlank()) host.replyLatestWhatsApp(arg) else null
+            "REPLY_WHATSAPP", "REPLY_MESSAGE" -> if (arg.isNotBlank()) host.replyPhoneMessage(null, arg) else null
+            "SEND_WHATSAPP" -> {
+                val o = CopilotJson.parseObjOrNull(arg)
+                val target = o?.optStrictString("contato")?.takeIf { it.isNotBlank() }
+                    ?: o?.optStrictString("numero").orEmpty()
+                val text = o?.optStrictString("texto").orEmpty()
+                if (target.isNotBlank() && text.isNotBlank()) {
+                    host.sendWhatsAppTextViaPhone(target, text)
+                } else {
+                    null
+                }
+            }
+            "SEND_WHATSAPP_AUDIO" -> if (arg.isNotBlank()) host.recordAndSendWhatsAppVoiceViaPhone(arg) else null
+            "CALL_PHONE" -> if (arg.isNotBlank()) host.dialPhoneViaPhone(arg) else null
+            "CALL_WHATSAPP" -> if (arg.isNotBlank()) host.callWhatsAppViaPhone(arg) else null
+            "ANSWER_CALL" -> host.answerPhoneCall()
+            "END_CALL" -> host.endPhoneCall()
             "SWITCH_TAB" -> {
                 val tab = MainTab.entries.firstOrNull { it.name == arg.uppercase() } ?: MainTab.HOME
                 host.switchTab(tab)
@@ -1341,23 +1573,91 @@ class GeminiCarAgent(
                 AgentReplyResult(msg, badge, isOffline = true)
             }
 
-            is CopilotIntent.ReplyWhatsApp -> {
-                val res = host.replyLatestWhatsApp(intent.text)
-                AgentReplyResult(res, "WhatsApp", isOffline = true)
-            }
-
-            CopilotIntent.ReadWhatsApp -> {
-                val latest = host.getWhatsAppMessages().firstOrNull()
-                if (latest == null) {
-                    AgentReplyResult("Não há mensagens recentes do WhatsApp.", isOffline = true)
-                } else {
-                    host.markMessagesRead()
+            is CopilotIntent.SendWhatsApp -> {
+                val resolved = host.resolvePhoneRecipient(intent.recipient)
+                if (!resolved.ok) {
                     AgentReplyResult(
-                        "Mensagem de ${latest.sender}: ${latest.message}",
+                        resolved.errorMessage ?: "Não encontrei \"${intent.recipient}\" nos contatos.",
                         "WhatsApp",
                         isOffline = true
                     )
+                } else {
+                    pendingPhoneAction = PendingPhoneAction.SendWhatsApp(
+                        recipient = resolved.normalizedNumber,
+                        displayName = resolved.displayName,
+                        text = intent.text
+                    )
+                    AgentReplyResult(
+                        "Mando para ${resolved.displayName}: '${intent.text}'? Diga sim para confirmar.",
+                        "Confirmar envio",
+                        isOffline = true
+                    )
                 }
+            }
+
+            is CopilotIntent.SendWhatsAppAudio -> {
+                val resolved = host.resolvePhoneRecipient(intent.recipient)
+                if (!resolved.ok) {
+                    AgentReplyResult(
+                        resolved.errorMessage ?: "Não encontrei \"${intent.recipient}\" nos contatos.",
+                        "Áudio WhatsApp",
+                        isOffline = true
+                    )
+                } else {
+                    pendingPhoneAction = PendingPhoneAction.SendWhatsAppAudio(
+                        recipient = resolved.normalizedNumber,
+                        displayName = resolved.displayName
+                    )
+                    AgentReplyResult(
+                        "Gravo e mando uma mensagem de voz no WhatsApp para ${resolved.displayName}? Diga sim para começar.",
+                        "Confirmar áudio",
+                        isOffline = true
+                    )
+                }
+            }
+
+            is CopilotIntent.CallPhone -> {
+                val res = host.dialPhoneViaPhone(intent.recipient)
+                AgentReplyResult(res, "Ligação", isOffline = true)
+            }
+
+            is CopilotIntent.CallWhatsApp -> {
+                val res = host.callWhatsAppViaPhone(intent.recipient)
+                AgentReplyResult(res, "Ligação WhatsApp", isOffline = true)
+            }
+
+            CopilotIntent.AnswerCall -> {
+                val res = host.answerPhoneCall()
+                AgentReplyResult(res, "Chamada", isOffline = true)
+            }
+
+            CopilotIntent.EndCall -> {
+                val res = host.endPhoneCall()
+                AgentReplyResult(res, "Chamada", isOffline = true)
+            }
+
+            is CopilotIntent.ReplyWhatsApp -> {
+                val latestPhone = if (host.isPhoneConnected()) host.getLatestPhoneMessageSummary() else null
+                if (latestPhone != null) {
+                    pendingPhoneAction = PendingPhoneAction.ReplyMessage(
+                        messageId = latestPhone.first,
+                        sender = latestPhone.second,
+                        text = intent.text
+                    )
+                    AgentReplyResult(
+                        "Respondo para ${latestPhone.second}: '${intent.text}'? Diga sim para enviar.",
+                        "Confirmar resposta",
+                        isOffline = true
+                    )
+                } else {
+                    val res = host.replyLatestWhatsApp(intent.text)
+                    AgentReplyResult(res, "WhatsApp", isOffline = true)
+                }
+            }
+
+            CopilotIntent.ReadWhatsApp -> {
+                val res = host.readPhoneMessages()
+                AgentReplyResult(res, "Mensagens", isOffline = true)
             }
 
             is CopilotIntent.LogFuel -> {
@@ -1597,6 +1897,37 @@ class GeminiCarAgent(
         }
     }
 
+    private suspend fun executePendingPhoneAction(action: PendingPhoneAction): AgentReplyResult =
+        when (action) {
+            is PendingPhoneAction.SendWhatsApp -> {
+                val res = host.sendWhatsAppTextViaPhone(action.recipient, action.text)
+                AgentReplyResult(res, "WhatsApp", isOffline = true)
+            }
+            is PendingPhoneAction.SendWhatsAppAudio -> {
+                val res = host.recordAndSendWhatsAppVoiceViaPhone(action.recipient)
+                AgentReplyResult(res, "Áudio WhatsApp", isOffline = true)
+            }
+            is PendingPhoneAction.ReplyMessage -> {
+                val res = host.replyPhoneMessage(action.messageId, action.text)
+                AgentReplyResult(res, "Mensagem respondida", isOffline = true)
+            }
+        }
+
+    private fun isAffirmativeConfirmation(norm: String): Boolean {
+        val clean = norm.trim()
+        return clean in AFFIRMATIVE_ANSWERS ||
+            clean.startsWith("sim ") ||
+            clean.startsWith("pode mandar") ||
+            clean.startsWith("pode enviar")
+    }
+
+    private fun isNegativeConfirmation(norm: String): Boolean {
+        val clean = norm.trim()
+        return clean in NEGATIVE_ANSWERS ||
+            clean.startsWith("nao ") ||
+            clean.startsWith("cancela")
+    }
+
     private fun openExternalGeminiApp(question: String): String {
         val bardSend = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -1689,5 +2020,17 @@ class GeminiCarAgent(
     fun release() {
         stopListening()
         runCatching { tts?.shutdown() }
+    }
+
+    private companion object {
+        val AFFIRMATIVE_ANSWERS = setOf(
+            "sim", "s", "pode", "pode mandar", "pode enviar", "manda", "mande",
+            "envia", "envie", "enviar", "confirma", "confirmo", "ok", "beleza",
+            "claro", "isso", "manda sim", "pode sim", "confirma sim"
+        )
+        val NEGATIVE_ANSWERS = setOf(
+            "nao", "n", "cancela", "cancelar", "deixa", "deixa pra la",
+            "esquece", "nao manda", "nao enviar", "para", "parar"
+        )
     }
 }

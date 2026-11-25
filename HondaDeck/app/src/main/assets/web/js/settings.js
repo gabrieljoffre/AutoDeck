@@ -527,6 +527,167 @@ function buildCopilot(root) {
 }
 
 // ---------------------------------------------------------------------------
+// Aba: Celular (HondaDeck Ponte)
+// ---------------------------------------------------------------------------
+
+function buildPhone(root) {
+  const statusDot = el('span', { className: 'phone-status-dot' });
+  const statusText = el('span', { style: 'font-size:16px;font-weight:600' }, 'Desconectado');
+  const statusSub = el('span', { className: 'settings-sub' }, '');
+  const flagsRow = el('div', { className: 'phone-chip-row' });
+
+  const discoverBtn = el('button', { className: 'btn-outline', type: 'button', 'data-test': 'phone-discover', onClick: () => sendCommand('phone.discover') }, 'Buscar celular');
+  const reconnectBtn = el('button', { className: 'btn-outline', type: 'button', 'data-test': 'phone-reconnect', onClick: () => sendCommand('phone.reconnect') }, 'Reconectar');
+  const unpairBtn = confirmButton('Desparear', 'Confirmar despareamento?', 'btn-danger', () => sendCommand('phone.unpair'), { idle: 'phone-unpair', confirm: 'phone-unpair-confirm' });
+
+  const discoveredList = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
+  const hostIn = textInput({ placeholder: 'IP do celular (automático se vazio, ex.: 192.168.43.1)', 'data-test': 'phone-host-input' });
+  const pinIn = textInput({
+    inputmode: 'numeric',
+    maxlength: '6',
+    placeholder: 'PIN de 6 dígitos',
+    'data-test': 'phone-pin-input',
+    style: "font-family:'Chakra Petch',sans-serif;font-size:22px;letter-spacing:6px;text-align:center"
+  });
+  const submitPair = () => {
+    const pin = pinIn.value.replace(/\D+/g, '').slice(0, 6);
+    if (pin.length !== 6) {
+      showToast('Digite os 6 dígitos do PIN exibido no celular', 'error');
+      pinIn.focus();
+      return;
+    }
+    const host = hostIn.value.trim();
+    sendCommand('phone.pair', host ? { pin, host } : { pin });
+    pinIn.value = '';
+  };
+  pinIn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitPair();
+  });
+
+  const msgsList = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
+
+  root.append(
+    header('Celular (HondaDeck Ponte)', 'Conecta o seu Samsung ao painel para enviar WhatsApp (texto e áudio), fazer ligações e receber mensagens.'),
+    el(
+      'div',
+      { className: 'settings-card-block' },
+      kicker('STATUS DA CONEXÃO'),
+      el('div', { style: 'display:flex;align-items:center;gap:10px' }, statusDot, statusText),
+      statusSub,
+      flagsRow,
+      el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, discoverBtn, reconnectBtn, unpairBtn)
+    ),
+    el(
+      'div',
+      { className: 'settings-card-block' },
+      kicker('PAREAR COM PIN (UMA ÚNICA VEZ)'),
+      el('span', { className: 'settings-sub' }, 'Abra o app HondaDeck Ponte no celular Samsung, verifique o PIN de 6 dígitos e digite abaixo.'),
+      discoveredList,
+      el('div', { className: 'form-grid-2' }, field('PIN de 6 dígitos', pinIn), field('IP do celular (opcional)', hostIn)),
+      el('div', { style: 'display:flex;justify-content:flex-end' }, el('button', { className: 'btn-accent-sm', type: 'button', 'data-test': 'phone-pair-btn', style: 'padding:0 24px', onClick: submitPair }, 'Parear celular'))
+    ),
+    el(
+      'div',
+      { className: 'settings-card-block' },
+      kicker('MENSAGENS RECENTES DO CELULAR'),
+      msgsList
+    )
+  );
+
+  reg(tabUpdaters, (s) => jsonSig({
+    c: s.phone?.connected,
+    st: s.phone?.state,
+    p: s.phone?.paired,
+    n: s.phone?.phoneName,
+    h: s.phone?.host,
+    l: s.phone?.locked,
+    a: s.phone?.accessibilityEnabled,
+    nf: s.phone?.notificationsEnabled,
+    m: s.phone?.statusMessage,
+    e: s.phone?.lastError
+  }), (s) => {
+    const p = s.phone || {};
+    const connected = Boolean(p.connected);
+    statusDot.style.background = connected ? 'var(--green)' : p.paired ? 'var(--yellow)' : 'var(--rose)';
+    statusText.textContent = connected
+      ? `Conectado a ${p.phoneName || 'Celular'}`
+      : p.paired
+        ? `Desconectado (${p.phoneName || 'Celular pareado'})`
+        : 'Nenhum celular pareado';
+    const hostInfo = p.host ? ` · ${p.host}:${p.port || 5290}` : '';
+    statusSub.textContent = `${p.statusMessage || ''}${hostInfo}`;
+    unpairBtn.classList.toggle('hidden', !p.paired);
+    reconnectBtn.classList.toggle('hidden', !p.paired);
+
+    flagsRow.replaceChildren();
+    if (connected) {
+      const chip = (label, ok) => el('span', { className: ok ? 'phone-chip ok' : 'phone-chip warn' }, `${ok ? '✓' : '!' } ${label}`);
+      flagsRow.append(
+        chip(p.locked ? 'Celular bloqueado' : 'Desbloqueado', !p.locked),
+        chip('Acessibilidade WhatsApp', Boolean(p.accessibilityEnabled)),
+        chip('Notificações', Boolean(p.notificationsEnabled))
+      );
+    }
+  });
+
+  reg(tabUpdaters, (s) => jsonSig(s.phone?.discovered || []), (s) => {
+    const list = s.phone?.discovered || [];
+    discoveredList.replaceChildren();
+    if (!list.length) {
+      discoveredList.appendChild(el('span', { className: 'settings-sub' }, 'Nenhum celular encontrado ainda na rede. Toque em "Buscar celular" ou informe o IP.'));
+      return;
+    }
+    for (const d of list) {
+      discoveredList.appendChild(
+        el(
+          'button',
+          {
+            className: 'fav-list-row',
+            type: 'button',
+            style: 'cursor:pointer;text-align:left',
+            onClick: () => {
+              hostIn.value = d.host || '';
+              pinIn.focus();
+            }
+          },
+          el('span', { className: 'fav-ini-box' }, 'P'),
+          el(
+            'span',
+            { style: 'flex:1;display:flex;flex-direction:column;gap:2px' },
+            el('span', { style: 'font-size:15px;font-weight:600' }, d.name || 'HondaDeck Ponte'),
+            el('span', { className: 'settings-sub', style: 'font-size:13px' }, `${d.host}:${d.port || 5290} · toque para selecionar`)
+          )
+        )
+      );
+    }
+  });
+
+  reg(tabUpdaters, (s) => jsonSig(s.phone?.messages || []), (s) => {
+    const msgs = s.phone?.messages || [];
+    msgsList.replaceChildren();
+    if (!msgs.length) {
+      msgsList.appendChild(el('span', { className: 'settings-sub' }, 'Nenhuma mensagem recebida do celular ainda.'));
+      return;
+    }
+    for (const m of msgs.slice(0, 5)) {
+      msgsList.appendChild(
+        el(
+          'div',
+          { className: 'fav-list-row', style: 'padding:10px 14px' },
+          el(
+            'span',
+            { style: 'flex:1;min-width:0;display:flex;flex-direction:column;gap:3px' },
+            el('span', { style: 'font-size:15px;font-weight:600' }, `${m.sender || 'Contato'} · ${m.app || 'Mensagem'}`),
+            el('span', { className: 'settings-sub', style: 'font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, m.text || '')
+          ),
+          el('button', { className: 'btn-outline', type: 'button', onClick: () => sendCommand('notif.read') }, 'Ler')
+        )
+      );
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Aba: Veículo
 // ---------------------------------------------------------------------------
 
@@ -867,6 +1028,7 @@ const BUILDERS = {
   favorites: buildFavorites,
   spotify: buildSpotify,
   copilot: buildCopilot,
+  phone: buildPhone,
   vehicle: buildVehicle,
   system: buildSystem
 };

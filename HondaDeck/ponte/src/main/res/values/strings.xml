@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">HondaDeck Ponte</string>
+    <string name="notification_listener_label">HondaDeck Ponte — Mensagens</string>
+    <string name="accessibility_service_label">HondaDeck Ponte — Envio WhatsApp</string>
+    <string name="accessibility_service_description">Auxilia o HondaDeck Ponte a tocar no botão Enviar do WhatsApp e iniciar ligações de voz somente nos 15 segundos após um comando explícito do tablet do carro.</string>
+</resources>

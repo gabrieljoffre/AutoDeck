@@ -206,6 +206,25 @@ class GeminiLiveSession(
     }
 
     /**
+     * Pausa temporariamente o microfone da sessão Live para que outra captura (ex.: gravação de
+     * mensagem de voz do WhatsApp) possa usar o microfone sem conflito, retomando ao terminar.
+     */
+    suspend fun <T> withPausedAudioInput(block: suspend () -> T): T {
+        val wasRunning = isActive()
+        recordJob?.cancel()
+        recordJob = null
+        releaseAudioInput()
+        delay(120L)
+        return try {
+            block()
+        } finally {
+            if (wasRunning && isActive() && setupDone.get()) {
+                startAudioCapture()
+            }
+        }
+    }
+
+    /**
      * Interrompe manualmente a fala atual do modelo (ex.: botão de interromper), mantendo a sessão viva.
      */
     fun interruptPlayback(reason: String = "manual_button") {

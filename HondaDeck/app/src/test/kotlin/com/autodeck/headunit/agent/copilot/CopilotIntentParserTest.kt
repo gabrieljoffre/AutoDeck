@@ -261,4 +261,44 @@ class CopilotIntentParserTest {
         assertEquals(CopilotIntent.ForgetConversations, CopilotIntentParser.parse("esqueça as conversas", favorites))
         assertEquals(CopilotIntent.ForgetConversations, CopilotIntentParser.parse("apagar histórico de conversas", favorites))
     }
+
+    @Test
+    fun `comandos da Ponte celular para WhatsApp texto, audio, ligacoes e chamadas`() {
+        assertEquals(
+            CopilotIntent.SendWhatsApp(recipient = "ana", text = "to chegando"),
+            CopilotIntentParser.parse("manda whatsapp para Ana dizendo tô chegando", favorites)
+        )
+        assertEquals(
+            CopilotIntent.SendWhatsApp(recipient = "maria", text = "ja sai de casa"),
+            CopilotIntentParser.parse("enviar mensagem no zap para Maria: já saí de casa", favorites)
+        )
+        assertEquals(
+            CopilotIntent.SendWhatsAppAudio(recipient = "ana"),
+            CopilotIntentParser.parse("manda um áudio no whatsapp para Ana", favorites)
+        )
+        assertEquals(
+            CopilotIntent.SendWhatsAppAudio(recipient = "joao"),
+            CopilotIntentParser.parse("enviar mensagem de voz para João", favorites)
+        )
+        assertEquals(
+            CopilotIntent.CallWhatsApp(recipient = "ana"),
+            CopilotIntentParser.parse("ligar no whatsapp para Ana", favorites)
+        )
+        assertEquals(
+            CopilotIntent.CallWhatsApp(recipient = "maria"),
+            CopilotIntentParser.parse("fazer ligação de voz para Maria pelo zap", favorites)
+        )
+        assertEquals(
+            CopilotIntent.CallPhone(recipient = "carlos"),
+            CopilotIntentParser.parse("ligar para Carlos", favorites)
+        )
+        assertEquals(
+            CopilotIntent.CallPhone(recipient = "62 99999-8888"),
+            CopilotIntentParser.parse("liga pro 62 99999-8888", favorites)
+        )
+        assertEquals(CopilotIntent.AnswerCall, CopilotIntentParser.parse("atender", favorites))
+        assertEquals(CopilotIntent.AnswerCall, CopilotIntentParser.parse("atender chamada", favorites))
+        assertEquals(CopilotIntent.EndCall, CopilotIntentParser.parse("desligar", favorites))
+        assertEquals(CopilotIntent.EndCall, CopilotIntentParser.parse("encerrar ligação", favorites))
+    }
 }

@@ -229,10 +229,19 @@ class WebBridge(
             }
 
             "notif.read" -> runtime.readLatestWhatsAppAloud()
-            "notif.dismiss" -> {
-                val unread = runtime.uiState.value.whatsAppMessages.firstOrNull { !it.isReadByAgent }
-                if (unread != null) runtime.dismissWhatsApp(unread.key)
+            "notif.dismiss" -> runtime.dismissCurrentNotification()
+
+            "phone.pair" -> {
+                val pin = args.optString("pin").trim()
+                val host = args.optString("host").trim().takeIf { it.isNotBlank() }
+                runtime.pairPhoneWithPin(pin, host)
             }
+            "phone.unpair" -> runtime.unpairPhone()
+            "phone.discover" -> runtime.discoverPhone()
+            "phone.reconnect" -> runtime.reconnectPhone()
+            "phone.call.answer" -> runtime.answerPhoneCallFromUi()
+            "phone.call.end" -> runtime.endPhoneCallFromUi()
+            "phone.voice.cancel" -> runtime.cancelVoiceNoteRecording()
 
             "obd.connect" -> runtime.connectObdNow()
             "obd.disconnect" -> runtime.disconnectObd()
@@ -433,6 +442,13 @@ class WebBridge(
             "copilot.clearMemory",
             "notif.read",
             "notif.dismiss",
+            "phone.pair",
+            "phone.unpair",
+            "phone.discover",
+            "phone.reconnect",
+            "phone.call.answer",
+            "phone.call.end",
+            "phone.voice.cancel",
             "obd.connect",
             "obd.disconnect",
             "obd.readDtc",

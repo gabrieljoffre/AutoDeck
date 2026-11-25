@@ -262,4 +262,55 @@ class StateDtoTest {
         val fastTel = StateDto.buildTelemetryJson(ui)
         assertEquals(0.64, fastTel.getDouble("copilotLevel"), 0.02)
     }
+
+    @Test
+    fun `serializa estado da Ponte celular, banner de chamada e mensagens do celular`() {
+        val ui = HeadUnitUiState(
+            phoneLink = com.autodeck.headunit.phone.PhoneLinkUiState(
+                connectionState = com.autodeck.headunit.phone.PhoneConnectionState.CONNECTED,
+                paired = true,
+                phoneName = "Samsung S23",
+                host = "192.168.43.1",
+                phoneLocked = false,
+                accessibilityEnabled = true,
+                notificationsEnabled = true,
+                recordingVoiceNote = true,
+                voiceNoteStatus = "Gravando… (4s)",
+                callState = com.autodeck.protocol.phone.PhoneCallInfo(
+                    status = com.autodeck.protocol.phone.PhoneCallStatus.RINGING,
+                    number = "+5562999998888",
+                    displayName = "Ana",
+                    isWhatsApp = false,
+                    startedAtMs = 1_760_000_000_000L
+                ),
+                messages = listOf(
+                    com.autodeck.protocol.phone.PhoneMessageNotification(
+                        id = "m-phone-1",
+                        packageName = "com.whatsapp",
+                        appLabel = "WhatsApp",
+                        sender = "Ana",
+                        text = "Já chegou?",
+                        timestampMs = 1_760_000_000_000L,
+                        canReply = true
+                    )
+                )
+            )
+        )
+
+        val json = StateDto.buildStateJson(ui)
+        assertTrue(json.getJSONObject("status").getBoolean("phone"))
+        assertEquals("Samsung S23", json.getJSONObject("status").getString("phoneName"))
+
+        val phone = json.getJSONObject("phone")
+        assertTrue(phone.getBoolean("connected"))
+        assertTrue(phone.getBoolean("recordingVoiceNote"))
+        assertEquals("RINGING", phone.getJSONObject("call").getString("status"))
+        assertEquals("Ana", phone.getJSONObject("call").getString("displayName"))
+        assertEquals(1, phone.getJSONArray("messages").length())
+
+        val notif = json.getJSONObject("notification")
+        assertEquals("m-phone-1", notif.getString("id"))
+        assertEquals("Ana", notif.getString("title"))
+        assertEquals("phone", notif.getString("source"))
+    }
 }

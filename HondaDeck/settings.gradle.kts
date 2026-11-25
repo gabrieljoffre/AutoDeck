@@ -25,4 +25,5 @@ rootProject.name = "HondaDeck"
 include(":core-protocol")
 if (providers.gradleProperty("onlyJvm").orNull != "true") {
     include(":app")
+    include(":ponte")
 }

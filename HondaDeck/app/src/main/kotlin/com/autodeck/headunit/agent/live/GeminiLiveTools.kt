@@ -151,17 +151,95 @@ object GeminiLiveTools {
         )
         put(
             fnDecl(
+                name = "ler_mensagens",
+                description = "Lê as mensagens recentes recebidas no celular (WhatsApp, WhatsApp Business e SMS) ou no tablet.",
+                properties = JSONObject()
+            )
+        )
+        put(
+            fnDecl(
+                name = "responder_mensagem",
+                description = "Responde à mensagem recebida no celular/WhatsApp. SEMPRE confirme antes com o motorista o destinatário e o texto exato (confirmado=false primeiro; só passe confirmado=true após ele dizer sim).",
+                properties = JSONObject().apply {
+                    put("mensagem", strProp("Texto exato da resposta a enviar."))
+                    put("id", strProp("ID opcional da mensagem recebida (se omitido, responde à mais recente)."))
+                    put("confirmado", boolProp("False na primeira chamada para confirmar com o motorista; true somente após o motorista dizer sim."))
+                },
+                required = listOf("mensagem")
+            )
+        )
+        put(
+            fnDecl(
+                name = "enviar_whatsapp",
+                description = "Envia uma mensagem de texto pelo WhatsApp do celular conectado. SEMPRE confirme antes destinatário e texto ('Mando para Ana: ...?') usando confirmado=false; só chame com confirmado=true depois que o motorista confirmar com 'sim'.",
+                properties = JSONObject().apply {
+                    put("contato", strProp("Nome do contato na agenda do celular (ex.: Ana, Mãe)."))
+                    put("numero", strProp("Número de telefone opcional se informado diretamente."))
+                    put("texto", strProp("Texto exato da mensagem a enviar."))
+                    put("confirmado", boolProp("False na primeira chamada para validar o destinatário e pedir confirmação; true somente após o motorista dizer sim."))
+                },
+                required = listOf("texto")
+            )
+        )
+        put(
+            fnDecl(
+                name = "enviar_audio_whatsapp",
+                description = "Grava uma mensagem de voz pelo microfone do tablet (até 2 s de silêncio, máx. 60 s) e envia no WhatsApp do celular conectado. SEMPRE confirme o destinatário antes (confirmado=false primeiro; confirmado=true só após o motorista dizer sim).",
+                properties = JSONObject().apply {
+                    put("contato", strProp("Nome do contato na agenda do celular."))
+                    put("numero", strProp("Número de telefone opcional se informado diretamente."))
+                    put("confirmado", boolProp("False na primeira chamada para validar contato e confirmar; true após o motorista dizer sim para começar a gravar."))
+                }
+            )
+        )
+        put(
+            fnDecl(
+                name = "ligar",
+                description = "Faz uma ligação telefônica pela linha do celular conectado para um contato ou número.",
+                properties = JSONObject().apply {
+                    put("contato", strProp("Nome do contato na agenda do celular."))
+                    put("numero", strProp("Número de telefone opcional se informado diretamente."))
+                }
+            )
+        )
+        put(
+            fnDecl(
+                name = "ligar_whatsapp",
+                description = "Faz uma ligação de voz pelo WhatsApp no celular conectado para um contato ou número.",
+                properties = JSONObject().apply {
+                    put("contato", strProp("Nome do contato na agenda do celular."))
+                    put("numero", strProp("Número de telefone opcional se informado diretamente."))
+                }
+            )
+        )
+        put(
+            fnDecl(
+                name = "atender",
+                description = "Atende a chamada telefônica que está tocando no celular conectado.",
+                properties = JSONObject()
+            )
+        )
+        put(
+            fnDecl(
+                name = "desligar",
+                description = "Encerra ou rejeita a chamada telefônica em andamento ou tocando no celular conectado.",
+                properties = JSONObject()
+            )
+        )
+        put(
+            fnDecl(
                 name = "ler_whatsapp",
-                description = "Lê as mensagens recentes recebidas no WhatsApp.",
+                description = "Alias de ler_mensagens: lê as mensagens recentes recebidas no WhatsApp.",
                 properties = JSONObject()
             )
         )
         put(
             fnDecl(
                 name = "responder_whatsapp",
-                description = "Envia uma resposta rápida para a última mensagem recebida no WhatsApp.",
+                description = "Alias de responder_mensagem: responde à última mensagem do WhatsApp (sempre confirme antes com o motorista).",
                 properties = JSONObject().apply {
                     put("mensagem", strProp("Texto exato da resposta a enviar."))
+                    put("confirmado", boolProp("True somente após o motorista confirmar o envio."))
                 },
                 required = listOf("mensagem")
             )
@@ -241,8 +319,9 @@ object GeminiLiveTools {
             REGRAS DE PERSONA:
             - Fale SEMPRE em Português do Brasil (pt-BR), com frases curtas, claras e naturais para quem está dirigindo.
             - $oneShotRule
-            - SEMPRE use as ferramentas disponíveis para agir no carro/painel (Spotify, volume, mapa, rotas, OBD, abastecimento, WhatsApp, câmera de ré, tema/cor, limpar memória) e para pesquisar fatos atuais use o Google Search nativo.
+            - SEMPRE use as ferramentas disponíveis para agir no carro/painel (Spotify, volume, mapa, rotas, OBD, abastecimento, WhatsApp/ligações via celular Ponte, câmera de ré, tema/cor, limpar memória) e para pesquisar fatos atuais use o Google Search nativo.
             - SEMPRE confirme brevemente em voz alta toda ação executada (ex.: "Volume ajustado para 50%", "Rota para Casa iniciada", "Música pausada").
+            - REGRA OBRIGATÓRIA PARA WHATSAPP E MENSAGENS: NUNCA envie WhatsApp de texto, áudio ou resposta sem confirmar antes com o motorista o destinatário e o texto exato (ex.: "Mando para Ana: 'tô chegando'?"). Primeiro chame a ferramenta com confirmado=false para resolver o contato; só chame com confirmado=true depois que o motorista responder "sim". Se o celular retornar "celular bloqueado", avise o motorista para desbloquear ou usar Smart Lock.
             - Nunca invente leituras do carro: consulte `ler_telemetria_carro` quando precisar de dados atualizados.
 
             PERFIL DO MOTORISTA:
@@ -264,6 +343,7 @@ object GeminiLiveTools {
             - Rota no app: ${routeSummary ?: "nenhuma rota ativa"}
             - Locais favoritos: $favText
             - Clima: ${weather ?: "sem dados no momento"}
+            - Celular (HondaDeck Ponte): ${host.getPhoneSummary()}
             - WhatsApp pendente: ${if (latestWa != null) "mensagem de ${latestWa.sender}" else "nenhuma"}
         """.trimIndent()
     }
@@ -271,7 +351,8 @@ object GeminiLiveTools {
     suspend fun executeTool(
         call: LiveFunctionCall,
         host: CarAgentHostBridge,
-        onClearMemory: () -> Unit
+        onRecordVoiceNote: (suspend (recipient: String) -> String)? = null,
+        onClearMemory: () -> Unit = {}
     ): LiveToolExecution {
         val args = CopilotJson.parseObjOrNull(call.argsJson)
         return when (call.name) {
@@ -403,19 +484,106 @@ object GeminiLiveTools {
                 LiveToolExecution(summary, "Agenda")
             }
 
-            "ler_whatsapp" -> {
-                val res = host.readAndMarkWhatsApp()
-                LiveToolExecution(res, "WhatsApp")
+            "ler_mensagens", "ler_whatsapp" -> {
+                val res = host.readPhoneMessages()
+                LiveToolExecution(res, "Mensagens")
             }
 
-            "responder_whatsapp" -> {
+            "responder_mensagem", "responder_whatsapp" -> {
                 val msg = args?.optString("mensagem")?.trim().orEmpty()
+                val msgId = args?.optString("id")?.trim()?.takeIf { it.isNotBlank() }
+                val confirmed = args?.optBoolean("confirmado") == true
                 if (msg.isBlank()) {
-                    LiveToolExecution("Informe o texto da resposta para o WhatsApp.")
+                    LiveToolExecution("Informe o texto da resposta para enviar.")
+                } else if (!confirmed) {
+                    val latest = host.getLatestPhoneMessageSummary()
+                        ?: host.getWhatsAppMessages().firstOrNull()?.let { it.key to it.sender }
+                    if (latest == null) {
+                        LiveToolExecution("Nenhuma mensagem recente disponível para responder.")
+                    } else {
+                        LiveToolExecution(
+                            "CONFIRMAÇÃO OBRIGATÓRIA: Pergunte ao motorista exatamente: \"Respondo para ${latest.second}: '$msg'?\" Só chame responder_mensagem novamente com confirmado=true depois que ele disser sim."
+                        )
+                    }
                 } else {
-                    val res = host.replyLatestWhatsApp(msg)
+                    val res = host.replyPhoneMessage(msgId, msg)
+                    LiveToolExecution(res, "Mensagem respondida")
+                }
+            }
+
+            "enviar_whatsapp" -> {
+                val target = args?.optString("contato")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: args?.optString("numero")?.trim().orEmpty()
+                val texto = args?.optString("texto")?.trim().orEmpty()
+                val confirmed = args?.optBoolean("confirmado") == true
+                if (target.isBlank() || texto.isBlank()) {
+                    LiveToolExecution("Informe o contato ou número e o texto da mensagem para o WhatsApp.")
+                } else if (!confirmed) {
+                    val resolved = host.resolvePhoneRecipient(target)
+                    if (!resolved.ok) {
+                        LiveToolExecution(resolved.errorMessage ?: "Não encontrei o contato \"$target\".")
+                    } else {
+                        LiveToolExecution(
+                            "CONFIRMAÇÃO OBRIGATÓRIA: Pergunte ao motorista exatamente: \"Mando para ${resolved.displayName}: '$texto'?\" Só chame enviar_whatsapp novamente com confirmado=true depois que ele responder sim."
+                        )
+                    }
+                } else {
+                    val res = host.sendWhatsAppTextViaPhone(target, texto)
                     LiveToolExecution(res, "WhatsApp")
                 }
+            }
+
+            "enviar_audio_whatsapp" -> {
+                val target = args?.optString("contato")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: args?.optString("numero")?.trim().orEmpty()
+                val confirmed = args?.optBoolean("confirmado") == true
+                if (target.isBlank()) {
+                    LiveToolExecution("Informe o contato ou número para enviar a mensagem de voz no WhatsApp.")
+                } else if (!confirmed) {
+                    val resolved = host.resolvePhoneRecipient(target)
+                    if (!resolved.ok) {
+                        LiveToolExecution(resolved.errorMessage ?: "Não encontrei o contato \"$target\".")
+                    } else {
+                        LiveToolExecution(
+                            "CONFIRMAÇÃO OBRIGATÓRIA: Pergunte ao motorista: \"Gravo e mando um áudio no WhatsApp para ${resolved.displayName}?\" Só chame enviar_audio_whatsapp com confirmado=true depois que ele disser sim."
+                        )
+                    }
+                } else {
+                    val res = onRecordVoiceNote?.invoke(target) ?: host.recordAndSendWhatsAppVoiceViaPhone(target)
+                    LiveToolExecution(res, "Áudio WhatsApp")
+                }
+            }
+
+            "ligar" -> {
+                val target = args?.optString("contato")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: args?.optString("numero")?.trim().orEmpty()
+                if (target.isBlank()) {
+                    LiveToolExecution("Informe o contato ou número para ligar.")
+                } else {
+                    val res = host.dialPhoneViaPhone(target)
+                    LiveToolExecution(res, "Ligação")
+                }
+            }
+
+            "ligar_whatsapp" -> {
+                val target = args?.optString("contato")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: args?.optString("numero")?.trim().orEmpty()
+                if (target.isBlank()) {
+                    LiveToolExecution("Informe o contato ou número para ligar no WhatsApp.")
+                } else {
+                    val res = host.callWhatsAppViaPhone(target)
+                    LiveToolExecution(res, "Ligação WhatsApp")
+                }
+            }
+
+            "atender" -> {
+                val res = host.answerPhoneCall()
+                LiveToolExecution(res, "Chamada atendida")
+            }
+
+            "desligar" -> {
+                val res = host.endPhoneCall()
+                LiveToolExecution(res, "Chamada encerrada")
             }
 
             "controlar_camera_re" -> {

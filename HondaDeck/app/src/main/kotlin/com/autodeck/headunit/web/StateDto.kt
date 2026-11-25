@@ -112,12 +112,16 @@ object StateDto {
             })
         }
 
+        val phone = ui.phoneLink
         val statusObj = JSONObject().apply {
             put("wifi", extras.wifiConnected)
             put("bluetooth", ui.headUnit.audioBtStatus == LinkStatus.CONNECTED)
             put("btName", ui.headUnit.audioBtDeviceName)
             put("obd", obdStatusStr)
             put("gps", ui.gpsState.hasFix)
+            put("phone", phone.isConnected)
+            put("phoneState", phone.connectionState.name)
+            put("phoneName", phone.phoneName)
         }
 
         val telemetryObj = JSONObject().apply {
@@ -279,16 +283,71 @@ object StateDto {
             put("route", ui.audioRoute.routeLabel)
         }
 
+        val unreadPhoneMsg = phone.messages.firstOrNull { !it.isRead }
         val unreadNotif = ui.whatsAppMessages.firstOrNull { !it.isReadByAgent }
-        val notifValue: Any = if (unreadNotif != null) {
-            JSONObject().apply {
+        val notifValue: Any = when {
+            unreadPhoneMsg != null -> JSONObject().apply {
+                put("id", unreadPhoneMsg.id)
+                put("app", unreadPhoneMsg.appLabel)
+                put("title", unreadPhoneMsg.sender)
+                put("text", unreadPhoneMsg.text)
+                put("source", "phone")
+                put("canReply", unreadPhoneMsg.canReply)
+            }
+            unreadNotif != null -> JSONObject().apply {
                 put("id", unreadNotif.key)
                 put("app", unreadNotif.appLabel)
                 put("title", unreadNotif.sender)
                 put("text", unreadNotif.message)
+                put("source", "tablet")
+                put("canReply", unreadNotif.canReply)
             }
-        } else {
-            JSONObject.NULL
+            else -> JSONObject.NULL
+        }
+
+        val phoneObj = JSONObject().apply {
+            put("connected", phone.isConnected)
+            put("state", phone.connectionState.name)
+            put("paired", phone.paired)
+            put("phoneName", phone.phoneName)
+            put("host", phone.host)
+            put("port", phone.port)
+            put("locked", phone.phoneLocked)
+            put("accessibilityEnabled", phone.accessibilityEnabled)
+            put("notificationsEnabled", phone.notificationsEnabled)
+            put("statusMessage", phone.statusMessage)
+            put("lastError", phone.lastError ?: JSONObject.NULL)
+            put("recordingVoiceNote", phone.recordingVoiceNote)
+            put("voiceNoteStatus", phone.voiceNoteStatus)
+            put("discovered", JSONArray().apply {
+                phone.discoveredPhones.forEach { d ->
+                    put(JSONObject().apply {
+                        put("name", d.name)
+                        put("host", d.host)
+                        put("port", d.port)
+                    })
+                }
+            })
+            put("call", JSONObject().apply {
+                put("status", phone.callState.status.name)
+                put("number", phone.callState.number)
+                put("displayName", phone.callState.displayName)
+                put("isWhatsApp", phone.callState.isWhatsApp)
+                put("startedAtMs", phone.callState.startedAtMs)
+            })
+            put("messages", JSONArray().apply {
+                phone.messages.take(10).forEach { m ->
+                    put(JSONObject().apply {
+                        put("id", m.id)
+                        put("app", m.appLabel)
+                        put("sender", m.sender)
+                        put("text", m.text)
+                        put("timestampMs", m.timestampMs)
+                        put("canReply", m.canReply)
+                        put("read", m.isRead)
+                    })
+                }
+            })
         }
 
         val fuelSummary = ui.fuelSummary
@@ -403,6 +462,7 @@ object StateDto {
             put("copilot", copilotObj)
             put("audio", audioObj)
             put("notification", notifValue)
+            put("phone", phoneObj)
             put("vehicle", vehicleObj)
             put("settings", settingsObj)
         }

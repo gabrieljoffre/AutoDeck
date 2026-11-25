@@ -258,8 +258,14 @@ class GeminiLiveProtocolTest {
         val waRead = GeminiLiveTools.executeTool(LiveFunctionCall("8", "ler_whatsapp", """{}"""), host) {}
         assertTrue(waRead.result.contains("Maria"))
 
+        val waReplyAsk = GeminiLiveTools.executeTool(
+            LiveFunctionCall("9a", "responder_whatsapp", """{"mensagem":"Já estou chegando"}"""),
+            host
+        ) {}
+        assertTrue(waReplyAsk.result.contains("CONFIRMAÇÃO OBRIGATÓRIA"))
+
         GeminiLiveTools.executeTool(
-            LiveFunctionCall("9", "responder_whatsapp", """{"mensagem":"Já estou chegando"}"""),
+            LiveFunctionCall("9", "responder_whatsapp", """{"mensagem":"Já estou chegando","confirmado":true}"""),
             host
         ) {}
         assertTrue("REPLY_WA:Já estou chegando" in host.log)

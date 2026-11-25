@@ -94,3 +94,21 @@ Acesso restrito: só o dono abre; para qualquer outra pessoa o link pede permiss
 
 - USB: `https://github.com/gabrieljoffre/AutoDeck/releases/download/hondadeck-latest/HondaDeck-completo.apk`
 - QR: `https://github.com/gabrieljoffre/AutoDeck/releases/download/hondadeck-latest/HondaDeck.apk`
+
+## HondaDeck Ponte (celular Samsung — módulo `:ponte`)
+
+O app **HondaDeck Ponte** (`com.autodeck.hondadeck.ponte`) roda no celular Samsung e permite ao tablet enviar WhatsApp (texto e áudio), fazer/atender/desligar ligações (linha do celular e voz do WhatsApp) e receber notificações de WhatsApp/SMS — sem precisar de chip nem WhatsApp no tablet.
+
+### Instalação no celular pelo USB
+Com os dois aparelhos ligados no USB, use sempre o serial do celular (`adb devices`):
+```powershell
+.\gradlew.bat :ponte:assembleDebug
+adb -s <SERIAL_CELULAR> install -r ponte\build\outputs\apk\debug\ponte-debug.apk
+```
+
+### Configuração única no celular
+1. Abra o **HondaDeck Ponte** e conceda as permissões de **Contatos**, **Telefone** e **Notificações** pelo checklist na tela.
+2. Ative uma única vez **Acesso a notificações** (para repassar WhatsApp/SMS e respostas rápidas).
+3. Ative uma única vez o **Serviço de Acessibilidade → HondaDeck Ponte — Envio WhatsApp** (usado apenas na janela de 15 s após um comando do tablet para tocar no botão Enviar e voltar à tela anterior). Se a opção aparecer cinza no Android 13+, abra **Configurações → Apps → HondaDeck Ponte → ⋮ → Permitir configurações restritas**.
+4. **Recomendação para o carro (Smart Lock / Estender desbloqueio):** em **Configurações do Samsung → Tela de bloqueio → Estender desbloqueio → Dispositivos confiáveis**, adicione o Bluetooth do carro (ex.: Taramps) para manter o celular desbloqueado enquanto dirige. Se o celular estiver bloqueado, o copiloto avisa no painel.
+5. No tablet HondaDeck, abra **Ajustes → Celular**, digite o **PIN de 6 dígitos** mostrado no celular e toque em **Parear celular** (feito uma única vez; depois reconecta sozinho).

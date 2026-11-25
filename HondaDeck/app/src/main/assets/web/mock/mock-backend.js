@@ -169,7 +169,10 @@ export function installMockBackend() {
       bluetooth: true,
       btName: 'Taramps',
       obd: 'SIMULATED',
-      gps: true
+      gps: true,
+      phone: true,
+      phoneState: 'CONNECTED',
+      phoneName: 'Samsung Galaxy'
     },
     telemetry: {
       speedKmh: 62,
@@ -361,6 +364,24 @@ export function installMockBackend() {
       route: 'Bluetooth · Taramps'
     },
     notification: null,
+    phone: {
+      connected: true,
+      state: 'CONNECTED',
+      paired: true,
+      phoneName: 'Samsung Galaxy',
+      host: '192.168.43.1',
+      port: 5290,
+      locked: false,
+      accessibilityEnabled: true,
+      notificationsEnabled: true,
+      statusMessage: 'Conectado a Samsung Galaxy',
+      lastError: null,
+      recordingVoiceNote: false,
+      voiceNoteStatus: '',
+      discovered: [{ name: 'Samsung Galaxy', host: '192.168.43.1', port: 5290 }],
+      call: { status: 'IDLE', number: '', displayName: '', isWhatsApp: false, startedAtMs: 0 },
+      messages: []
+    },
     vehicle: {
       obdMessage: 'Simulador OBD-II ativo (Honda Civic 1.8 i-VTEC)',
       simulator: true,
@@ -904,6 +925,53 @@ export function installMockBackend() {
           break;
         case 'notif.dismiss':
           state.notification = null;
+          emitState();
+          break;
+        case 'phone.pair':
+          state.phone.connected = true;
+          state.phone.paired = true;
+          state.phone.state = 'CONNECTED';
+          state.phone.phoneName = 'Samsung Galaxy';
+          state.phone.host = String(args.host || '192.168.43.1');
+          state.phone.statusMessage = 'Conectado a Samsung Galaxy';
+          state.status.phone = true;
+          state.status.phoneState = 'CONNECTED';
+          state.status.phoneName = 'Samsung Galaxy';
+          emitState();
+          emitEvent('toast', { text: 'Celular pareado (simulado)' });
+          break;
+        case 'phone.unpair':
+          state.phone.connected = false;
+          state.phone.paired = false;
+          state.phone.state = 'DISCONNECTED';
+          state.phone.statusMessage = 'Celular despareado';
+          state.status.phone = false;
+          state.status.phoneState = 'DISCONNECTED';
+          emitState();
+          emitEvent('toast', { text: 'Celular despareado' });
+          break;
+        case 'phone.discover':
+          emitEvent('toast', { text: 'Buscando HondaDeck Ponte na rede…' });
+          break;
+        case 'phone.reconnect':
+          state.phone.connected = true;
+          state.phone.state = 'CONNECTED';
+          state.status.phone = true;
+          state.status.phoneState = 'CONNECTED';
+          emitState();
+          break;
+        case 'phone.call.answer':
+          state.phone.call.status = 'ACTIVE';
+          state.phone.call.startedAtMs = Date.now();
+          emitState();
+          break;
+        case 'phone.call.end':
+          state.phone.call = { status: 'IDLE', number: '', displayName: '', isWhatsApp: false, startedAtMs: 0 };
+          emitState();
+          break;
+        case 'phone.voice.cancel':
+          state.phone.recordingVoiceNote = false;
+          state.phone.voiceNoteStatus = '';
           emitState();
           break;
         case 'obd.connect':

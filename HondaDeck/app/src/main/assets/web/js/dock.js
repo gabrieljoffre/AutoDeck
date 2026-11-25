@@ -75,6 +75,16 @@ export function initDock({ switchMode }) {
     sendCommand('notif.dismiss');
     hideNotification();
   });
+
+  document.getElementById('call-answer-btn')?.addEventListener('click', () => {
+    sendCommand('phone.call.answer');
+  });
+  document.getElementById('call-end-btn')?.addEventListener('click', () => {
+    sendCommand('phone.call.end');
+  });
+  document.getElementById('voice-note-cancel-btn')?.addEventListener('click', () => {
+    sendCommand('phone.voice.cancel');
+  });
 }
 
 export function setDockActiveMode(mode) {
@@ -172,6 +182,56 @@ export function updateNotification(notification) {
   setText(document.getElementById('notif-title'), notification.title || '');
   setText(document.getElementById('notif-text'), notification.text || '');
   setHidden(banner, false);
+}
+
+// ---------------------------------------------------------------------------
+// Banner de chamada & indicador de gravação de áudio (HondaDeck Ponte)
+// ---------------------------------------------------------------------------
+
+function formatCallDuration(startedAtMs, nowMs) {
+  if (!startedAtMs || startedAtMs <= 0) return '';
+  const totalSec = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+export function updateCallBanner(phone, nowMs = Date.now()) {
+  const banner = document.getElementById('call-banner');
+  if (!banner) return;
+  const call = phone?.call;
+  const status = String(call?.status || 'IDLE').toUpperCase();
+  const active = status === 'RINGING' || status === 'DIALING' || status === 'ACTIVE';
+  if (!active) {
+    setHidden(banner, true);
+    banner.classList.remove('ringing');
+    return;
+  }
+
+  const origin = call.isWhatsApp ? 'WhatsApp' : 'Telefone';
+  let statusTxt = origin;
+  if (status === 'RINGING') statusTxt = `Recebendo chamada · ${origin}`;
+  else if (status === 'DIALING') statusTxt = `Chamando… · ${origin}`;
+  else if (status === 'ACTIVE') {
+    const dur = formatCallDuration(Number(call.startedAtMs || 0), nowMs);
+    statusTxt = dur ? `Em chamada · ${dur}` : `Em chamada · ${origin}`;
+  }
+
+  setText(document.getElementById('call-status-label'), statusTxt);
+  setText(document.getElementById('call-caller-name'), call.displayName || call.number || 'Chamada em andamento');
+  setHidden(document.getElementById('call-answer-btn'), status !== 'RINGING');
+  banner.classList.toggle('ringing', status === 'RINGING');
+  setHidden(banner, false);
+}
+
+export function updateVoiceNotePill(phone) {
+  const pill = document.getElementById('voice-note-pill');
+  if (!pill) return;
+  const recording = Boolean(phone?.recordingVoiceNote);
+  setHidden(pill, !recording);
+  if (recording) {
+    setText(document.getElementById('voice-note-label'), phone.voiceNoteStatus || 'Gravando…');
+  }
 }
 
 // ---------------------------------------------------------------------------
