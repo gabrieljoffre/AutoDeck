@@ -44,6 +44,19 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
     // Navegação & Mapa Offline
     fun openPreferredMapApp(): Boolean = runtime.openPreferredMapApp()
     fun navigateToDestination(destination: String): Boolean = runtime.navigateToDestination(destination)
+    fun stopInAppNavigation() = runtime.stopInAppNavigation()
+    fun navigateExternally(destination: String): Boolean = runtime.navigateExternally(destination)
+    fun connectSpotify(activityContext: android.content.Context) = runtime.connectSpotify(activityContext)
+    fun spotifyToggleShuffle() { runtime.spotifyToggleShuffle() }
+    fun onSpotifyToken(token: String, expiresInSec: Int) = runtime.onSpotifyToken(token, expiresInSec)
+    fun requestSpotifyWebAuth() = runtime.requestSpotifyWebAuth()
+    fun refreshSpotifyPlaylists() = runtime.refreshSpotifyPlaylists()
+    fun searchSpotify(query: String) = runtime.searchSpotify(query)
+    fun playSpotifyUri(uri: String) = runtime.playSpotifyUri(uri)
+    fun setSpotifyAuthRequester(requester: (() -> Unit)?) = runtime.setSpotifyAuthRequester(requester)
+    fun onSpotifyAuthorized(activityContext: android.content.Context) = runtime.onSpotifyAuthorized(activityContext)
+    fun onSpotifyAuthFailed(reason: String) = runtime.onSpotifyAuthFailed(reason)
+    fun spotifyToggleRepeat() { runtime.spotifyToggleRepeat() }
     fun downloadOfflineMap(mapView: MapView, radiusKm: Double = 8.0) =
         runtime.downloadOfflineMap(mapView, radiusKm)
 

@@ -29,7 +29,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.cachemanager.CacheManager
-import org.osmdroid.tileprovider.tilesource.XYTileSource
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -37,8 +38,8 @@ import java.io.File
 import kotlin.math.abs
 
 data class GpsLocationState(
-    val latitude: Double = -23.55052,
-    val longitude: Double = -46.63331,
+    val latitude: Double = -16.3281,
+    val longitude: Double = -48.9534,
     val bearingDeg: Float = 0f,
     val gpsSpeedKmh: Float = 0f,
     val accuracyMeters: Float = 0f,
@@ -305,19 +306,40 @@ class GpsNavigationTracker(
     }
 
     companion object {
-        val CARTO_DARK_TILE_SOURCE: XYTileSource = XYTileSource(
-            "CartoDark",
-            0,
-            19,
-            256,
-            ".png",
-            arrayOf(
-                "https://a.basemaps.cartocdn.com/dark_all/",
-                "https://b.basemaps.cartocdn.com/dark_all/",
-                "https://c.basemaps.cartocdn.com/dark_all/"
-            ),
-            "© OpenStreetMap © CARTO"
+        /**
+         * Mapa base escuro da Esri (sem chave). O Carto dark_all passou a exigir API key
+         * e devolvia tiles "API KEY REQUIRED". A Esri usa a ordem {z}/{y}/{x}.
+         */
+        val CARTO_DARK_TILE_SOURCE: OnlineTileSourceBase = esriSource(
+            "EsriDarkGrayBase",
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/",
+            maxZoom = 16
         )
+
+        /** Camada de nomes de ruas/bairros, desenhada por cima do mapa base. */
+        val ESRI_DARK_LABELS_SOURCE: OnlineTileSourceBase = esriSource(
+            "EsriDarkGrayReference",
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/",
+            maxZoom = 16
+        )
+
+        private fun esriSource(name: String, base: String, maxZoom: Int): OnlineTileSourceBase =
+            object : OnlineTileSourceBase(name, 0, maxZoom, 256, "", arrayOf(base), "Esri, HERE, Garmin, © OpenStreetMap") {
+                override fun getTileURLString(pMapTileIndex: Long): String =
+                    baseUrl + MapTileIndex.getZoom(pMapTileIndex) + "/" +
+                        MapTileIndex.getY(pMapTileIndex) + "/" + MapTileIndex.getX(pMapTileIndex)
+            }
+
+        /** Tinge o cinza da Esri para o azul-marinho do painel HUD. */
+        fun hudTintFilter(): android.graphics.ColorMatrixColorFilter =
+            android.graphics.ColorMatrixColorFilter(
+                floatArrayOf(
+                    0.30f, 0f, 0f, 0f, 0f,
+                    0f, 0.44f, 0f, 0f, 0f,
+                    0f, 0f, 0.66f, 0f, 6f,
+                    0f, 0f, 0f, 1f, 0f
+                )
+            )
 
         fun createNavigationArrowDrawable(context: Context): BitmapDrawable {
             val sizePx = (58 * context.resources.displayMetrics.density).toInt().coerceAtLeast(48)

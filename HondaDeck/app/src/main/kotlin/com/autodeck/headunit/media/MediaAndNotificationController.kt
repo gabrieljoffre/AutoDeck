@@ -107,6 +107,9 @@ class MediaAndNotificationController private constructor(private val appContext:
     private var tickerJob: Job? = null
     private var artworkFetchJob: Job? = null
 
+    /** SDK oficial do Spotify: quando conectado, tem prioridade sobre MediaSession e broadcast. */
+    val spotify = SpotifyRemoteBridge { transform -> _mediaState.update(transform) }
+
     private val controllerCallback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) {
             syncFromController(activeController)
@@ -131,7 +134,7 @@ class MediaAndNotificationController private constructor(private val appContext:
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 "com.spotify.music.metadatachanged",
-                "com.android.music.metadatachanged" -> {
+                "com.android.music.metachanged" -> {
                     val track = intent.getStringExtra("track").orEmpty()
                     val artist = intent.getStringExtra("artist").orEmpty()
                     val album = intent.getStringExtra("album").orEmpty()
@@ -237,6 +240,15 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun togglePlayPause() {
+        if (spotify.isConnected) {
+            when {
+                // Spotify sem nada carregado: abre o app para o usuário escolher o que ouvir
+                !_mediaState.value.hasActiveTrack -> launchPreferredMusicApp()
+                _mediaState.value.isPlaying -> spotify.pause()
+                else -> spotify.resume()
+            }
+            return
+        }
         val ctrl = activeController
         if (ctrl != null) {
             val playing = ctrl.playbackState?.state == PlaybackState.STATE_PLAYING
@@ -264,6 +276,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun play() {
+        if (spotify.isConnected) {
+            spotify.resume()
+            return
+        }
         val ctrl = activeController
         if (ctrl != null) {
             ctrl.transportControls.play()
@@ -282,6 +298,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun pause() {
+        if (spotify.isConnected) {
+            spotify.pause()
+            return
+        }
         val ctrl = activeController
         if (ctrl != null) {
             ctrl.transportControls.pause()
@@ -292,6 +312,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun skipToNext() {
+        if (spotify.isConnected) {
+            spotify.next()
+            return
+        }
         val ctrl = activeController
         if (ctrl != null) {
             ctrl.transportControls.skipToNext()
@@ -301,6 +325,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun skipToPrevious() {
+        if (spotify.isConnected) {
+            spotify.previous()
+            return
+        }
         val ctrl = activeController
         if (ctrl != null) {
             ctrl.transportControls.skipToPrevious()
@@ -310,6 +338,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun seekTo(positionMs: Long) {
+        if (spotify.isConnected) {
+            spotify.seekTo(positionMs)
+            return
+        }
         activeController?.transportControls?.seekTo(positionMs.coerceAtLeast(0L))
     }
 

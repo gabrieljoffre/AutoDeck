@@ -2,6 +2,7 @@ package com.autodeck.headunit.agent
 
 import android.Manifest
 import android.content.Context
+import android.media.AudioManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -287,6 +288,22 @@ class GeminiCarAgent(
             if (!cfg.wakeWordEnabled || !isForeground || activeCommandMode || _state.value.isSpeaking) return@launch
             if (cfg.voiceAssistantMode == VoiceAssistantMode.SYSTEM_ASSISTANT) return@launch
             if (!hasAudioPermission() || !SpeechRecognizer.isRecognitionAvailable(appContext)) return@launch
+
+            // O reconhecedor do Google pega foco de áudio exclusivo a cada ciclo e pausa o Spotify.
+            // Enquanto houver música tocando, o "ok honda" fica em espera (o atalho do microfone continua valendo).
+            val musicPlaying = host.getMediaState().isPlaying ||
+                (appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager)?.isMusicActive == true
+            if (musicPlaying) {
+                stopRecognizerNow()
+                _state.update {
+                    it.copy(
+                        isWakeWordListening = false,
+                        statusText = "\"${cfg.wakeWordPhrase}\" em espera durante a música · segure o microfone"
+                    )
+                }
+                scheduleWakeWordRestart(3_000L)
+                return@launch
+            }
 
             wakeLoopActive = true
             _state.update {

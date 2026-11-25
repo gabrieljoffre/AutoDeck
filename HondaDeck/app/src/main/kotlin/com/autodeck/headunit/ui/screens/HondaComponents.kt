@@ -106,11 +106,13 @@ import com.autodeck.protocol.coordinator.LinkStatus
 import com.autodeck.protocol.coordinator.MainTab
 import com.autodeck.protocol.obd2.TransmissionType
 import kotlinx.coroutines.delay
+import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
+import org.osmdroid.views.overlay.TilesOverlay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -671,11 +673,22 @@ fun OsmDarkMapSurface(
             MapView(ctx).apply {
                 runCatching {
                     setTileSource(GpsNavigationTracker.CARTO_DARK_TILE_SOURCE)
+                    overlayManager.tilesOverlay.setColorFilter(GpsNavigationTracker.hudTintFilter())
+                    overlayManager.tilesOverlay.loadingBackgroundColor = android.graphics.Color.rgb(11, 18, 30)
+                    overlayManager.tilesOverlay.loadingLineColor = android.graphics.Color.rgb(20, 30, 46)
+                    setBackgroundColor(android.graphics.Color.rgb(11, 18, 30))
                     setUseDataConnection(true)
                     setMultiTouchControls(interactive)
                     zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                    isTilesScaledToDpi = true
                     isClickable = true
                     isFocusable = interactive
+
+                    val labels = TilesOverlay(MapTileProviderBasic(ctx, GpsNavigationTracker.ESRI_DARK_LABELS_SOURCE), ctx).apply {
+                        loadingBackgroundColor = android.graphics.Color.TRANSPARENT
+                        loadingLineColor = android.graphics.Color.TRANSPARENT
+                    }
+                    overlays.add(labels)
 
                     val trail = Polyline(this).apply {
                         outlinePaint.color = android.graphics.Color.argb(210, 41, 231, 255)

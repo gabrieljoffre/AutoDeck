@@ -29,9 +29,17 @@ import com.autodeck.headunit.hardware.UvcUsbCameraSource
 import com.autodeck.headunit.media.InstalledAppOption
 import com.autodeck.headunit.media.MediaAndNotificationController
 import com.autodeck.headunit.media.MediaPlaybackState
+import com.autodeck.headunit.media.SpotifyItem
+import com.autodeck.headunit.media.SpotifyLinkStatus
+import com.autodeck.headunit.media.SpotifySearchResults
+import com.autodeck.headunit.media.SpotifyTokenMissingException
+import com.autodeck.headunit.media.SpotifyWebApi
 import com.autodeck.headunit.media.WhatsAppNotificationItem
 import com.autodeck.headunit.navigation.GpsLocationState
 import com.autodeck.headunit.navigation.GpsNavigationTracker
+import com.autodeck.headunit.navigation.InAppRouteNavigator
+import com.autodeck.headunit.navigation.InAppRouteState
+import com.autodeck.headunit.navigation.RoutePoint
 import com.autodeck.protocol.camera.LumaGrid
 import com.autodeck.protocol.camera.ReverseStateMachine
 import com.autodeck.protocol.camera.ReverseTimingConfig
@@ -73,6 +81,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.osmdroid.views.MapView
 
 data class CameraDebugState(
@@ -90,6 +99,15 @@ data class HeadUnitUiState(
     val mediaState: MediaPlaybackState = MediaPlaybackState(),
     val whatsAppMessages: List<WhatsAppNotificationItem> = emptyList(),
     val gpsState: GpsLocationState = GpsLocationState(),
+    val route: InAppRouteState = InAppRouteState(),
+    val spotifyStatus: SpotifyLinkStatus = SpotifyLinkStatus.NOT_CONFIGURED,
+    val spotifyHondaPlaylists: List<SpotifyItem> = emptyList(),
+    val spotifyAllPlaylists: List<SpotifyItem> = emptyList(),
+    val spotifyRecent: List<SpotifyItem> = emptyList(),
+    val spotifySearchQuery: String = "",
+    val spotifySearchLoading: Boolean = false,
+    val spotifySearchResults: SpotifySearchResults = SpotifySearchResults(),
+    val spotifySearchError: String? = null,
     val weather: WeatherState = WeatherState(),
     val fuelEntries: List<FuelEntry> = emptyList(),
     val fuelSummary: FuelLogSummary = FuelLogSummary(),
@@ -136,6 +154,10 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     private val audioMonitor = AudioBtMonitor(appContext)
     private val mediaController = MediaAndNotificationController.get(appContext)
     private val gpsTracker = GpsNavigationTracker(appContext, scope)
+    private val routeNavigator = InAppRouteNavigator(scope)
+    private val spotifyWeb = SpotifyWebApi(appContext)
+    private var spotifyWebAuthAskedAtMs = 0L
+    private var spotifySearchJob: Job? = null
 
     private val ignitionMonitor = IgnitionBluetoothMonitor(
         appContext = appContext,
@@ -383,9 +405,110 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         return gpsTracker.openPreferredMapApp(pkg)
     }
 
+    /** Navegação curva-a-curva dentro do próprio HondaDeck (mapa + OSRM). */
     fun navigateToDestination(destination: String): Boolean {
+        if (destination.isBlank()) return false
+        val gps = _uiState.value.gpsState
+        routeNavigator.startNavigation(destination, RoutePoint(gps.latitude, gps.longitude))
+        return true
+    }
+
+    fun stopInAppNavigation() = routeNavigator.stopNavigation()
+
+    /** Abre o mesmo destino no app de mapa externo (Google Maps/Waze), quando o usuário quiser trânsito ao vivo. */
+    fun navigateExternally(destination: String): Boolean {
         val pkg = _uiState.value.config.preferredMapPackage
+            .takeIf { it != "INTERNAL_MAP" } ?: "com.google.android.apps.maps"
         return gpsTracker.navigateToDestination(destination, pkg)
+    }
+
+    fun connectSpotify(activityContext: Context) = mediaController.spotify.connect(activityContext)
+    fun setSpotifyAuthRequester(requester: (() -> Unit)?) { mediaController.spotify.authRequester = requester }
+    fun onSpotifyAuthorized(activityContext: Context) = mediaController.spotify.onAuthorized(activityContext)
+    fun onSpotifyAuthFailed(reason: String) = mediaController.spotify.onAuthFailed(reason)
+    fun spotifyToggleShuffle() { mediaController.spotify.toggleShuffle() }
+    fun spotifyToggleRepeat() { mediaController.spotify.toggleRepeat() }
+
+    // --- Spotify Web API: busca, playlists "Honda" e tocadas recentemente ---
+    fun onSpotifyToken(token: String, expiresInSec: Int) {
+        spotifyWeb.setToken(token, expiresInSec)
+        refreshSpotifyPlaylists()
+        val q = _uiState.value.spotifySearchQuery
+        if (q.isNotBlank() && _uiState.value.spotifySearchError != null) searchSpotify(q)
+    }
+
+    /** Pede a tela de autorização para obter o token da Web API (só quando o usuário pede ou uma vez ao conectar). */
+    fun requestSpotifyWebAuth() {
+        mediaController.spotify.authRequester?.invoke()
+    }
+
+    fun refreshSpotifyPlaylists() {
+        scope.launch {
+            var missingToken = false
+            runCatching { spotifyWeb.myPlaylists() }
+                .onSuccess { all ->
+                    _uiState.update {
+                        it.copy(
+                            spotifyAllPlaylists = all,
+                            spotifyHondaPlaylists = SpotifyWebApi.filterHonda(all)
+                        )
+                    }
+                }
+                .onFailure { err ->
+                    if (err is SpotifyTokenMissingException) missingToken = true
+                }
+
+            runCatching { spotifyWeb.recentlyPlayed() }
+                .onSuccess { recent ->
+                    _uiState.update { it.copy(spotifyRecent = recent) }
+                }
+                .onFailure { err ->
+                    if (err is SpotifyTokenMissingException) missingToken = true
+                }
+
+            // Token vencido (dura ~1 h): renova pela tela do Spotify, no máximo a cada 10 min
+            val now = System.currentTimeMillis()
+            if (missingToken && now - spotifyWebAuthAskedAtMs > 10 * 60_000L) {
+                spotifyWebAuthAskedAtMs = now
+                withContext(Dispatchers.Main) { requestSpotifyWebAuth() }
+            }
+        }
+    }
+
+    fun searchSpotify(query: String) {
+        val q = query.trim()
+        spotifySearchJob?.cancel()
+        _uiState.update { it.copy(spotifySearchQuery = q, spotifySearchError = null) }
+        if (q.length < 2) {
+            _uiState.update { it.copy(spotifySearchResults = SpotifySearchResults(), spotifySearchLoading = false) }
+            return
+        }
+        spotifySearchJob = scope.launch {
+            delay(350L) // espera o usuário parar de digitar
+            _uiState.update { it.copy(spotifySearchLoading = true) }
+            runCatching { spotifyWeb.search(q) }
+                .onSuccess { res -> _uiState.update { it.copy(spotifySearchLoading = false, spotifySearchResults = res) } }
+                .onFailure { err ->
+                    _uiState.update {
+                        it.copy(
+                            spotifySearchLoading = false,
+                            spotifySearchError = if (err is SpotifyTokenMissingException) {
+                                "Toque em \"Autorizar\" para buscar no Spotify"
+                            } else {
+                                "Não foi possível buscar agora (${err.message})"
+                            }
+                        )
+                    }
+                }
+        }
+    }
+
+    fun playSpotifyUri(uri: String) {
+        if (mediaController.spotify.isConnected) {
+            mediaController.spotify.play(uri)
+        } else {
+            mediaController.launchPreferredMusicApp()
+        }
     }
 
     fun downloadOfflineMap(mapView: MapView, radiusKm: Double = 8.0) {
@@ -778,6 +901,18 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         scope.launch {
             gpsTracker.state.collect { gps ->
                 _uiState.update { it.copy(gpsState = gps) }
+                if (gps.hasFix) routeNavigator.onLocation(RoutePoint(gps.latitude, gps.longitude))
+            }
+        }
+        scope.launch {
+            routeNavigator.state.collect { route ->
+                _uiState.update { it.copy(route = route) }
+            }
+        }
+        scope.launch {
+            mediaController.spotify.status.collect { st ->
+                _uiState.update { it.copy(spotifyStatus = st) }
+                if (st == SpotifyLinkStatus.CONNECTED) refreshSpotifyPlaylists()
             }
         }
         scope.launch { weatherLoop() }

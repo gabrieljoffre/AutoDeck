@@ -26,6 +26,10 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.autodeck.headunit.service.HeadUnitForegroundService
+import com.autodeck.headunit.media.SpotifyWebApi
+import com.spotify.sdk.android.auth.AuthorizationClient
+import com.spotify.sdk.android.auth.AuthorizationRequest
+import com.spotify.sdk.android.auth.AuthorizationResponse
 import com.autodeck.headunit.ui.HeadUnitViewModel
 import com.autodeck.headunit.ui.screens.BootSplashOverlay
 import com.autodeck.headunit.ui.screens.HeadUnitScreen
@@ -42,8 +46,36 @@ class MainActivity : ComponentActivity() {
         viewModel.onPermissionsUpdated()
     }
 
+    /** Tela oficial de autorização do Spotify (escopo app-remote-control). */
+    private val spotifyAuthLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val response = AuthorizationClient.getResponse(result.resultCode, result.data)
+        when (response.type) {
+            AuthorizationResponse.Type.TOKEN -> {
+                response.accessToken?.let { viewModel.onSpotifyToken(it, response.expiresIn) }
+                viewModel.onSpotifyAuthorized(this)
+            }
+            AuthorizationResponse.Type.ERROR -> viewModel.onSpotifyAuthFailed(response.error ?: "erro")
+            else -> viewModel.onSpotifyAuthFailed("cancelado")
+        }
+    }
+
+    private fun launchSpotifyAuth() {
+        if (BuildConfig.SPOTIFY_CLIENT_ID.isBlank()) return
+        val request = AuthorizationRequest.Builder(
+            BuildConfig.SPOTIFY_CLIENT_ID,
+            AuthorizationResponse.Type.TOKEN,
+            BuildConfig.SPOTIFY_REDIRECT_URI
+        ).setScopes(SpotifyWebApi.SCOPES)
+            .build()
+        runCatching { spotifyAuthLauncher.launch(AuthorizationClient.createLoginActivityIntent(this, request)) }
+            .onFailure { viewModel.onSpotifyAuthFailed(it.javaClass.simpleName) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        viewModel.setSpotifyAuthRequester { launchSpotifyAuth() }
         enableEdgeToEdge()
         runCatching { HeadUnitForegroundService.start(this) }
         applyImmersiveFullscreen()
@@ -112,6 +144,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        viewModel.setSpotifyAuthRequester(null)
+        super.onDestroy()
     }
 
     override fun onStart() {

@@ -36,6 +36,12 @@ android {
         // Chave padrão do Copilot embutida no APK: o tablet já sai configurado.
         // Uma chave digitada nas Configurações do app tem prioridade.
         buildConfigField("String", "GEMINI_API_KEY", "\"${localKey("GEMINI_API_KEY")}\"")
+
+        manifestPlaceholders["redirectSchemeName"] = "hondadeck"
+        manifestPlaceholders["redirectHostName"] = "spotify-callback"
+        manifestPlaceholders["redirectPathPattern"] = ".*"
+        buildConfigField("String", "SPOTIFY_CLIENT_ID", "\"${localProps.getProperty("spotify.clientId", "")}\"")
+        buildConfigField("String", "SPOTIFY_REDIRECT_URI", "\"${localProps.getProperty("spotify.redirectUri", "hondadeck://spotify-callback")}\"")
     }
 
     externalNativeBuild {
@@ -118,6 +124,9 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.osmdroid.android)
+    implementation(files("libs/spotify-app-remote-release-0.8.0.aar"))
+    implementation("com.google.code.gson:gson:2.11.0")
+    implementation("com.spotify.android:auth:2.1.2")
 
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.compose.ui.tooling)
