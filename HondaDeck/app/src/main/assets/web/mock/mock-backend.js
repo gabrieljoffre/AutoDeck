@@ -551,6 +551,13 @@ export function installMockBackend() {
         { name: 'Taramps Som', address: 'AA:BB:CC:11:22:33' }
       ],
       ignitionDevice: 'AA:BB:CC:11:22:33',
+      cameraStandardMode: 'AUTO',
+      cameraDetectedStandard: 'PAL_M',
+      cameraDetectedLabel: 'PAL-M (720x480 · 60Hz)',
+      cameraStatusLabel: 'EasyCap STK1160 • Cam 1 • Auto (PAL-M)',
+      cameraBrightness: 50,
+      cameraContrast: 50,
+      cameraSaturation: 50,
       version: '3.0.0'
     }
   };

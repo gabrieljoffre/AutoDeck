@@ -44,5 +44,7 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
     fun attachCameraSurface(surface: Surface?) = runtime.attachCameraSurface(surface)
     fun selectCameraChannel(channel: Int) = runtime.selectCameraChannel(channel)
     fun setCameraStandardNtsc(isNtsc: Boolean) = runtime.setCameraStandardNtsc(isNtsc)
+    fun setCameraStandardMode(mode: com.autodeck.protocol.camera.CameraVideoStandardMode) =
+        runtime.setCameraStandardMode(mode)
     fun refreshUsbDevices() = runtime.refreshUsbDevices()
 }

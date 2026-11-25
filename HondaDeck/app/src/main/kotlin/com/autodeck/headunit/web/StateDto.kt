@@ -427,6 +427,13 @@ object StateDto {
             put("ignitionDevice", ui.config.ignitionBtMac)
             put("preferredMapPackage", ui.config.preferredMapPackage)
             put("preferredMusicPackage", ui.config.preferredMusicPackage)
+            put("cameraStandardMode", ui.config.cameraStandardMode.name)
+            put("cameraDetectedStandard", ui.cameraHardware.detectedStandard.name)
+            put("cameraDetectedLabel", ui.cameraHardware.detectedStandard.label)
+            put("cameraStatusLabel", ui.cameraHardware.connectedDeviceLabel)
+            put("cameraBrightness", ui.config.cameraBrightness.coerceIn(0, 100))
+            put("cameraContrast", ui.config.cameraContrast.coerceIn(0, 100))
+            put("cameraSaturation", ui.config.cameraSaturation.coerceIn(0, 100))
             put("version", extras.appVersion)
         }
 

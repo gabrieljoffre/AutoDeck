@@ -52,6 +52,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.Canvas
 import com.autodeck.headunit.service.HeadUnitUiState
 import com.autodeck.headunit.ui.theme.AutoDeckColors
+import com.autodeck.protocol.camera.AnalogVideoStandard
+import com.autodeck.protocol.camera.CameraVideoStandardMode
 import com.autodeck.protocol.camera.GuidelineCalibration
 import com.autodeck.protocol.camera.ReverseCameraState
 import com.autodeck.protocol.obd2.AlertSeverity
@@ -61,11 +63,12 @@ import com.autodeck.protocol.obd2.ObdAlert
 @Composable
 fun CameraInputControlRow(
     selectedChannel: Int,
-    isNtsc: Boolean,
+    standardMode: CameraVideoStandardMode,
+    detectedStandard: AnalogVideoStandard,
     statusRegHex: String?,
     showDiagnostic: Boolean,
     onSelectCameraChannel: (Int) -> Unit,
-    onSetCameraStandardNtsc: (Boolean) -> Unit
+    onSetCameraStandardMode: (CameraVideoStandardMode) -> Unit
 ) {
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -92,24 +95,40 @@ fun CameraInputControlRow(
             }
         }
         Spacer(modifier = Modifier.width(6.dp))
-        listOf(true to "NTSC", false to "PAL").forEach { (isNtscOpt, label) ->
-            val selected = isNtsc == isNtscOpt
+        listOf(
+            CameraVideoStandardMode.AUTO to "Auto",
+            CameraVideoStandardMode.NTSC to "NTSC",
+            CameraVideoStandardMode.PAL_M to "PAL-M",
+            CameraVideoStandardMode.PAL to "PAL"
+        ).forEach { (modeOpt, label) ->
+            val selected = standardMode == modeOpt
             if (selected) {
                 Button(
-                    onClick = { onSetCameraStandardNtsc(isNtscOpt) },
+                    onClick = { onSetCameraStandardMode(modeOpt) },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                 ) { Text(label, fontSize = 12.sp) }
             } else {
                 OutlinedButton(
-                    onClick = { onSetCameraStandardNtsc(isNtscOpt) },
+                    onClick = { onSetCameraStandardMode(modeOpt) },
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                 ) { Text(label, fontSize = 12.sp) }
             }
         }
-        if (showDiagnostic && statusRegHex != null) {
+        if (showDiagnostic) {
             Spacer(modifier = Modifier.width(6.dp))
+            val diagText = buildString {
+                append(detectedStandard.shortLabel)
+                append(" ")
+                append(detectedStandard.width)
+                append("×")
+                append(detectedStandard.height)
+                if (statusRegHex != null) {
+                    append(" · 1F=")
+                    append(statusRegHex)
+                }
+            }
             Text(
-                text = "Reg1F=$statusRegHex",
+                text = diagText,
                 color = AutoDeckColors.AccentCyan,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -125,7 +144,7 @@ fun ReverseCameraOverlay(
     uiState: HeadUnitUiState,
     onAttachCameraSurface: (Surface?) -> Unit,
     onSelectCameraChannel: (Int) -> Unit,
-    onSetCameraStandardNtsc: (Boolean) -> Unit,
+    onSetCameraStandardMode: (CameraVideoStandardMode) -> Unit,
     onToggleMirror: () -> Unit,
     onToggleGuidelines: () -> Unit,
     onToggleSimulatedReverse: () -> Unit,
@@ -278,11 +297,12 @@ fun ReverseCameraOverlay(
             ) {
                 CameraInputControlRow(
                     selectedChannel = uiState.config.cameraInputChannel,
-                    isNtsc = uiState.config.cameraIsNtsc,
+                    standardMode = uiState.config.cameraStandardMode,
+                    detectedStandard = uiState.cameraHardware.detectedStandard,
                     statusRegHex = uiState.cameraHardware.lastStatusRegHex,
                     showDiagnostic = true,
                     onSelectCameraChannel = onSelectCameraChannel,
-                    onSetCameraStandardNtsc = onSetCameraStandardNtsc
+                    onSetCameraStandardMode = onSetCameraStandardMode
                 )
             }
         }

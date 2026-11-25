@@ -17,23 +17,59 @@ object Stk1160NativeBridge {
     }
 
     @JvmStatic
-    external fun nativeInitChip(fd: Int, channel: Int, isNtsc: Boolean): Int
+    external fun nativeInitChip(
+        fd: Int,
+        channel: Int,
+        standardId: Int,
+        autoDetectFreq: Boolean,
+        regBrightness: Int,
+        regContrast: Int,
+        regSaturation: Int
+    ): Int
 
     @JvmStatic
     external fun nativeSelectChannel(fd: Int, channel: Int): Int
 
     @JvmStatic
-    external fun nativeSetStandard(fd: Int, isNtsc: Boolean): Int
+    external fun nativeSetStandard(
+        fd: Int,
+        standardId: Int,
+        autoDetectFreq: Boolean,
+        colorOnly: Boolean
+    ): Int
+
+    @JvmStatic
+    external fun nativeSetImageAdjustments(
+        fd: Int,
+        regBrightness: Int,
+        regContrast: Int,
+        regSaturation: Int
+    ): Int
 
     @JvmStatic
     external fun nativeReadSignalStatus(fd: Int): Int
+
+    /**
+     * Lê `0x1F` (byte baixo) e `0x1E` (byte alto) do SAA7113/GM7113C.
+     * Retorna negativo em erro de I2C.
+     */
+    @JvmStatic
+    external fun nativeReadExtendedStatus(fd: Int): Int
+
+    /**
+     * Consulta o bit `CODE` (travamento de subportadora de cor) do SAA7113/GM7113C.
+     * Retorna `1` = cor travada, `0` = sem cor para o padrão atual, `< 0` = erro I2C.
+     */
+    @JvmStatic
+    external fun nativeProbeColorLock(fd: Int): Int
 
     @JvmStatic
     external fun nativeStartStreaming(
         fd: Int,
         altSetting: Int,
         isoPacketSize: Int,
-        isNtsc: Boolean,
+        standardId: Int,
+        autoDetectFreq: Boolean,
         surface: Surface?
     ): Int
 
@@ -46,6 +82,12 @@ object Stk1160NativeBridge {
     /** false quando a thread ISO nativa terminou sozinha (falha de URB, poll ou USB removido). */
     @JvmStatic
     external fun nativeIsStreaming(): Boolean
+
+    /**
+     * Preenche `[framesRendered, framesDropped, isoPacketErrors, lastFrameAgeMs, stalledFlag]`.
+     */
+    @JvmStatic
+    external fun nativeGetStreamStats(outStats5: LongArray): Boolean
 
     @JvmStatic
     external fun nativeStopStreaming()

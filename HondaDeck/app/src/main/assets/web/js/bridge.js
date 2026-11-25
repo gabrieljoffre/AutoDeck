@@ -243,6 +243,13 @@ export const DEFAULT_STATE = {
     obdDevice: '',
     pairedDevices: [],
     ignitionDevice: '',
+    cameraStandardMode: 'AUTO',
+    cameraDetectedStandard: 'PAL_M',
+    cameraDetectedLabel: 'PAL-M (720x480 · 60Hz)',
+    cameraStatusLabel: '',
+    cameraBrightness: 50,
+    cameraContrast: 50,
+    cameraSaturation: 50,
     version: '3.0.0'
   }
 };

@@ -3,6 +3,8 @@ package com.autodeck.headunit.data
 import android.content.Context
 import androidx.core.content.edit
 import com.autodeck.headunit.BuildConfig
+import com.autodeck.protocol.camera.CameraImageAdjustments
+import com.autodeck.protocol.camera.CameraVideoStandardMode
 import com.autodeck.protocol.camera.GuidelineCalibration
 import com.autodeck.protocol.camera.NoSignalCalibration
 import com.autodeck.protocol.obd2.AlertThresholds
@@ -80,6 +82,10 @@ data class HeadUnitConfig(
     val cameraProductId: Int? = 0x0408,
     val cameraInputChannel: Int = 0,
     val cameraIsNtsc: Boolean = true,
+    val cameraStandardMode: CameraVideoStandardMode = CameraVideoStandardMode.AUTO,
+    val cameraBrightness: Int = CameraImageAdjustments.DEFAULT_LEVEL,
+    val cameraContrast: Int = CameraImageAdjustments.DEFAULT_LEVEL,
+    val cameraSaturation: Int = CameraImageAdjustments.DEFAULT_LEVEL,
     val noSignalCalibration: NoSignalCalibration? = null,
     val guidelines: GuidelineCalibration = GuidelineCalibration(),
     val alertThresholds: AlertThresholds = AlertThresholds(),
@@ -163,6 +169,10 @@ class HeadUnitPreferences(context: Context) {
             cameraProductId = camPid?.takeIf { it > 0 },
             cameraInputChannel = prefs.getInt(KEY_CAMERA_INPUT_CH, 0).coerceIn(0, 3),
             cameraIsNtsc = prefs.getBoolean(KEY_CAMERA_IS_NTSC, true),
+            cameraStandardMode = CameraVideoStandardMode.parse(prefs.getString(KEY_CAMERA_STANDARD_MODE, null)),
+            cameraBrightness = prefs.getInt(KEY_CAMERA_BRIGHTNESS, CameraImageAdjustments.DEFAULT_LEVEL).coerceIn(0, 100),
+            cameraContrast = prefs.getInt(KEY_CAMERA_CONTRAST, CameraImageAdjustments.DEFAULT_LEVEL).coerceIn(0, 100),
+            cameraSaturation = prefs.getInt(KEY_CAMERA_SATURATION, CameraImageAdjustments.DEFAULT_LEVEL).coerceIn(0, 100),
             noSignalCalibration = loadNoSignalCalibration(),
             guidelines = GuidelineCalibration(
                 topWidthRatio = prefs.getFloat(KEY_GUIDE_TOP_W, 0.42f),
@@ -251,6 +261,10 @@ class HeadUnitPreferences(context: Context) {
             }
             putInt(KEY_CAMERA_INPUT_CH, config.cameraInputChannel.coerceIn(0, 3))
             putBoolean(KEY_CAMERA_IS_NTSC, config.cameraIsNtsc)
+            putString(KEY_CAMERA_STANDARD_MODE, config.cameraStandardMode.name)
+            putInt(KEY_CAMERA_BRIGHTNESS, config.cameraBrightness.coerceIn(0, 100))
+            putInt(KEY_CAMERA_CONTRAST, config.cameraContrast.coerceIn(0, 100))
+            putInt(KEY_CAMERA_SATURATION, config.cameraSaturation.coerceIn(0, 100))
 
             val cal = config.noSignalCalibration
             if (cal != null) {
@@ -343,6 +357,10 @@ class HeadUnitPreferences(context: Context) {
         const val KEY_CAMERA_PID = "camera_pid"
         const val KEY_CAMERA_INPUT_CH = "camera_input_ch"
         const val KEY_CAMERA_IS_NTSC = "camera_is_ntsc"
+        const val KEY_CAMERA_STANDARD_MODE = "camera_standard_mode"
+        const val KEY_CAMERA_BRIGHTNESS = "camera_brightness"
+        const val KEY_CAMERA_CONTRAST = "camera_contrast"
+        const val KEY_CAMERA_SATURATION = "camera_saturation"
         const val KEY_NO_SIG_MEAN = "no_sig_mean"
         const val KEY_NO_SIG_STD = "no_sig_std"
         const val KEY_NO_SIG_TOL = "no_sig_tol"

@@ -388,6 +388,22 @@ class WebBridge(
                     runtime.updateConfig { it.copy(preferredMusicPackage = pkg, preferredMusicLabel = label) }
                 }
             }
+            "cameraStandardMode" -> {
+                val mode = com.autodeck.protocol.camera.CameraVideoStandardMode.parse(args.optString("value"))
+                runtime.setCameraStandardMode(mode)
+            }
+            "cameraBrightness" -> {
+                val v = args.optFiniteDouble("value")?.roundToInt() ?: return
+                runtime.setCameraImageAdjustments(brightness = v)
+            }
+            "cameraContrast" -> {
+                val v = args.optFiniteDouble("value")?.roundToInt() ?: return
+                runtime.setCameraImageAdjustments(contrast = v)
+            }
+            "cameraSaturation" -> {
+                val v = args.optFiniteDouble("value")?.roundToInt() ?: return
+                runtime.setCameraImageAdjustments(saturation = v)
+            }
             else -> Log.w(TAG, "Chave desconhecida em settings.set: '$key'")
         }
     }

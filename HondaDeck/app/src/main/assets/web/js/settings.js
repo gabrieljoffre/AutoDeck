@@ -1064,6 +1064,83 @@ function buildSystem(root) {
   const tabletAppsGrid = el('div', { className: 'apps-launcher-grid', 'data-test': 'settings-tablet-apps' });
   const version = el('span', { className: 'settings-sub' }, '');
 
+  // Controles da Câmera de Ré (padrão de vídeo + qualidade no SAA7113)
+  const camStdButtons = [
+    ['AUTO', 'Automático', 'camera-std-auto'],
+    ['NTSC', 'NTSC', 'camera-std-ntsc'],
+    ['PAL_M', 'PAL-M', 'camera-std-palm'],
+    ['PAL_N', 'PAL-N', 'camera-std-paln'],
+    ['PAL', 'PAL', 'camera-std-pal']
+  ].map(([val, label, testId]) => {
+    const btn = el(
+      'button',
+      {
+        className: 'btn-outline',
+        type: 'button',
+        'data-test': testId,
+        onClick: () => sendCommand('settings.set', { key: 'cameraStandardMode', value: val })
+      },
+      label
+    );
+    return { val, btn };
+  });
+  const camStatusSub = el('span', { className: 'settings-sub', 'data-test': 'camera-status-label' }, '');
+
+  function camRangeRow(label, key, testId) {
+    const valSpan = el('span', { style: "font-family:'Chakra Petch',sans-serif;font-size:14px;font-weight:600;min-width:38px;text-align:right;color:var(--text-primary)" }, '50');
+    const input = el('input', {
+      type: 'range',
+      min: '0',
+      max: '100',
+      step: '1',
+      value: '50',
+      'aria-label': label,
+      'data-test': testId,
+      style: 'flex:1;height:36px;margin:0;accent-color:var(--accent);cursor:pointer'
+    });
+    input.addEventListener('input', () => {
+      valSpan.textContent = input.value;
+    });
+    input.addEventListener('change', () => {
+      const num = Math.max(0, Math.min(100, Math.round(Number(input.value))));
+      valSpan.textContent = String(num);
+      sendCommand('settings.set', { key, value: num });
+    });
+    const row = el(
+      'div',
+      { style: 'display:flex;align-items:center;gap:12px' },
+      el('span', { style: 'min-width:90px;font-size:14px;color:var(--text-secondary)' }, label),
+      input,
+      valSpan
+    );
+    return {
+      row,
+      set(v) {
+        const clamped = Math.max(0, Math.min(100, Math.round(Number(v ?? 50))));
+        if (document.activeElement !== input) input.value = String(clamped);
+        valSpan.textContent = String(clamped);
+      }
+    };
+  }
+
+  const camBri = camRangeRow('Brilho', 'cameraBrightness', 'camera-brightness');
+  const camCon = camRangeRow('Contraste', 'cameraContrast', 'camera-contrast');
+  const camSat = camRangeRow('Saturação', 'cameraSaturation', 'camera-saturation');
+  const camResetBtn = el(
+    'button',
+    {
+      className: 'btn-outline',
+      type: 'button',
+      'data-test': 'camera-quality-reset',
+      onClick: () => {
+        sendCommand('settings.set', { key: 'cameraBrightness', value: 50 });
+        sendCommand('settings.set', { key: 'cameraContrast', value: 50 });
+        sendCommand('settings.set', { key: 'cameraSaturation', value: 50 });
+      }
+    },
+    'Restaurar imagem'
+  );
+
   root.append(
     header('Sistema', 'Apps padrão, aplicativos instalados, Bluetooth de ignição, mapa offline e câmera de ré.'),
     el(
@@ -1100,8 +1177,17 @@ function buildSystem(root) {
       'div',
       { className: 'settings-card-block' },
       kicker('CÂMERA DE RÉ'),
-      el('span', { className: 'settings-sub' }, 'Abre/fecha a câmera de ré para teste.'),
-      el('div', { style: 'display:flex' }, el('button', { className: 'btn-outline', type: 'button', 'data-test': 'settings-camera-test', onClick: () => sendCommand('camera.toggle') }, 'Testar câmera'))
+      el('span', { className: 'settings-sub' }, 'Padrão de vídeo analógico (EasyCap STK1160 / SAA7113). No Brasil, Automático detecta PAL-M, NTSC, PAL-N e PAL.'),
+      el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, ...camStdButtons.map((b) => b.btn)),
+      camStatusSub,
+      kicker('QUALIDADE DA IMAGEM'),
+      el('div', { style: 'display:flex;flex-direction:column;gap:8px' }, camBri.row, camCon.row, camSat.row),
+      el(
+        'div',
+        { style: 'display:flex;gap:10px;flex-wrap:wrap;margin-top:4px' },
+        el('button', { className: 'btn-outline', type: 'button', 'data-test': 'settings-camera-test', onClick: () => sendCommand('camera.toggle') }, 'Testar câmera'),
+        camResetBtn
+      )
     ),
     el('div', { className: 'settings-card-block' }, kicker('VERSÃO'), version)
   );
@@ -1194,6 +1280,28 @@ function buildSystem(root) {
     ignSel.replaceChildren(...opts);
     ignSel.value = s.settings.ignitionDevice || '';
   });
+  reg(
+    tabUpdaters,
+    (s) => `${s.settings.cameraStandardMode}|${s.settings.cameraDetectedLabel}|${s.settings.cameraStatusLabel}`,
+    (s) => {
+      const mode = String(s.settings.cameraStandardMode || 'AUTO').toUpperCase();
+      for (const { val, btn } of camStdButtons) {
+        btn.classList.toggle('active', val === mode);
+      }
+      const det = s.settings.cameraDetectedLabel || '';
+      const hw = s.settings.cameraStatusLabel || '';
+      camStatusSub.textContent = [det ? `Padrão ativo: ${det}` : '', hw].filter(Boolean).join(' · ');
+    }
+  );
+  reg(
+    tabUpdaters,
+    (s) => `${s.settings.cameraBrightness}|${s.settings.cameraContrast}|${s.settings.cameraSaturation}`,
+    (s) => {
+      camBri.set(s.settings.cameraBrightness);
+      camCon.set(s.settings.cameraContrast);
+      camSat.set(s.settings.cameraSaturation);
+    }
+  );
   reg(tabUpdaters, (s) => s.settings.version, (s) => {
     version.textContent = `HondaDeck ${s.settings.version || ''} · layout Órbita`;
   });

@@ -65,6 +65,8 @@ import com.autodeck.headunit.navigation.PlaceSearch
 import com.autodeck.headunit.navigation.PlaceSearchState
 import com.autodeck.headunit.navigation.RoutePoint
 import com.autodeck.headunit.web.WebResourceRouter
+import com.autodeck.protocol.camera.CameraImageAdjustments
+import com.autodeck.protocol.camera.CameraVideoStandardMode
 import com.autodeck.protocol.camera.LumaGrid
 import com.autodeck.protocol.camera.ReverseStateMachine
 import com.autodeck.protocol.camera.ReverseTimingConfig
@@ -1871,7 +1873,27 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     }
 
     fun setCameraStandardNtsc(isNtsc: Boolean) {
-        updateConfig { it.copy(cameraIsNtsc = isNtsc) }
+        val mode = if (isNtsc) CameraVideoStandardMode.NTSC else CameraVideoStandardMode.PAL
+        updateConfig { it.copy(cameraIsNtsc = isNtsc, cameraStandardMode = mode) }
+    }
+
+    fun setCameraStandardMode(mode: CameraVideoStandardMode) {
+        updateConfig {
+            it.copy(
+                cameraStandardMode = mode,
+                cameraIsNtsc = mode.forcedStandard?.is60Hz ?: it.cameraIsNtsc
+            )
+        }
+    }
+
+    fun setCameraImageAdjustments(brightness: Int? = null, contrast: Int? = null, saturation: Int? = null) {
+        updateConfig { cfg ->
+            cfg.copy(
+                cameraBrightness = (brightness ?: cfg.cameraBrightness).coerceIn(0, 100),
+                cameraContrast = (contrast ?: cfg.cameraContrast).coerceIn(0, 100),
+                cameraSaturation = (saturation ?: cfg.cameraSaturation).coerceIn(0, 100)
+            )
+        }
     }
 
     /**
@@ -2398,7 +2420,14 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         mediaController.setPreferredMusicApp(config.preferredMusicPackage, config.preferredMusicLabel)
         carAgent.onConfigUpdated(config)
         usbCamera.selectChannel(config.cameraInputChannel)
-        usbCamera.setStandard(config.cameraIsNtsc)
+        usbCamera.setStandardMode(config.cameraStandardMode)
+        usbCamera.setImageAdjustments(
+            CameraImageAdjustments(
+                brightness = config.cameraBrightness,
+                contrast = config.cameraContrast,
+                saturation = config.cameraSaturation
+            )
+        )
         coordinator.alertThresholds = config.alertThresholds
         coordinator.configure(
             setupCompleted = config.setupCompleted,

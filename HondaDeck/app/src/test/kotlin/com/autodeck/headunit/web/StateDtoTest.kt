@@ -332,4 +332,27 @@ class StateDtoTest {
         assertTrue("bridge.js deve declarar DEFAULT_STATE.phone", content.contains("phone:"))
         assertTrue("bridge.js deve normalizar s.phone", content.contains("asObj(s.phone)"))
     }
+
+    @Test
+    fun `serializa padrao de video e ajustes de imagem da camera de re em settings`() {
+        val ui = HeadUnitUiState(
+            config = HeadUnitConfig(
+                cameraStandardMode = com.autodeck.protocol.camera.CameraVideoStandardMode.PAL_M,
+                cameraBrightness = 62,
+                cameraContrast = 55,
+                cameraSaturation = 48
+            ),
+            cameraHardware = com.autodeck.headunit.hardware.CameraHardwareStatus(
+                detectedStandard = com.autodeck.protocol.camera.AnalogVideoStandard.PAL_M,
+                connectedDeviceLabel = "EasyCap STK1160 • Cam 1 • PAL-M (720×480)"
+            )
+        )
+        val settings = StateDto.buildStateJson(ui).getJSONObject("settings")
+        assertEquals("PAL_M", settings.getString("cameraStandardMode"))
+        assertEquals("PAL_M", settings.getString("cameraDetectedStandard"))
+        assertEquals(62, settings.getInt("cameraBrightness"))
+        assertEquals(55, settings.getInt("cameraContrast"))
+        assertEquals(48, settings.getInt("cameraSaturation"))
+        assertTrue(settings.getString("cameraStatusLabel").contains("PAL-M"))
+    }
 }

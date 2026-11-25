@@ -166,7 +166,7 @@ class MainActivity : ComponentActivity() {
                             uiState = uiState,
                             onAttachCameraSurface = { viewModel.attachCameraSurface(it) },
                             onSelectCameraChannel = { viewModel.selectCameraChannel(it) },
-                            onSetCameraStandardNtsc = { viewModel.setCameraStandardNtsc(it) },
+                            onSetCameraStandardMode = { viewModel.setCameraStandardMode(it) },
                             onToggleMirror = {
                                 viewModel.updateConfig {
                                     it.copy(guidelines = it.guidelines.copy(mirrorHorizontal = !it.guidelines.mirrorHorizontal))
