@@ -200,7 +200,7 @@ button:active {
   margin-top: 6px;
 }
 
-/* ======================== CANVAS FUNDO SYNTHWAVE ======================== */
+/* ======================== CANVAS FUNDO & CAMADA GLOBAL DO MAPA ======================== */
 #bg-canvas {
   position: fixed;
   inset: 0;
@@ -208,6 +208,58 @@ button:active {
   height: 100%;
   z-index: 0;
   pointer-events: none;
+}
+
+.global-map-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  background: #06090F;
+  pointer-events: auto;
+}
+
+.global-map-slot {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Degradês laterais + topo/base fundindo o mapa nas colunas esquerda/direita */
+.global-map-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 410;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg,
+      rgba(6, 9, 15, 0.96) 0%,
+      rgba(6, 9, 15, 0.88) 23%,
+      rgba(6, 9, 15, 0.34) 35%,
+      rgba(6, 9, 15, 0.02) 46%,
+      rgba(6, 9, 15, 0.02) 58%,
+      rgba(6, 9, 15, 0.40) 70%,
+      rgba(6, 9, 15, 0.90) 80%,
+      rgba(6, 9, 15, 0.97) 100%
+    ),
+    linear-gradient(180deg,
+      rgba(6, 9, 15, 0.92) 0%,
+      rgba(6, 9, 15, 0.24) 14%,
+      rgba(6, 9, 15, 0.00) 28%,
+      rgba(6, 9, 15, 0.00) 75%,
+      rgba(6, 9, 15, 0.84) 91%,
+      rgba(6, 9, 15, 0.97) 100%
+    );
+  transition: opacity 0.42s cubic-bezier(0.2, 0.85, 0.25, 1);
+}
+
+.global-map-layer.map-expanded .global-map-scrim {
+  opacity: 0.26;
+}
+
+.global-map-layer.map-fullscreen .global-map-scrim {
+  opacity: 0;
 }
 
 /* ======================== TELA DE INTRODUÇÃO ======================== */
@@ -237,18 +289,16 @@ button:active {
 }
 
 #intro-emblem {
-  width: 46px;
-  height: 38px;
-  border-radius: 9px 9px 13px 13px;
-  border: 2.5px solid var(--accent);
-  box-shadow: 0 0 28px var(--a35), inset 0 0 12px var(--a15);
+  width: 58px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-family: 'Chakra Petch', sans-serif;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
   color: var(--accent);
+  filter: drop-shadow(0 0 18px var(--a50));
   opacity: 0;
   transform: scale(0.35);
   transition: transform 0.65s cubic-bezier(0.2, 0.85, 0.25, 1), opacity 0.45s ease;
@@ -292,15 +342,16 @@ button:active {
 /* ======================== SHELL PRINCIPAL ======================== */
 .app-shell {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   width: 100%;
   height: 100%;
-  padding: 18px 24px 16px;
+  padding: 16px 24px 14px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   overflow: hidden;
   opacity: 1;
+  pointer-events: none;
   transition: opacity 0.55s ease;
 }
 
@@ -308,8 +359,28 @@ button:active {
   opacity: 0;
 }
 
+/* Música mostra o mapa no 1/4 livre, então só Ajustes escurece o fundo */
+.app-shell.mode-music-active {
+  pointer-events: auto;
+}
+
+.app-shell.mode-settings-active {
+  background: rgba(6, 9, 15, 0.84);
+  pointer-events: auto;
+}
+
 .app-shell.mode-settings-active {
   padding: 20px 24px;
+}
+
+.topbar,
+.dock-bar,
+.notif-banner,
+.call-banner,
+.voice-note-pill,
+.copilot-overlay,
+.copilot-ask-sheet {
+  pointer-events: auto;
 }
 
 /* ======================== TOPO ======================== */
@@ -430,11 +501,8 @@ button:active {
 }
 
 .top-emblem {
-  width: 46px;
-  height: 38px;
-  border-radius: 9px 9px 13px 13px;
-  border: 2.5px solid var(--accent);
-  box-shadow: 0 0 18px var(--a35);
+  width: 48px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -442,7 +510,8 @@ button:active {
   font-size: 22px;
   font-weight: 700;
   color: var(--accent);
-  transition: transform 0.75s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.45s ease, border-color 0.25s, box-shadow 0.25s, color 0.25s;
+  filter: drop-shadow(0 0 12px var(--a35));
+  transition: transform 0.75s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.45s ease, color 0.25s;
 }
 
 .top-brand-letters {
@@ -508,6 +577,7 @@ button:active {
   min-height: 0;
   position: relative;
   display: flex;
+  pointer-events: none;
 }
 
 .mode-view {
@@ -516,18 +586,80 @@ button:active {
   min-height: 0;
 }
 
-.card {
-  background: var(--bg-card-alpha);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid var(--border-subtle);
+.card,
+.cockpit-pill {
+  background: linear-gradient(160deg, rgba(16, 24, 38, 0.80) 0%, rgba(8, 12, 20, 0.88) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.52),
+    inset 0 1px 0 rgba(255, 255, 255, 0.11),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.42);
   border-radius: 22px;
 }
 
 .home-grid {
   display: grid;
-  grid-template-columns: 330px minmax(0, 1fr) 330px;
-  gap: 20px;
+  grid-template-columns: 388px minmax(0, 1fr) 334px;
+  gap: 18px;
+  align-items: stretch;
+  pointer-events: none;
+}
+
+.home-left-col,
+.home-right-col {
+  pointer-events: auto;
+  transition:
+    transform 0.42s cubic-bezier(0.2, 0.85, 0.25, 1),
+    opacity 0.36s ease,
+    filter 0.36s ease;
+  will-change: transform, opacity;
+}
+
+.app-shell.mode-map-active .home-left-col {
+  transform: translateX(-92px) scale(0.92);
+  opacity: 0.14;
+  filter: blur(1.2px);
+  pointer-events: none;
+}
+
+.app-shell.mode-map-active .home-right-col {
+  transform: translateX(92px) scale(0.92);
+  opacity: 0.14;
+  filter: blur(1.2px);
+  pointer-events: none;
+}
+
+.app-shell.mode-map-active .home-map-center {
+  display: none;
+}
+
+/* Mapa em tela cheia, Música e Veículo: velocímetro sai pela esquerda e o
+   Spotify pela direita; ao voltar, a mesma transição acontece ao contrário. */
+.app-shell.mode-map-full .home-left-col,
+.app-shell.mode-music-active .home-left-col,
+.app-shell.mode-vehicle-active .home-left-col {
+  transform: translateX(-125%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-shell.mode-map-full .home-right-col,
+.app-shell.mode-music-active .home-right-col,
+.app-shell.mode-vehicle-active .home-right-col {
+  transform: translateX(125%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.app-shell.mode-music-active .home-map-center,
+.app-shell.mode-vehicle-active .home-map-center {
+  display: none;
+}
+
+.app-shell.mode-map-full .home-map-center {
+  display: none;
 }
 
 /* Animação "abre para frente" nos modos 2/3 (350 ms) */
@@ -550,7 +682,7 @@ button:active {
   }
 }
 
-/* ======================== LEAFLET E MAPA ======================== */
+/* ======================== LEAFLET, GOOGLE MAPS & CÂMERA DRONE 3D ======================== */
 .leaflet-slot {
   position: absolute;
   inset: 0;
@@ -564,11 +696,98 @@ button:active {
   position: relative;
   width: 100%;
   height: 100%;
+  overflow: hidden;
   background: #0A1019;
 }
 
 .map-stage-wrap.map-theme-light {
   background: #E8EAED;
+}
+
+.map-drone-viewport {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  perspective: 1060px;
+  perspective-origin: 50% 42%;
+  transform-style: preserve-3d;
+}
+
+.map-camera-plane {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  width: 1520px;
+  height: 1420px;
+  margin-left: -760px;
+  margin-top: -710px;
+  transform-origin: 50% 54%;
+  transition: transform 0.42s cubic-bezier(0.2, 0.85, 0.25, 1);
+  will-change: transform;
+}
+
+.map-stage-wrap.is-mini-map .map-drone-viewport {
+  perspective: none;
+}
+
+/* MapLibre: câmera 3D real; o plano ocupa a tela sem transformação CSS */
+.maplibre-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: #070B12;
+}
+
+.map-stage-wrap.use-maplibre .map-drone-viewport {
+  perspective: none !important;
+}
+
+.map-stage-wrap.use-maplibre .map-camera-plane {
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  transform: none !important;
+  transition: none;
+}
+
+.hd-ml-car {
+  width: 92px;
+  height: 92px;
+  z-index: 5;
+  filter: drop-shadow(0 0 10px var(--a35));
+}
+
+.maplibregl-ctrl-attrib {
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+/* Degradê do mapa de drone para as laterais, topo e base (Início) */
+.map-stage-wrap.is-drone-home::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(5, 8, 13, 0.94) 0%, rgba(5, 8, 13, 0.6) 22%, rgba(5, 8, 13, 0) 38%, rgba(5, 8, 13, 0) 66%, rgba(5, 8, 13, 0.6) 79%, rgba(5, 8, 13, 0.94) 100%),
+    linear-gradient(180deg, rgba(5, 8, 13, 0.9) 0%, rgba(5, 8, 13, 0) 24%, rgba(5, 8, 13, 0) 80%, rgba(5, 8, 13, 0.75) 100%);
+}
+
+.map-stage-wrap.is-mini-map .map-camera-plane {
+  inset: 0;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  transform: none !important;
+  transition: none;
 }
 
 .leaflet-stage,
@@ -623,33 +842,54 @@ button:active {
 }
 
 .hd-car-rotator {
-  width: 52px;
-  height: 52px;
+  width: 58px;
+  height: 58px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.22s linear;
+  transition: transform 0.25s linear;
   will-change: transform;
 }
 
-/* Cartão do Mapa no modo Home */
-.map-home-card {
+/* Centro da Home: janela aberta sobre o mapa em perspectiva */
+.home-map-center {
+  position: relative;
   display: flex;
   flex-direction: column;
-  position: relative;
-  overflow: visible;
-}
-
-.map-home-viewport-wrap {
-  position: relative;
-  flex: 1;
+  justify-content: space-between;
+  align-items: center;
   min-height: 0;
-  border-radius: 22px 22px 0 0;
-  overflow: visible;
+  padding: 2px 0 6px;
+  pointer-events: none;
 }
 
-.map-home-viewport-wrap > .leaflet-slot {
-  border-radius: 22px 22px 0 0;
+.home-center-tap-shield {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  z-index: 5;
+  pointer-events: auto;
+  border-radius: 22px;
+}
+
+.map-center-route-pill {
+  position: relative;
+  z-index: 20;
+  pointer-events: auto;
+  width: 100%;
+  max-width: 420px;
+  min-height: 64px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: inherit;
+  text-align: left;
+  border-radius: 18px;
 }
 
 .map-tap-shield {
@@ -661,17 +901,17 @@ button:active {
   border: 0;
   padding: 0;
   z-index: 405;
-  border-radius: 22px 22px 0 0;
+  border-radius: 22px;
 }
 
 .map-home-searchbar {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  right: 14px;
+  position: relative;
+  z-index: 25;
+  pointer-events: auto;
+  width: 100%;
+  max-width: 420px;
   display: flex;
   gap: 8px;
-  z-index: 420;
 }
 
 .search-field {
@@ -762,6 +1002,11 @@ button:active {
   flex-direction: column;
   gap: 2px;
   z-index: 500;
+}
+
+.dropdown-menu.dropdown-up {
+  top: auto;
+  bottom: 56px;
 }
 
 .dropdown-item {
@@ -873,21 +1118,31 @@ button:active {
   white-space: nowrap;
 }
 
-/* ======================== VELOCÍMETRO E COMBUSTÍVEL ======================== */
-.gauge-column {
+/* ======================== VELOCÍMETRO HONDA ESTILO FERRARI + BATERIA/TEMP ======================== */
+.home-left-col {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 14px;
   min-height: 0;
 }
 
 .gauge-box {
   position: relative;
-  width: 440px;
-  height: 440px;
+  width: 382px;
+  height: 382px;
   flex-shrink: 0;
+  margin-bottom: 50px; /* espaço da fileira de marchas, fora do aro */
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, rgba(28, 37, 54, 0.44) 0%, rgba(8, 12, 20, 0.90) 66%, rgba(4, 7, 12, 0.97) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow:
+    0 24px 54px rgba(0, 0, 0, 0.72),
+    0 0 42px var(--a15),
+    inset 0 2px 3px rgba(255, 255, 255, 0.14),
+    inset 0 -8px 20px rgba(0, 0, 0, 0.85);
 }
 
 .gauge-svg {
@@ -898,136 +1153,205 @@ button:active {
   overflow: visible;
 }
 
+.gauge-svg-label {
+  font-family: 'Chakra Petch', sans-serif;
+}
+
 .gauge-labels-layer {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
 
-.gauge-speed-lbl {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  font-family: 'Chakra Petch', sans-serif;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
 .gauge-rpm-lbl {
   position: absolute;
   transform: translate(-50%, -50%);
   font-family: 'Chakra Petch', sans-serif;
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .gauge-center-readout {
   position: absolute;
   inset: 0;
+  pointer-events: none;
+}
+
+.gauge-speed-cluster {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  pointer-events: none;
+  line-height: 1;
 }
 
 .gauge-speed-num {
   font-family: 'Chakra Petch', sans-serif;
-  font-size: 96px;
-  font-weight: 600;
-  line-height: 1;
+  font-size: 70px;
+  font-weight: 700;
+  line-height: 0.95;
   letter-spacing: -2px;
   color: var(--text-primary);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.65);
 }
 
 .gauge-speed-unit {
-  font-size: 14px;
-  letter-spacing: 3px;
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 2.5px;
   color: var(--text-muted);
   margin-top: 4px;
 }
 
-/* Pedido do usuário: sem números abaixo do KM/H no velocímetro central (o RPM já aparece no anel). */
-.gauge-rpm-num {
-  display: none !important;
+.gauge-rpm-scale-tag {
+  position: absolute;
+  left: 34px;
+  bottom: 42px;
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.fuel-hit-badge {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(6, 9, 15, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.fuel-hit-badge.low {
+  color: var(--rose-soft);
+  border-color: rgba(244, 63, 94, 0.5);
+  box-shadow: 0 0 12px rgba(244, 63, 94, 0.28);
 }
 
 .gauge-gears {
   position: absolute;
   left: 50%;
-  bottom: 14px;
+  bottom: -50px;
   transform: translateX(-50%);
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(6, 9, 15, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .gear-item {
-  width: 24px;
-  height: 34px;
+  width: 22px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-dim);
   font-family: 'Chakra Petch', sans-serif;
-  font-size: 17px;
-  border-radius: 9px;
+  font-size: 15px;
+  border-radius: 8px;
   transition: color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .gear-item.active {
-  width: 32px;
+  width: 28px;
   border: 1.5px solid var(--accent);
   color: var(--accent);
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
+  background: var(--a15);
   box-shadow: 0 0 14px var(--a35);
 }
 
-.fuel-bar-row {
-  width: 300px;
+/* Somente Bateria + Temperatura abaixo do velocímetro */
+.vital-duo-card {
+  width: 316px;
+  height: 76px;
+  padding: 0 14px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 4px;
+  justify-content: space-between;
+  flex-shrink: 0;
+  border-radius: 18px;
 }
 
-.fuel-track {
+.vital-duo-card.compact {
+  width: 100%;
+  height: 74px;
+}
+
+.vital-duo-cell {
   flex: 1;
-  position: relative;
-  height: 8px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, #F43F5E, #FACC15 45%, #22C55E);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--accent);
 }
 
-.fuel-mask {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 66%;
-  right: 0;
-  background: rgba(6, 9, 15, 0.85);
-  border-radius: 0 4px 4px 0;
-}
-
-.fuel-thumb {
-  position: absolute;
-  top: -4px;
-  left: 66%;
-  width: 3px;
-  height: 16px;
-  border-radius: 2px;
-  background: #E8EEF6;
-  transform: translateX(-50%);
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.6);
-}
-
-/* ======================== COLUNA DIREITA HOME (SPOTIFY + MONITOR) ======================== */
-.right-column {
+.vital-duo-texts {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  line-height: 1.1;
+  gap: 2px;
+}
+
+.vital-duo-lbl {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.vital-duo-sep {
+  width: 1px;
+  height: 42px;
+  background: rgba(255, 255, 255, 0.09);
+  flex-shrink: 0;
+}
+
+.vital-duo-cell.warn,
+.vital-duo-cell.warn .monitor-val {
+  color: var(--yellow);
+}
+
+.vital-duo-cell.crit,
+.vital-duo-cell.crit .monitor-val {
+  color: var(--rose);
+}
+
+/* ======================== COLUNA DIREITA HOME (SPOTIFY) ======================== */
+.home-right-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
   min-height: 0;
+}
+
+.home-right-col .music-home-card {
+  /* mesma altura do bloco da esquerda (382 + 50 + 14 + 76) para topo e base alinhados */
+  flex: 0 1 522px;
+  max-height: 100%;
 }
 
 .music-home-card {
@@ -1232,6 +1556,9 @@ button:active {
   touch-action: pan-x;
   scrollbar-width: none;
   padding-bottom: 2px;
+  /* indica que há mais itens à direita em vez de cortar seco */
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 86%, transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0%, #000 86%, transparent 100%);
 }
 
 .home-music-shelf::-webkit-scrollbar {
@@ -1463,20 +1790,32 @@ button:active {
   color: var(--rose);
 }
 
-/* ======================== MODO MAPA 2/3 E TELA CHEIA ======================== */
-.map-mode-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 20px;
+/* ======================== MODO MAPA OVERLAY & TELA CHEIA ======================== */
+.map-overlay-view {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  animation: fadeMapOverlay 0.28s ease both;
 }
 
-.map-mode-grid.map-full-active {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 0;
+@keyframes fadeMapOverlay {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
-.map-mode-grid.map-full-active > .side-third-col {
-  display: none;
+.map-expanded-overlay {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.map-full-topbar,
+.map-drawer,
+.map-floating-controls,
+.map-route-hud {
+  pointer-events: auto;
 }
 
 .app-shell.mode-map-full #topbar,
@@ -1485,7 +1824,7 @@ button:active {
 }
 
 .app-shell.mode-map-full .stage-area {
-  padding: 12px;
+  padding: 6px;
 }
 
 .close-hero-btn.active {
@@ -1495,16 +1834,11 @@ button:active {
   box-shadow: 0 0 0 1px var(--a20);
 }
 
-.map-expanded-panel {
-  overflow: hidden;
-  background: #0A1019;
-}
-
 .map-full-topbar {
   position: absolute;
-  top: 18px;
-  left: 18px;
-  right: 18px;
+  top: 8px;
+  left: 12px;
+  right: 12px;
   display: flex;
   gap: 12px;
   z-index: 430;
@@ -1550,15 +1884,17 @@ button:active {
 
 .map-drawer {
   position: absolute;
-  top: 90px;
-  left: 18px;
-  bottom: 18px;
+  top: 78px;
+  left: 12px;
+  bottom: 10px;
   width: 308px;
-  background: rgba(12, 18, 28, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(165deg, rgba(16, 24, 38, 0.90) 0%, rgba(8, 12, 20, 0.94) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 20px;
   padding: 18px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.52);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.56), inset 0 1px 0 rgba(255, 255, 255, 0.10);
   z-index: 425;
   display: flex;
   flex-direction: column;
@@ -1684,8 +2020,8 @@ button:active {
 
 .map-floating-controls {
   position: absolute;
-  top: 92px;
-  right: 18px;
+  top: 78px;
+  right: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1712,18 +2048,20 @@ button:active {
 
 .map-route-hud {
   position: absolute;
-  right: 18px;
-  bottom: 18px;
-  left: 342px;
+  right: 12px;
+  bottom: 10px;
+  left: 334px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
   padding: 12px 16px;
-  background: rgba(12, 18, 28, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: linear-gradient(165deg, rgba(16, 24, 38, 0.92) 0%, rgba(8, 12, 20, 0.96) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.11);
   border-radius: 18px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.10);
   z-index: 425;
 }
 
@@ -1914,6 +2252,7 @@ button:active {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   gap: 20px;
+  pointer-events: auto;
 }
 
 .mini-map-card {
@@ -1961,13 +2300,19 @@ button:active {
 }
 
 .music-expanded-panel {
-  background: var(--bg-card);
+  background: linear-gradient(160deg, rgba(16, 24, 38, 0.90) 0%, rgba(8, 12, 20, 0.96) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   padding: 20px 22px;
   display: flex;
   flex-direction: column;
   gap: 16px;
   min-height: 0;
   overflow: hidden;
+  box-shadow:
+    0 24px 54px rgba(0, 0, 0, 0.62),
+    0 0 0 6px var(--a10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .music-full-topbar {
@@ -2256,8 +2601,9 @@ button:active {
   height: 72px;
   flex-shrink: 0;
   display: grid;
-  grid-template-columns: 440px minmax(0, 1fr) 330px;
-  gap: 20px;
+  /* mesmas colunas do Início: abas no eixo do mapa e da busca */
+  grid-template-columns: 388px minmax(0, 1fr) 334px;
+  gap: 18px;
   align-items: center;
 }
 
@@ -2865,10 +3211,11 @@ button:active {
 /* ======================== BANNER DE NOTIFICAÇÃO & TOASTS ======================== */
 .notif-banner {
   position: absolute;
-  top: 78px;
-  left: 50%;
+  top: 82px;
+  /* centralizado na coluna do mapa (388px | mapa | 334px), sem encostar nos cartões */
+  left: calc(50% + 27px);
   transform: translateX(-50%);
-  width: 620px;
+  width: 527px;
   max-width: calc(100vw - 48px);
   padding: 12px 16px;
   background: rgba(12, 18, 28, 0.97);
@@ -2983,6 +3330,7 @@ button:active {
   gap: 20px;
   height: 100%;
   min-height: 0;
+  pointer-events: auto;
 }
 
 .settings-nav {
@@ -3410,6 +3758,7 @@ button:active {
   position: fixed;
   inset: 0;
   z-index: 1350;
+  pointer-events: auto;
   background: rgba(4, 7, 13, 0.76);
   backdrop-filter: blur(8px);
   display: flex;
@@ -4326,4 +4675,387 @@ button:active {
   padding: 8px 16px;
   font-size: 13px;
   white-space: nowrap;
+}
+
+/* Pedido do usuário: sem números abaixo do KM/H no velocímetro (o giro já aparece no arco). */
+#gauge-rpm-text,
+.gauge-rpm-scale-tag,
+.gauge-rpm-num {
+  display: none !important;
+}
+
+/* ======================== MÚSICA 3/4 + MAPA 1/4 · VEÍCULO 3/4 + MAPA 1/4 ======================== */
+/* O mapa de fundo (drone) aparece no 1/4 livre; os painéis entram pela lateral. */
+.global-map-layer.map-quarter-left .global-map-scrim,
+.global-map-layer.map-quarter-right .global-map-scrim,
+.map-stage-wrap.is-quarter::after {
+  opacity: 0;
+}
+
+#view-music.music-mode-grid,
+#view-vehicle.vehicle-mode-grid {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  gap: 18px;
+  pointer-events: none;
+}
+
+#view-music.music-mode-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+}
+
+#view-vehicle.vehicle-mode-grid {
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
+}
+
+#view-music.music-mode-grid.hidden,
+#view-vehicle.vehicle-mode-grid.hidden {
+  display: none !important;
+}
+
+#view-music .side-third-col,
+#view-vehicle .side-quarter-col {
+  pointer-events: auto;
+  position: relative;
+}
+
+#view-music .music-expanded-panel,
+#view-vehicle .vehicle-expanded-panel {
+  pointer-events: auto;
+}
+
+/* No 1/4 de mapa da Música: só velocidade em cima e o mapa livre embaixo */
+#view-music .side-third-col .mini-map-card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+#view-music .side-third-col .vital-duo-card.compact {
+  display: none;
+}
+
+#view-music .side-third-col .mini-map-card .leaflet-slot {
+  background: transparent;
+}
+
+/* Entrada: Spotify pela direita, Veículo pela esquerda; saída pelo mesmo lado */
+#view-music .music-expanded-panel {
+  animation: panelInRight 420ms cubic-bezier(0.2, 0.85, 0.25, 1) both;
+}
+
+#view-music .side-third-col {
+  animation: panelFadeIn 420ms ease both;
+}
+
+#view-music.is-closing .music-expanded-panel {
+  animation: panelOutRight 340ms cubic-bezier(0.55, 0, 0.75, 0.2) both;
+}
+
+#view-vehicle .vehicle-expanded-panel {
+  animation: panelInLeft 420ms cubic-bezier(0.2, 0.85, 0.25, 1) both;
+}
+
+#view-vehicle.is-closing .vehicle-expanded-panel {
+  animation: panelOutLeft 340ms cubic-bezier(0.55, 0, 0.75, 0.2) both;
+}
+
+#view-music.is-closing .side-third-col {
+  animation: panelFadeOut 340ms ease both;
+}
+
+@keyframes panelInRight {
+  from { transform: translateX(110%); opacity: 0.4; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes panelOutRight {
+  from { transform: translateX(0); opacity: 1; }
+  to   { transform: translateX(110%); opacity: 0.3; }
+}
+
+@keyframes panelInLeft {
+  from { transform: translateX(-110%); opacity: 0.4; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes panelOutLeft {
+  from { transform: translateX(0); opacity: 1; }
+  to   { transform: translateX(-110%); opacity: 0.3; }
+}
+
+@keyframes panelFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes panelFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* Toque no velocímetro */
+.gauge-open-btn {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  z-index: 6;
+}
+
+.gauge-open-btn:active {
+  background: radial-gradient(circle, var(--a10) 0%, transparent 70%);
+}
+
+.quarter-map-tap {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 22px;
+  cursor: pointer;
+}
+
+/* Painel do veículo */
+.vehicle-expanded-panel {
+  background: linear-gradient(160deg, rgba(16, 24, 38, 0.92) 0%, rgba(8, 12, 20, 0.97) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.vehicle-topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.vehicle-brand-tag {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  color: var(--text-primary);
+}
+
+.vehicle-obd-msg {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vehicle-hero-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.vehicle-hero-tile {
+  min-height: 96px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.vh-lbl,
+.vp-lbl,
+.vk-lbl {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+}
+
+.vh-val {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 38px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-primary);
+}
+
+.vh-val small {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.vh-val.sm {
+  font-size: 20px;
+}
+
+.vh-val.accent {
+  color: var(--accent);
+}
+
+.vh-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.vh-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+.vehicle-pids-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vehicle-pid-card {
+  min-height: 68px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+
+.vp-val {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.vp-val small {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.vehicle-pid-card.warn .vp-val {
+  color: #FACC15;
+}
+
+.vehicle-pid-card.crit {
+  border-color: rgba(255, 31, 61, 0.55);
+  box-shadow: 0 0 16px rgba(255, 31, 61, 0.25);
+}
+
+.vehicle-pid-card.crit .vp-val {
+  color: #FF1F3D;
+}
+
+.vehicle-empty {
+  grid-column: 1 / -1;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.vehicle-bottom-row {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.vehicle-info-card {
+  min-height: 0;
+  padding: 12px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.vehicle-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vehicle-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vk-val {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.vehicle-dtc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.btn-outline.sm {
+  min-height: 44px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.vehicle-dtc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.vehicle-dtc-ok {
+  font-size: 15px;
+  color: #4ADE80;
+}
+
+.vehicle-dtc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.vd-code {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: #FB7185;
+  flex-shrink: 0;
 }

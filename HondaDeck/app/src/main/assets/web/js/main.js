@@ -20,9 +20,9 @@ import { initCopilot, updateCopilot, updateCopilotLevel, onAgentReply } from './
 import { initSettings, updateSettings, setSettingsVisible, showSettingsTab } from './settings.js';
 import { initCalendarCard, updateCalendarCard, openCalendarCard, closeCalendarCard } from './calendar-card.js';
 import { initWeatherCard, updateWeatherCard, openWeatherCard, closeWeatherCard } from './weather-card.js';
+import { initVehicle, updateVehicle } from './vehicle.js';
 
-const MODES = ['home', 'map', 'mapFull', 'music', 'settings'];
-const VIEW_IDS = ['home', 'map', 'music', 'settings'];
+const MODES = ['home', 'map', 'mapFull', 'music', 'vehicle', 'settings'];
 
 let state = null;
 let mode = 'home';
@@ -37,20 +37,71 @@ const $ = (id) => document.getElementById(id);
 // Modos
 // ---------------------------------------------------------------------------
 
-function switchMode(next, { silent = false } = {}) {
+// Painéis 3/4 que entram pela lateral e saem pelo mesmo lado ao fechar
+const SIDE_PANELS = { music: 'view-music', vehicle: 'view-vehicle' };
+const PANEL_OUT_MS = 340;
+let closingTimer = null;
+
+function switchMode(next, opts = {}) {
   if (!MODES.includes(next)) return;
+  if (closingTimer) return; // ignora toques durante a animação de saída
+  const panelId = SIDE_PANELS[mode];
+  if (panelId && next !== mode && !opts.immediate) {
+    // Anima a saída do painel 3/4 e só então troca de modo
+    const view = $(panelId);
+    view?.classList.add('is-closing');
+    $('app-shell').classList.add('side-panel-closing');
+    closingTimer = setTimeout(() => {
+      closingTimer = null;
+      view?.classList.remove('is-closing');
+      $('app-shell').classList.remove('side-panel-closing');
+      applyMode(next, opts);
+    }, PANEL_OUT_MS);
+    return;
+  }
+  applyMode(next, opts);
+}
+
+function applyMode(next, { silent = false } = {}) {
   const changed = next !== mode;
   mode = next;
 
-  const activeView = mode === 'mapFull' ? 'map' : mode;
-  for (const m of VIEW_IDS) setHidden($(`view-${m}`), m !== activeView);
-  $('app-shell').classList.toggle('mode-settings-active', mode === 'settings');
-  $('app-shell').classList.toggle('mode-map-full', mode === 'mapFull');
+  const isHome = mode === 'home';
+  const isMap = mode === 'map' || mode === 'mapFull';
+  const isMusic = mode === 'music';
+  const isVehicle = mode === 'vehicle';
+  const isSettings = mode === 'settings';
+
+  // #view-home fica montado (exceto em Ajustes) para que o velocímetro e o Spotify
+  // saiam e voltem deslizando pelas laterais em Mapa cheio, Música e Veículo.
+  setHidden($('view-home'), isSettings);
+  setHidden($('view-map'), !isMap);
+  setHidden($('view-music'), !isMusic);
+  setHidden($('view-vehicle'), !isVehicle);
+  setHidden($('view-settings'), !isSettings);
+
+  const shell = $('app-shell');
+  shell.classList.toggle('mode-home-active', isHome);
+  shell.classList.toggle('mode-map-active', mode === 'map');
+  shell.classList.toggle('mode-map-full', mode === 'mapFull');
+  shell.classList.toggle('mode-music-active', isMusic);
+  shell.classList.toggle('mode-vehicle-active', isVehicle);
+  shell.classList.toggle('mode-settings-active', isSettings);
+
+  const globalMap = $('global-map-layer');
+  if (globalMap) {
+    globalMap.classList.toggle('hidden', isSettings);
+    globalMap.classList.toggle('map-expanded', isMap);
+    globalMap.classList.toggle('map-fullscreen', mode === 'mapFull');
+    globalMap.classList.toggle('map-quarter-left', isMusic);
+    globalMap.classList.toggle('map-quarter-right', isVehicle);
+  }
+
   $('view-map')?.classList.toggle('map-full-active', mode === 'mapFull');
-  setDockActiveMode(activeView);
+  setDockActiveMode(isMap ? 'map' : isVehicle ? 'home' : mode);
   setMapMode(mode);
-  setBackgroundMode(activeView);
-  setSettingsVisible(mode === 'settings');
+  setBackgroundMode(isMap ? 'map' : isVehicle ? 'home' : mode);
+  setSettingsVisible(isSettings);
 
   if (changed && !silent) sendCommand('ui.mode', { mode });
 }
@@ -63,7 +114,7 @@ function applyAccent(color) {
 }
 
 function pickAccent(color) {
-  applyAccent(color); // otimista: muda tudo ao vivo; o backend confirma no próximo estado
+  applyAccent(color);
   sendCommand('ui.setAccent', { color });
 }
 
@@ -135,6 +186,37 @@ function monitorLevel(kind, value) {
   return '';
 }
 
+// Cor progressiva: 0 = cor de destaque, 0.5 = amarelo, 1 = vermelho vivo
+function mixHex(a, b, t) {
+  const pa = parseInt(a.slice(1), 16);
+  const pb = parseInt(b.slice(1), 16);
+  const ch = (s) => Math.round(((pa >> s) & 255) + (((pb >> s) & 255) - ((pa >> s) & 255)) * t);
+  return `#${((1 << 24) | (ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).slice(1)}`;
+}
+
+function severityColor(t) {
+  const base = accent || '#22D3EE';
+  if (t <= 0) return '';
+  if (t < 0.5) return mixHex(base, '#FACC15', t / 0.5);
+  return mixHex('#FACC15', '#FF1F3D', Math.min(1, (t - 0.5) / 0.5));
+}
+
+// Quão longe do normal está o valor (0 normal … 1 crítico)
+function severity(kind, v) {
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  if (kind === 'voltage') {
+    if (v < 12.6) return clamp01((12.6 - v) / (12.6 - 11.6));
+    if (v > 14.8) return clamp01((v - 14.8) / (15.6 - 14.8));
+    return 0;
+  }
+  if (kind === 'coolant') return clamp01((v - 95) / (108 - 95));
+  return 0;
+}
+
+function clamp01(x) {
+  return Math.max(0, Math.min(1, x));
+}
+
 function renderMonitor(telemetry, obdStatus) {
   const offline = String(obdStatus || '').toUpperCase() === 'DISCONNECTED';
   const items = {
@@ -148,10 +230,18 @@ function renderMonitor(telemetry, obdStatus) {
     const level = has ? monitorLevel(kind, cfg.v) : '';
     document.querySelectorAll(`[data-mon-val="${kind}"]`).forEach((node) => {
       setText(node, text);
-      const cell = node.closest('.monitor-cell');
+      const cell = node.closest('.monitor-cell, .vital-duo-cell');
       if (cell) {
         cell.classList.toggle('warn', level === 'warn');
         cell.classList.toggle('crit', level === 'crit');
+        // Bateria e motor mudam de cor aos poucos até o vermelho vivo
+        if (cell.classList.contains('vital-duo-cell')) {
+          const t = has ? severity(kind, cfg.v) : 0;
+          const col = severityColor(t);
+          cell.style.color = col;
+          node.style.color = col;
+          cell.style.textShadow = t >= 0.85 ? `0 0 12px ${col}` : '';
+        }
       }
     });
   }
@@ -202,6 +292,7 @@ function onState(next) {
   updateSettings(next);
   updateCalendarCard(next, nowMs());
   updateWeatherCard(next.weather);
+  updateVehicle(next);
 
   if (firstState) document.documentElement.dataset.ready = '1';
 }
@@ -239,7 +330,6 @@ function onEvent(ev) {
 // ---------------------------------------------------------------------------
 
 async function boot() {
-  // A ponte (e o mock, se não houver HondaBridge) precisa existir antes do mapa escolher as camadas de tiles
   await setupBridge({ onState, onTelemetry, onEvent });
   applyAccent('#22D3EE');
   initBackground();
@@ -258,6 +348,7 @@ async function boot() {
   initSettings({ onBack: () => switchMode('home'), onAccentPick: pickAccent });
   initCalendarCard();
   initWeatherCard();
+  initVehicle({ switchMode: (m) => switchMode(m) });
 
   $('clock-date')?.addEventListener('click', () => {
     closeWeatherCard();
@@ -274,11 +365,10 @@ async function boot() {
     showSettingsTab('phone');
   });
 
-  switchMode('home', { silent: true });
+  switchMode('home', { silent: true, immediate: true });
   renderClock();
   setInterval(renderClock, 1000);
 
-  // Foco no campo ao abrir o modo correspondente via teclado/ação direta
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeCalendarCard();
@@ -295,5 +385,4 @@ window.addEventListener('unhandledrejection', (e) => console.error('[HondaDeck] 
 
 boot().catch((err) => console.error('[HondaDeck] falha ao iniciar:', err));
 
-// Reexporta para depuração no console do WebView (não faz parte do contrato)
 window.__hdDebug = { switchMode, getState: () => state, focusFullMusicSearch };

@@ -295,6 +295,41 @@ export function createNoteSvg(size = 18, stroke = 'var(--accent)') {
   ]);
 }
 
+/**
+ * Emblema automotivo Honda fiel à geometria real (moldura trapezoidal arredondada
+ * mais larga no topo + "H" com abas superiores alargadas e hastes afiladas).
+ */
+export function createHondaEmblemSvg(width = 46, height = 38, color = 'currentColor') {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('width', String(width));
+  svg.setAttribute('height', String(height));
+  svg.setAttribute('viewBox', '0 0 64 52');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('aria-hidden', 'true');
+
+  // Moldura externa trapezoidal levemente abaulada
+  const frame = document.createElementNS(SVG_NS, 'path');
+  frame.setAttribute(
+    'd',
+    'M 13.5 4.8 C 25.5 3.3, 38.5 3.3, 50.5 4.8 C 57.2 5.6, 60.2 8.8, 59.3 15.8 L 56.8 36.8 C 55.8 43.6, 52.8 46.8, 46.2 47.5 C 36.2 48.6, 27.8 48.6, 17.8 47.5 C 11.2 46.8, 8.2 43.6, 7.2 36.8 L 4.7 15.8 C 3.8 8.8, 6.8 5.6, 13.5 4.8 Z'
+  );
+  frame.setAttribute('fill', 'rgba(255, 255, 255, 0.04)');
+  frame.setAttribute('stroke', color);
+  frame.setAttribute('stroke-width', '2.7');
+  frame.setAttribute('stroke-linejoin', 'round');
+
+  // Contorno fiel do "H" Honda
+  const hMark = document.createElementNS(SVG_NS, 'path');
+  hMark.setAttribute(
+    'd',
+    'M 13.8 10.6 L 23.0 10.6 C 23.9 18.0, 24.5 22.8, 25.8 24.1 C 27.4 25.0, 36.6 25.0, 38.2 24.1 C 39.5 22.8, 40.1 18.0, 41.0 10.6 L 50.2 10.6 C 49.4 21.8, 48.3 32.8, 46.8 41.4 L 40.6 41.4 C 39.9 35.8, 39.4 31.8, 38.4 30.8 C 36.6 29.8, 27.4 29.8, 25.6 30.8 C 24.6 31.8, 24.1 35.8, 23.4 41.4 L 17.2 41.4 C 15.7 32.8, 14.6 21.8, 13.8 10.6 Z'
+  );
+  hMark.setAttribute('fill', color);
+
+  svg.append(frame, hMark);
+  return svg;
+}
+
 // ---------------------------------------------------------------------------
 // Ícones reais dos apps instalados no tablet (/appicon/) e celular (/phoneicon/)
 // ---------------------------------------------------------------------------
@@ -543,6 +578,7 @@ export function setCover(img, fallback, url) {
 }
 
 export function setPlayIcon(svg, playing) {
+  if (!svg) return;
   const path = svg?.querySelector('path');
   if (!path) return;
   path.setAttribute('d', playing ? 'M7 5h4v14H7zM13 5h4v14h-4z' : 'M8 5v14l11-7z');

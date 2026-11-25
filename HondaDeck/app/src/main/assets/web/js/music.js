@@ -574,19 +574,19 @@ export function initMusic({ switchMode }) {
   // Navegação
   $('home-music-expand-btn').addEventListener('click', () => switchModeFn('music'));
   $('home-music-track-btn').addEventListener('click', () => switchModeFn('music'));
-  $('mini-player-open-btn').addEventListener('click', () => switchModeFn('music'));
-  $('mini-player-info-btn').addEventListener('click', () => switchModeFn('music'));
+  $('mini-player-open-btn')?.addEventListener('click', () => switchModeFn('music'));
+  $('mini-player-info-btn')?.addEventListener('click', () => switchModeFn('music'));
   $('music-close-btn').addEventListener('click', () => switchModeFn('home'));
 
   // Transporte
   for (const id of ['home-play-btn', 'mini-play-btn', 'full-play-btn']) {
-    $(id).addEventListener('click', () => sendCommand('music.toggle'));
+    $(id)?.addEventListener('click', () => sendCommand('music.toggle'));
   }
-  for (const id of ['home-prev-btn', 'full-prev-btn']) $(id).addEventListener('click', () => sendCommand('music.prev'));
-  for (const id of ['home-next-btn', 'full-next-btn']) $(id).addEventListener('click', () => sendCommand('music.next'));
-  for (const id of ['home-shuffle-btn', 'full-shuffle-btn']) $(id).addEventListener('click', () => sendCommand('music.shuffle'));
+  for (const id of ['home-prev-btn', 'full-prev-btn']) $(id)?.addEventListener('click', () => sendCommand('music.prev'));
+  for (const id of ['home-next-btn', 'full-next-btn']) $(id)?.addEventListener('click', () => sendCommand('music.next'));
+  for (const id of ['home-shuffle-btn', 'full-shuffle-btn']) $(id)?.addEventListener('click', () => sendCommand('music.shuffle'));
   $('full-repeat-btn').addEventListener('click', () => sendCommand('music.repeat'));
-  for (const id of ['home-like-btn', 'full-like-btn']) $(id).addEventListener('click', () => sendCommand('music.like'));
+  for (const id of ['home-like-btn', 'full-like-btn']) $(id)?.addEventListener('click', () => sendCommand('music.like'));
 
   bindSeek('home');
   bindSeek('full');

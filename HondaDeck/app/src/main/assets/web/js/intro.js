@@ -1,6 +1,6 @@
 // Animação de abertura (~2,8 s) e animação do logo no topo ao tocar
 
-import { el } from './util.js';
+import { el, createHondaEmblemSvg } from './util.js';
 
 let currentBrand = 'HONDA';
 let introDone = false;
@@ -10,6 +10,16 @@ let replayTimers = [];
 
 function clearTimers(list) {
   while (list.length) clearTimeout(list.pop());
+}
+
+function renderBrandBadge(node, brandText, width = 48, height = 39) {
+  if (!node) return;
+  const clean = String(brandText || 'HONDA').trim().toUpperCase();
+  if (clean === 'HONDA') {
+    node.replaceChildren(createHondaEmblemSvg(width, height, 'currentColor'));
+  } else {
+    node.textContent = clean.charAt(0) || 'H';
+  }
 }
 
 function populateLetters(container, brandText, initiallyShown = false) {
@@ -27,8 +37,10 @@ export function initIntro() {
   const topBtn = document.getElementById('top-logo-btn');
   const topEmblem = document.getElementById('top-emblem');
   const topLetters = document.getElementById('top-brand-letters');
+  const introEmblem = document.getElementById('intro-emblem');
 
-  topEmblem.textContent = currentBrand.trim().charAt(0) || 'H';
+  renderBrandBadge(topEmblem, currentBrand, 46, 38);
+  renderBrandBadge(introEmblem, currentBrand, 56, 46);
   populateLetters(topLetters, currentBrand, true);
 
   topBtn.addEventListener('click', () => {
@@ -66,9 +78,8 @@ export function updateBrandAndIntroMode(brand, introMode) {
   const nextBrand = String(brand || 'HONDA').trim() || 'HONDA';
   if (nextBrand !== currentBrand) {
     currentBrand = nextBrand;
-    const initial = currentBrand.charAt(0);
-    document.getElementById('top-emblem').textContent = initial;
-    document.getElementById('intro-emblem').textContent = initial;
+    renderBrandBadge(document.getElementById('top-emblem'), currentBrand, 46, 38);
+    renderBrandBadge(document.getElementById('intro-emblem'), currentBrand, 56, 46);
     populateLetters(document.getElementById('top-brand-letters'), currentBrand, true);
   }
 
@@ -92,7 +103,7 @@ export function runFullIntro() {
   overlay.classList.remove('hidden', 'intro-fade-bg');
   appShell.classList.add('app-hidden');
 
-  emblem.textContent = currentBrand.charAt(0) || 'H';
+  renderBrandBadge(emblem, currentBrand, 56, 46);
   emblem.classList.remove('visible');
   lettersWrap.classList.remove('expanded');
   const letterSpans = populateLetters(lettersWrap, currentBrand, false);
@@ -100,11 +111,10 @@ export function runFullIntro() {
   stage.style.transition = 'none';
   stage.style.transform = 'translate(0px, 0px) scale(1.75)';
   stage.style.opacity = '1';
-  // Força reflow para aplicar estado inicial
   void stage.offsetWidth;
   stage.style.transition = 'transform 0.72s cubic-bezier(0.22, 0.85, 0.24, 1), opacity 0.35s ease';
 
-  // 1) Emblema "H" surge e cresce no centro
+  // 1) Emblema Honda surge e cresce no centro
   introTimers.push(setTimeout(() => {
     emblem.classList.add('visible');
   }, 80));

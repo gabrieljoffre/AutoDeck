@@ -20,6 +20,7 @@ import {
   createPinSvg,
   createClockSvg
 } from './util.js';
+import { buildMapStyle, routeToGeoJSON, destToGeoJSON, webglAvailable } from './map-style.js';
 
 const ESRI_DARK_BASE = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
 const ESRI_DARK_REF = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}';
@@ -59,8 +60,14 @@ let routeGlowLine = null;
 let routeMainLine = null;
 let destCircle = null;
 
+// Estado MapLibre GL (vetorial OpenFreeMap, padrão quando há WebGL)
+let mlMap = null;
+let mlCarMarker = null;
+let mlRouteData = { type: 'FeatureCollection', features: [] };
+let mlDestData = { type: 'FeatureCollection', features: [] };
+
 // Estado Google Maps JS API
-let activeProvider = 'esri'; // 'esri' | 'google'
+let activeProvider = 'esri'; // 'maplibre' | 'esri' | 'google'
 let gmapsLoadingKey = '';
 let gmapsLoaded = false;
 let gmap = null;
@@ -87,6 +94,8 @@ let effectiveTheme = null; // 'light' | 'dark' — null força aplicar as camada
 let polySignature = '';
 let favsSignature = '';
 let recentsSignature = '';
+let smoothBearing = 0;
+let bearingInitialized = false;
 
 let onModeSwitch = null;
 let onOpenFavoriteSettings = null;
@@ -113,7 +122,7 @@ function resolveEffectiveTheme(setting, clockEpochMs) {
 }
 
 function applyEffectiveTheme(nextTheme) {
-  if (nextTheme === effectiveTheme && (leafletMap || gmap)) return;
+  if (nextTheme === effectiveTheme && (leafletMap || gmap || mlMap)) return;
   effectiveTheme = nextTheme;
   const isLight = effectiveTheme === 'light';
 
@@ -141,6 +150,11 @@ function applyEffectiveTheme(nextTheme) {
     }
   }
 
+  // MapLibre: troca o estilo vetorial (claro/escuro) mantendo rota e destino
+  if (mlMap) {
+    mlMap.setStyle(buildMapStyle(effectiveTheme, lastAccent, mlRouteData, mlDestData));
+  }
+
   // Atualiza estilo Google Maps se ativo
   if (gmap) {
     gmap.setOptions({
@@ -157,17 +171,19 @@ function applyEffectiveTheme(nextTheme) {
 function buildCarIcon() {
   const html = `
     <div class="hd-car-rotator">
-      <svg width="52" height="52" viewBox="0 0 52 52" fill="none" aria-hidden="true">
-        <circle cx="26" cy="26" r="22" fill="var(--a20)"></circle>
-        <path d="M26 10 L38 38 L26 31.5 L14 38 Z" fill="var(--accent)" stroke="#06090F" stroke-width="2" stroke-linejoin="round"></path>
+      <svg width="58" height="58" viewBox="0 0 58 58" fill="none" aria-hidden="true">
+        <circle cx="29" cy="31" r="22" fill="var(--a20)"></circle>
+        <circle cx="29" cy="31" r="13" fill="var(--a35)"></circle>
+        <path d="M29 9 L43 43 L29 35.5 L15 43 Z" fill="var(--accent)" stroke="#06090F" stroke-width="2.4" stroke-linejoin="round"></path>
+        <path d="M29 12.5 L29 34 L18 40 Z" fill="rgba(255,255,255,0.28)"></path>
       </svg>
     </div>
   `;
   return window.L.divIcon({
     className: 'hd-car-marker',
     html,
-    iconSize: [52, 52],
-    iconAnchor: [26, 26]
+    iconSize: [58, 58],
+    iconAnchor: [29, 31]
   });
 }
 
@@ -240,10 +256,131 @@ function initLeafletStage() {
     if (isMapInteractiveMode(currentMode)) {
       followCar = false;
       updateRecenterUi();
+      updateDroneCameraTransform();
     }
   });
 
   applyEffectiveTheme(resolveEffectiveTheme(configuredMapTheme, lastClockMs));
+}
+
+// ---------------------------------------------------------------------------
+// MapLibre GL + OpenFreeMap (vetorial, 3D real, gratuito e sem chave)
+// ---------------------------------------------------------------------------
+
+function buildMlCarElement() {
+  const node = document.createElement('div');
+  node.className = 'hd-ml-car';
+  node.innerHTML = `
+    <svg width="92" height="92" viewBox="0 0 58 58" fill="none" aria-hidden="true">
+      <circle cx="29" cy="31" r="24" fill="var(--a20)"></circle>
+      <circle cx="29" cy="31" r="14" fill="var(--a35)"></circle>
+      <path d="M29 9 L43 43 L29 35.5 L15 43 Z" fill="var(--accent)" stroke="#06090F" stroke-width="2.4" stroke-linejoin="round"></path>
+      <path d="M29 12.5 L29 34 L18 40 Z" fill="rgba(255,255,255,0.28)"></path>
+    </svg>`;
+  return node;
+}
+
+function initMapLibreStage() {
+  const stage = document.getElementById('maplibre-stage');
+  if (!window.maplibregl || !stage || mlMap || !webglAvailable()) return false;
+  try {
+    const theme = resolveEffectiveTheme(configuredMapTheme, lastClockMs);
+    effectiveTheme = theme;
+    mlMap = new window.maplibregl.Map({
+      container: stage,
+      style: buildMapStyle(theme, lastAccent, mlRouteData, mlDestData),
+      center: [ANAPOLIS_DEFAULT.lon, ANAPOLIS_DEFAULT.lat],
+      zoom: 16.4,
+      pitch: 62,
+      maxPitch: 70,
+      bearing: 0,
+      attributionControl: { compact: true },
+      interactive: true,
+      dragRotate: false,
+      pitchWithRotate: false,
+      fadeDuration: 150,
+      maxTileCacheSize: 120
+    });
+  } catch (err) {
+    console.warn('[HondaDeck] MapLibre indisponível, usando Leaflet:', err);
+    mlMap = null;
+    return false;
+  }
+
+  activeProvider = 'maplibre';
+  window.__hdMap = mlMap; // depuração via DevTools/CDP
+  mlMap.touchZoomRotate.disableRotation(); // mapa sempre com a frente do carro para cima
+  stage.classList.remove('hidden');
+  document.getElementById('leaflet-stage')?.classList.add('hidden');
+  document.getElementById('map-stage-wrap')?.classList.add('use-maplibre');
+
+  mlCarMarker = new window.maplibregl.Marker({
+    element: buildMlCarElement(),
+    rotationAlignment: 'map',
+    pitchAlignment: 'map'
+  })
+    .setLngLat([ANAPOLIS_DEFAULT.lon, ANAPOLIS_DEFAULT.lat])
+    .addTo(mlMap);
+
+  mlMap.on('dragstart', () => {
+    if (isMapInteractiveMode(currentMode)) {
+      followCar = false;
+      updateRecenterUi();
+    }
+  });
+  mlMap.on('error', (e) => console.warn('[HondaDeck] MapLibre:', e?.error?.message || e));
+  // A rota pode chegar antes do estilo carregar: reaplica ao ficar pronto (e após trocar claro/escuro)
+  mlMap.on('style.load', () => {
+    mlMap.getSource('hd-route')?.setData(mlRouteData);
+    mlMap.getSource('hd-dest')?.setData(mlDestData);
+  });
+  // Nunca mexer na câmera de dentro de um evento de render (o MapLibre trava com "already running")
+  mlMap.once('load', () => setTimeout(() => mlFollowCamera({ immediate: true }), 0));
+  return true;
+}
+
+// Onde o carro fica na tela em cada modo (proporção do painel 1333×800)
+function mlCameraTarget() {
+  const el = mlMap.getContainer();
+  const W = el.clientWidth || 1333;
+  const H = el.clientHeight || 800;
+  let x = 693 / 1333;
+  let y = 0.7;
+  let pitch = 62;
+  let zoom = 16.6;
+  if (currentMode === 'music') x = 183 / 1333;
+  else if (currentMode === 'vehicle') x = 1151 / 1333;
+  else if (currentMode === 'map') {
+    x = 0.5;
+    y = 0.66;
+    pitch = 52;
+    zoom = null;
+  } else if (currentMode === 'mapFull') {
+    x = 0.5;
+    y = 0.64;
+    pitch = 48;
+    zoom = null;
+  }
+  // Deslocamento do carro em relação ao centro da tela (offset do MapLibre)
+  return { pitch, zoom, offset: [x * W - W / 2, y * H - H / 2] };
+}
+
+function mlFollowCamera({ immediate = false, duration = 700, linear = false } = {}) {
+  if (!mlMap || !followCar) return;
+  const lat = Number(lastMapState?.lat || ANAPOLIS_DEFAULT.lat);
+  const lon = Number(lastMapState?.lon || ANAPOLIS_DEFAULT.lon);
+  const t = mlCameraTarget();
+  const opts = {
+    center: [lon, lat],
+    bearing: ((smoothBearing % 360) + 360) % 360,
+    pitch: t.pitch,
+    zoom: t.zoom ?? Math.max(mlMap.getZoom(), 15),
+    padding: { left: 0, right: 0, top: 0, bottom: 0 },
+    offset: t.offset
+  };
+  if (immediate) mlMap.jumpTo(opts);
+  else if (linear) mlMap.easeTo({ ...opts, duration, easing: (k) => k, essential: true });
+  else mlMap.easeTo({ ...opts, duration, essential: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +487,7 @@ function onGoogleMapsReady() {
     if (isMapInteractiveMode(currentMode)) {
       followCar = false;
       updateRecenterUi();
+      updateDroneCameraTransform();
     }
   });
 
@@ -363,6 +501,8 @@ function syncGoogleMapState(mapState) {
   const lat = Number(mapState.lat || ANAPOLIS_DEFAULT.lat);
   const lon = Number(mapState.lon || ANAPOLIS_DEFAULT.lon);
   const bearing = Number(mapState.bearing || 0);
+  stepSmoothBearing(bearing);
+  updateDroneCameraTransform();
   const pos = { lat, lng: lon };
 
   if (gmapCarMarker) {
@@ -569,6 +709,14 @@ function setMapInteractive(interactive) {
   if (gmap) {
     gmap.setOptions({ gestureHandling: interactive ? 'greedy' : 'none' });
   }
+  if (mlMap) {
+    const action = interactive ? 'enable' : 'disable';
+    mlMap.dragPan[action]();
+    mlMap.scrollZoom[action]();
+    mlMap.touchZoomRotate[action]();
+    mlMap.doubleClickZoom[action]();
+    mlMap.keyboard[action]();
+  }
 }
 
 function updateRecenterUi() {
@@ -597,11 +745,85 @@ function updateFullscreenBtnUi() {
   }
 }
 
+function stepSmoothBearing(targetDeg) {
+  const tgt = Number(targetDeg || 0);
+  if (!bearingInitialized) {
+    bearingInitialized = true;
+    smoothBearing = tgt;
+    return smoothBearing;
+  }
+  const delta = (((tgt - smoothBearing) % 360) + 540) % 360 - 180;
+  smoothBearing += delta;
+  return smoothBearing;
+}
+
+function updateDroneCameraTransform() {
+  const wrap = document.getElementById('map-stage-wrap');
+  const viewport = document.getElementById('map-drone-viewport');
+  const plane = document.getElementById('map-camera-plane');
+  if (!wrap || !viewport || !plane) return;
+
+  const isMini = false;
+  const isQuarter = currentMode === 'music' || currentMode === 'vehicle';
+  const isHome = currentMode === 'home' || isQuarter;
+  const isFull = currentMode === 'mapFull';
+  const isMap = currentMode === 'map';
+
+  wrap.classList.toggle('is-mini-map', isMini);
+  wrap.classList.toggle('is-quarter', isQuarter);
+  wrap.classList.toggle('is-drone-home', isHome);
+  wrap.classList.toggle('is-drone-map', isMap || isFull);
+
+  // MapLibre inclina a câmera de verdade: nada de transformação CSS no plano
+  if (mlMap) {
+    viewport.style.perspective = 'none';
+    plane.style.transform = 'none';
+    return;
+  }
+
+  if (isMini || currentMode === 'settings') {
+    viewport.style.perspective = 'none';
+    plane.style.transform = 'none';
+    return;
+  }
+
+  if (isHome) {
+    // Câmera de drone baixa atrás do carro: inclinação forte, carro no terço inferior
+    // e deslocado +27px para ficar no eixo da coluna central (388px | mapa | 334px).
+    // Música: mapa no 1/4 esquerdo (centro x≈183); Veículo: 1/4 direito (x≈1151)
+    const dx = currentMode === 'music' ? -484 : currentMode === 'vehicle' ? 484 : 27;
+    const originX = ((666.5 + dx) / 13.33).toFixed(1);
+    viewport.style.perspective = '760px';
+    viewport.style.perspectiveOrigin = `${originX}% 26%`;
+    plane.style.transform = `translate(${dx}px, 96px) rotateX(58deg) scale(1.55) rotateZ(${(-smoothBearing).toFixed(1)}deg)`;
+    return;
+  }
+
+  // Modo Mapa / Tela Cheia: mantém inclinação drone suave ao seguir o carro e aplana ao arrastar livremente
+  if (followCar) {
+    const tilt = isFull ? 22 : 26;
+    const scale = isFull ? 1.15 : 1.18;
+    viewport.style.perspective = '1420px';
+    viewport.style.perspectiveOrigin = '50% 44%';
+    plane.style.transform = `rotateX(${tilt}deg) scale(${scale}) rotateZ(0deg)`;
+  } else {
+    viewport.style.perspective = '1420px';
+    viewport.style.perspectiveOrigin = '50% 50%';
+    plane.style.transform = 'rotateX(0deg) scale(1) rotateZ(0deg)';
+  }
+}
+
 function resizeActiveMap() {
+  if (mlMap) {
+    requestAnimationFrame(() => {
+      mlMap.resize();
+      mlFollowCamera({ immediate: true });
+    });
+  }
   if (leafletMap) {
     leafletMap.invalidateSize({ animate: false });
     if (lastMapState && followCar) {
-      const z = isMapInteractiveMode(currentMode) ? Math.max(leafletMap.getZoom(), 15) : 15;
+      const z = currentMode === 'home' ? 16 : isMapInteractiveMode(currentMode) ? Math.max(leafletMap.getZoom(), 15) : 15;
       leafletMap.setView([lastMapState.lat, lastMapState.lon], z, { animate: false });
     }
   }
@@ -609,6 +831,7 @@ function resizeActiveMap() {
     window.google.maps.event.trigger(gmap, 'resize');
     if (lastMapState && followCar) {
       gmap.setCenter({ lat: Number(lastMapState.lat), lng: Number(lastMapState.lon) });
+      if (currentMode === 'home') gmap.setZoom(16);
     }
   }
 }
@@ -616,12 +839,13 @@ function resizeActiveMap() {
 function attachStageToSlot(mode) {
   const stageWrap = document.getElementById('map-stage-wrap');
   let targetSlot = null;
-  if (mode === 'home') targetSlot = document.getElementById('home-map-slot');
-  else if (mode === 'map' || mode === 'mapFull') targetSlot = document.getElementById('full-map-slot');
-  else if (mode === 'music') targetSlot = document.getElementById('mini-map-slot');
-  else targetSlot = document.getElementById('leaflet-holding');
+  // Música e Veículo usam o mapa de fundo visível em 1/4 da tela
+  if (mode === 'home' || mode === 'map' || mode === 'mapFull' || mode === 'music' || mode === 'vehicle') {
+    targetSlot = document.getElementById('global-map-slot');
+  } else targetSlot = document.getElementById('leaflet-holding');
 
-  if (targetSlot && stageWrap && stageWrap.parentElement !== targetSlot) {
+  const moved = Boolean(targetSlot && stageWrap && stageWrap.parentElement !== targetSlot);
+  if (moved) {
     targetSlot.appendChild(stageWrap);
   }
   const interactive = isMapInteractiveMode(mode);
@@ -631,9 +855,21 @@ function attachStageToSlot(mode) {
     updateRecenterUi();
   }
   updateFullscreenBtnUi();
+  updateDroneCameraTransform();
+  // Troca de modo: a câmera desliza até o novo enquadramento (carro no 1/4, no centro…)
+  if (mlMap && !moved) mlFollowCamera({ duration: 650 });
 
-  requestAnimationFrame(() => resizeActiveMap());
-  setTimeout(() => resizeActiveMap(), 370);
+  if (moved) {
+    requestAnimationFrame(() => resizeActiveMap());
+    setTimeout(() => resizeActiveMap(), 370);
+  } else if (followCar && lastMapState) {
+    if (leafletMap) {
+      const z = mode === 'home' ? 16 : Math.max(leafletMap.getZoom(), 15);
+      leafletMap.setView([lastMapState.lat, lastMapState.lon], z, { animate: true });
+    } else if (gmap) {
+      gmap.panTo({ lat: Number(lastMapState.lat), lng: Number(lastMapState.lon) });
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,7 +1373,8 @@ export function initMap({ switchMode, openFavoriteSettings }) {
   onModeSwitch = switchMode;
   onOpenFavoriteSettings = openFavoriteSettings;
 
-  initLeafletStage();
+  // MapLibre (vetorial/3D) é o padrão; sem WebGL cai para o Leaflet com imagens Esri
+  if (!initMapLibreStage()) initLeafletStage();
 
   const stageWrap = document.getElementById('map-stage-wrap');
   if (stageWrap && typeof ResizeObserver !== 'undefined') {
@@ -1207,6 +1444,8 @@ export function initMap({ switchMode, openFavoriteSettings }) {
   document.getElementById('map-recenter-btn').addEventListener('click', () => {
     followCar = true;
     updateRecenterUi();
+    updateDroneCameraTransform();
+    if (mlMap) mlFollowCamera({ duration: 600 });
     if (lastMapState) {
       if (activeProvider === 'google' && gmap) {
         gmap.panTo({ lat: Number(lastMapState.lat), lng: Number(lastMapState.lon) });
@@ -1217,11 +1456,13 @@ export function initMap({ switchMode, openFavoriteSettings }) {
     }
   });
   document.getElementById('map-zoom-in-btn').addEventListener('click', () => {
-    if (activeProvider === 'google' && gmap) gmap.setZoom((gmap.getZoom() || 15) + 1);
+    if (mlMap) mlMap.zoomIn();
+    else if (activeProvider === 'google' && gmap) gmap.setZoom((gmap.getZoom() || 15) + 1);
     else if (leafletMap) leafletMap.zoomIn();
   });
   document.getElementById('map-zoom-out-btn').addEventListener('click', () => {
-    if (activeProvider === 'google' && gmap) gmap.setZoom(Math.max(4, (gmap.getZoom() || 15) - 1));
+    if (mlMap) mlMap.zoomOut();
+    else if (activeProvider === 'google' && gmap) gmap.setZoom(Math.max(4, (gmap.getZoom() || 15) - 1));
     else if (leafletMap) leafletMap.zoomOut();
   });
 
@@ -1250,6 +1491,12 @@ export function setMapAccent(hex) {
   if (routeGlowLine) routeGlowLine.setStyle({ color: hex });
   if (routeMainLine) routeMainLine.setStyle({ color: hex });
   if (destCircle) destCircle.setStyle({ color: hex });
+  if (mlMap && mlMap.isStyleLoaded()) {
+    for (const id of ['hd-route-glow', 'hd-route-main']) {
+      if (mlMap.getLayer(id)) mlMap.setPaintProperty(id, 'line-color', hex);
+    }
+    if (mlMap.getLayer('hd-dest')) mlMap.setPaintProperty('hd-dest', 'circle-stroke-color', hex);
+  }
   if (gmapRouteGlow) gmapRouteGlow.setOptions({ strokeColor: hex });
   if (gmapRouteMain) gmapRouteMain.setOptions({ strokeColor: hex });
   if (gmapCarMarker && lastMapState) gmapCarMarker.setIcon(buildGoogleCarSymbol(lastMapState.bearing || 0));
@@ -1273,9 +1520,27 @@ export function updateMapState(mapState, clockEpochMs, options = {}) {
   const lat = Number(mapState.lat || ANAPOLIS_DEFAULT.lat);
   const lon = Number(mapState.lon || ANAPOLIS_DEFAULT.lon);
   const bearing = Number(mapState.bearing || 0);
+  stepSmoothBearing(bearing);
+  updateDroneCameraTransform();
 
   if (activeProvider === 'google' && gmap) {
     syncGoogleMapState(mapState);
+  }
+
+  if (mlMap) {
+    mlCarMarker?.setLngLat([lon, lat]).setRotation(bearing);
+    const rt = mapState.route || {};
+    const pts = rt.active && Array.isArray(rt.polyline) ? rt.polyline : [];
+    const nextPolySig = pts.length >= 2 ? JSON.stringify(pts) : '';
+    if (nextPolySig !== polySignature) {
+      polySignature = nextPolySig;
+      mlRouteData = routeToGeoJSON(pts);
+      mlDestData = destToGeoJSON(pts);
+      mlMap.getSource('hd-route')?.setData(mlRouteData);
+      mlMap.getSource('hd-dest')?.setData(mlDestData);
+    }
+    // Segue o carro suavemente entre uma leitura de GPS e a próxima
+    mlFollowCamera({ duration: 900, linear: true });
   }
 
   if (leafletMap && carMarker) {

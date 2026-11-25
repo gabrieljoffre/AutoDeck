@@ -1,16 +1,24 @@
-// Velocímetro Órbita de dois anéis com ECG dinâmico, marchas N-1-2-3-4-5 e combustível
-// Matemática fiel ao Component.renderVals() de Main.dc.html, interpolando por frame sem recriar o SVG.
+// Velocímetro Honda estilo Ferrari:
+// - Arco esquerdo: Conta-giros 0–8 ×1000 RPM com zonas (verde/âmbar/vermelho) e ponteiro radial
+// - Arco direito (oposto ao conta-giros): Barra curva de combustível (E -> F)
+// - Centro: Emblema Honda real, velocidade digital grande (KM/H) e marchas N-1-2-3-4-5
+// - Interpola por frame via requestAnimationFrame sem recriar o SVG
 
 import { clamp, hexA, el } from './util.js';
 
+const CX = 190;
+const CY = 190;
+const DIAL_R = 152;
+const RPM_A0 = 124; // ~7h08 (0 RPM)
+const RPM_A1 = 316; // ~1h32 (8k RPM) — 192° de varredura
+const FUEL_E = 70;  // ~5h20 (tanque vazio)
+const FUEL_F = -18; // ~2h24 (tanque cheio) — 88° oposto ao conta-giros
+
 const GEARS_ORDER = ['N', '1', '2', '3', '4', '5'];
 const ZONE_COLORS = ['#22C55E', '#FACC15', '#F43F5E'];
-const WAVE_DURS = ['2.2s', '1.4s', '0.8s'];
-const Z1 = 23.4375;
-const Z2 = 51.5625;
 
 let refs = null;
-let gearNodes = new Map();
+const gearNodes = new Map();
 let compactRefs = {
   speeds: [],
   gears: [],
@@ -18,22 +26,21 @@ let compactRefs = {
   rpmTexts: []
 };
 
-let target = {
+const target = {
   speed: 0,
   rpmK: 0,
   gear: 'N',
   fuelPct: 66
 };
 
-let cur = {
+const cur = {
   speed: 0,
   rpmK: 0,
   fuelPct: 66
 };
 
-let rendered = {
+const rendered = {
   speedInt: -1,
-  speedDash: '',
   rpmQuant: -1,
   zone: -1,
   gear: '',
@@ -43,34 +50,120 @@ let rendered = {
 let rafId = null;
 let lastTs = 0;
 
-function pol(t, r, size = 440) {
-  const a = ((135 + 270 * t) * Math.PI) / 180;
-  const k = size / 440;
+function polar(deg, r, cx = CX, cy = CY) {
+  const rad = (deg * Math.PI) / 180;
   return {
-    x: ((220 + r * Math.cos(a)) * k).toFixed(1) + 'px',
-    y: ((220 + r * Math.sin(a)) * k).toFixed(1) + 'px'
+    x: cx + r * Math.cos(rad),
+    y: cy + r * Math.sin(rad)
   };
+}
+
+function arcPath(r, a0, a1, sweepCW = 1) {
+  const p0 = polar(a0, r);
+  const p1 = polar(a1, r);
+  const diff = sweepCW ? ((a1 - a0 + 360) % 360) : ((a0 - a1 + 360) % 360);
+  const large = diff > 180 ? 1 : 0;
+  return `M ${p0.x.toFixed(1)} ${p0.y.toFixed(1)} A ${r} ${r} 0 ${large} ${sweepCW} ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`;
+}
+
+function svgEl(tag, attrs = {}) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    node.setAttribute(k, String(v));
+  }
+  return node;
 }
 
 function normalizeRpmToThousands(rawRpm) {
   const n = Math.max(0, Number(rawRpm || 0));
-  // Suporta tanto RPM inteiro OBD-II (0..8000) quanto já em milhar (0.0..8.0)
   const k = n > 20 ? n / 1000 : n;
   return clamp(k, 0, 8);
 }
 
-function computeEcgPath(rpmK) {
-  const amp = 1 + rpmK * 0.9;
-  const steps = Math.max(2, Math.round(((270 * rpmK) / 8) * 2));
-  let ecg = '';
-  for (let i = 0; i <= steps; i++) {
-    const u = (i % 10) / 10;
-    const v = u < 0.3 ? 0 : u < 0.4 ? -0.35 : u < 0.5 ? 1 : u < 0.6 ? -0.6 : u < 0.7 ? 0.25 : 0;
-    const a = ((135 + i * 0.5) * Math.PI) / 180;
-    const r = 222 + amp * v;
-    ecg += (i ? 'L' : 'M') + (220 + r * Math.cos(a)).toFixed(1) + ' ' + (220 + r * Math.sin(a)).toFixed(1);
+function buildStaticDial() {
+  const rpmSpan = RPM_A1 - RPM_A0;
+  const aAmber = RPM_A0 + (2.5 / 8) * rpmSpan;
+  const aRed = RPM_A0 + (5.5 / 8) * rpmSpan;
+
+  refs.rpmTrack.setAttribute('d', arcPath(DIAL_R, RPM_A0, RPM_A1, 1));
+  refs.rpmAmberZone.setAttribute('d', arcPath(DIAL_R, aAmber, aRed, 1));
+  refs.rpmRedZone.setAttribute('d', arcPath(DIAL_R, aRed, RPM_A1, 1));
+  refs.fuelTrack.setAttribute('d', arcPath(DIAL_R, FUEL_E, FUEL_F, 0));
+
+  // Marcações (ticks) e rótulos 0..8 no arco esquerdo
+  refs.rpmTicks.replaceChildren();
+  refs.rpmLabels.replaceChildren();
+  for (let i = 0; i <= 16; i++) {
+    const ang = RPM_A0 + (i / 16) * rpmSpan;
+    const major = i % 2 === 0;
+    const pOut = polar(ang, 141);
+    const pIn = polar(ang, major ? 131 : 135);
+    refs.rpmTicks.appendChild(svgEl('line', {
+      x1: pIn.x.toFixed(1),
+      y1: pIn.y.toFixed(1),
+      x2: pOut.x.toFixed(1),
+      y2: pOut.y.toFixed(1),
+      stroke: i >= 11 ? '#F43F5E' : (major ? 'rgba(232,238,246,0.9)' : 'rgba(232,238,246,0.36)'),
+      'stroke-width': major ? 2.2 : 1.2,
+      'stroke-linecap': 'round'
+    }));
+
+    if (major) {
+      const val = i / 2;
+      const pLbl = polar(ang, 117);
+      const lbl = el('div', { className: 'gauge-rpm-lbl' }, String(val));
+      lbl.style.left = `${((pLbl.x / 380) * 100).toFixed(2)}%`;
+      lbl.style.top = `${((pLbl.y / 380) * 100).toFixed(2)}%`;
+      lbl.style.color = val >= 6 ? '#FB7185' : val >= 3 ? '#FACC15' : '#4ADE80';
+      refs.rpmLabels.appendChild(lbl);
+    }
   }
-  return ecg;
+
+  // Marcações e rótulos F / E na barra oposta de combustível
+  refs.fuelTicks.replaceChildren();
+  for (let i = 0; i <= 8; i++) {
+    const ang = FUEL_E - (i / 8) * (FUEL_E - FUEL_F);
+    const major = i % 2 === 0;
+    const pOut = polar(ang, 141);
+    const pIn = polar(ang, major ? 129 : 134);
+    refs.fuelTicks.appendChild(svgEl('line', {
+      x1: pIn.x.toFixed(1),
+      y1: pIn.y.toFixed(1),
+      x2: pOut.x.toFixed(1),
+      y2: pOut.y.toFixed(1),
+      stroke: i <= 1 ? '#F43F5E' : 'rgba(232,238,246,0.62)',
+      'stroke-width': major ? 2 : 1.1,
+      'stroke-linecap': 'round'
+    }));
+  }
+
+  refs.fuelLabels.replaceChildren();
+  const pF = polar(FUEL_F, 118);
+  const pE = polar(FUEL_E, 118);
+  const tF = svgEl('text', {
+    x: pF.x.toFixed(1),
+    y: (pF.y + 4).toFixed(1),
+    fill: '#94A3B8',
+    'font-size': 12,
+    'font-weight': 700,
+    'text-anchor': 'middle',
+    class: 'gauge-svg-label'
+  });
+  tF.textContent = 'F';
+  const tE = svgEl('text', {
+    x: pE.x.toFixed(1),
+    y: (pE.y + 4).toFixed(1),
+    fill: '#FB7185',
+    'font-size': 12,
+    'font-weight': 700,
+    'text-anchor': 'middle',
+    class: 'gauge-svg-label'
+  });
+  tE.textContent = 'E';
+  refs.fuelLabels.append(tF, tE);
+
+  // Miolo limpo: só a velocidade centralizada (sem emblema ao lado)
+  if (refs.hondaEmblem) refs.hondaEmblem.replaceChildren();
 }
 
 function applyFrame() {
@@ -80,14 +173,8 @@ function applyFrame() {
   const rpm = clamp(cur.rpmK, 0, 8);
   const fuel = clamp(cur.fuelPct, 0, 100);
 
-  // Velocidade
+  // Velocidade digital
   const speedInt = Math.round(speed);
-  const speedDash = ((75 * speed) / 220).toFixed(2) + ' 100';
-  if (speedDash !== rendered.speedDash) {
-    rendered.speedDash = speedDash;
-    refs.speedGlow.setAttribute('stroke-dasharray', speedDash);
-    refs.speedArc.setAttribute('stroke-dasharray', speedDash);
-  }
   if (speedInt !== rendered.speedInt) {
     rendered.speedInt = speedInt;
     const spStr = String(speedInt);
@@ -95,25 +182,23 @@ function applyFrame() {
     for (const node of compactRefs.speeds) node.textContent = spStr;
   }
 
-  // Conta-giros + ECG + Zona
-  const rpmQuant = Math.round(rpm * 40) / 40; // resolução de 25 RPM
+  // Conta-giros (arco esquerdo em 3 zonas + ponteiro Ferrari)
+  const rpmQuant = Math.round(rpm * 40) / 40;
   if (rpmQuant !== rendered.rpmQuant) {
     rendered.rpmQuant = rpmQuant;
-    const T = (75 * rpm) / 8;
-    const z1Dash = clamp(T, 0, Z1).toFixed(2) + ' 100';
-    const z2Dash = `0 ${Z1} ${clamp(T - Z1, 0, Z2 - Z1).toFixed(2)} 100`;
-    const z3Dash = `0 ${Z2} ${clamp(T - Z2, 0, 75 - Z2).toFixed(2)} 100`;
-    const rpmDash = T.toFixed(2) + ' 100';
+    const rpmSpan = RPM_A1 - RPM_A0;
+    const aCur = RPM_A0 + (Math.max(0.04, rpm) / 8) * rpmSpan;
+    const aAmber = RPM_A0 + (2.5 / 8) * rpmSpan;
+    const aRed = RPM_A0 + (5.5 / 8) * rpmSpan;
 
-    refs.z1.setAttribute('stroke-dasharray', z1Dash);
-    refs.z2.setAttribute('stroke-dasharray', z2Dash);
-    refs.z3.setAttribute('stroke-dasharray', z3Dash);
-    refs.rpmGlow.setAttribute('stroke-dasharray', rpmDash);
+    refs.rpmGlow.setAttribute('d', rpm > 0.05 ? arcPath(DIAL_R, RPM_A0, aCur, 1) : '');
+    refs.z1.setAttribute('d', rpm > 0.05 ? arcPath(DIAL_R, RPM_A0, Math.min(aCur, aAmber), 1) : '');
+    refs.z2.setAttribute('d', aCur > aAmber ? arcPath(DIAL_R, aAmber, Math.min(aCur, aRed), 1) : '');
+    refs.z3.setAttribute('d', aCur > aRed ? arcPath(DIAL_R, aRed, aCur, 1) : '');
 
-    const ecg = computeEcgPath(rpm);
-    refs.ecgGlow.setAttribute('d', ecg);
-    refs.ecgBase.setAttribute('d', ecg);
-    refs.ecgPulse.setAttribute('d', ecg);
+    // Ponteiro aponta para cima (270°), então rotação = ang + 90
+    const needleAng = RPM_A0 + (rpm / 8) * rpmSpan + 90;
+    refs.needle.setAttribute('transform', `rotate(${needleAng.toFixed(1)} ${CX} ${CY})`);
 
     const rpmLabel = `${rpm.toFixed(1)} ×1000 RPM`;
     refs.rpmText.textContent = rpmLabel;
@@ -126,16 +211,12 @@ function applyFrame() {
   if (zone !== rendered.zone) {
     rendered.zone = zone;
     const zoneColor = ZONE_COLORS[zone];
-    const zoneGlow = hexA(zoneColor, 0.28);
-    refs.ecgGlow.setAttribute('stroke', zoneGlow);
-    refs.ecgBase.setAttribute('stroke', zoneColor);
-    refs.ecgPulse.setAttribute('stroke', zoneColor);
-    refs.rpmGlow.setAttribute('stroke', zoneGlow);
-    refs.ecgAnim.setAttribute('dur', WAVE_DURS[zone]);
+    refs.rpmGlow.setAttribute('stroke', hexA(zoneColor, 0.28));
+    refs.needleHalo.setAttribute('stroke', zoneColor);
     refs.rpmText.style.color = zoneColor;
   }
 
-  // Marchas
+  // Marchas N 1 2 3 4 5
   const g = String(target.gear || 'N').toUpperCase();
   if (g !== rendered.gear) {
     rendered.gear = g;
@@ -145,13 +226,19 @@ function applyFrame() {
     for (const node of compactRefs.gears) node.textContent = g;
   }
 
-  // Combustível
+  // Combustível (arco oposto direito E -> F)
   const fuelQuant = Math.round(fuel * 2) / 2;
   if (fuelQuant !== rendered.fuelQuant) {
     rendered.fuelQuant = fuelQuant;
-    const pctStr = `${fuelQuant}%`;
-    refs.fuelMask.style.left = pctStr;
-    refs.fuelThumb.style.left = pctStr;
+    const frac = Math.max(0.02, fuel / 100);
+    const aFuel = FUEL_E - frac * (FUEL_E - FUEL_F);
+    const dFuel = arcPath(DIAL_R, FUEL_E, aFuel, 0);
+    refs.fuelArc.setAttribute('d', dFuel);
+    refs.fuelGlow.setAttribute('d', dFuel);
+    const low = fuel <= 15;
+    refs.fuelGlow.setAttribute('stroke', low ? 'rgba(244,63,94,0.34)' : 'rgba(34,197,94,0.24)');
+    if (refs.fuelPctText) refs.fuelPctText.textContent = `${Math.round(fuel)}%`;
+    if (refs.fuelBadge) refs.fuelBadge.classList.toggle('low', low);
   }
 }
 
@@ -197,61 +284,32 @@ function ensureAnimating() {
 
 export function initGauge() {
   refs = {
-    ecgGlow: document.getElementById('ecg-glow'),
-    ecgBase: document.getElementById('ecg-base'),
-    ecgPulse: document.getElementById('ecg-pulse'),
-    ecgAnim: document.getElementById('ecg-anim'),
+    rpmTrack: document.getElementById('gauge-rpm-track'),
+    rpmAmberZone: document.getElementById('gauge-rpm-amberzone'),
+    rpmRedZone: document.getElementById('gauge-rpm-redzone'),
     rpmGlow: document.getElementById('gauge-rpm-glow'),
     z1: document.getElementById('gauge-z1'),
     z2: document.getElementById('gauge-z2'),
     z3: document.getElementById('gauge-z3'),
-    minorTicks: document.getElementById('gauge-minor-ticks'),
-    majorTicks: document.getElementById('gauge-major-ticks'),
-    speedGlow: document.getElementById('gauge-speed-glow'),
-    speedArc: document.getElementById('gauge-speed-arc'),
-    speedLabels: document.getElementById('gauge-speed-labels'),
+    rpmTicks: document.getElementById('gauge-rpm-ticks'),
     rpmLabels: document.getElementById('gauge-rpm-labels'),
+    needle: document.getElementById('gauge-rpm-needle'),
+    needleHalo: document.getElementById('gauge-needle-halo'),
+    hondaEmblem: document.getElementById('gauge-honda-emblem'),
+    fuelTrack: document.getElementById('gauge-fuel-track'),
+    fuelGlow: document.getElementById('gauge-fuel-glow'),
+    fuelArc: document.getElementById('gauge-fuel-arc'),
+    fuelTicks: document.getElementById('gauge-fuel-ticks'),
+    fuelLabels: document.getElementById('gauge-fuel-labels'),
+    fuelBadge: document.querySelector('.fuel-hit-badge'),
+    fuelPctText: document.getElementById('fuel-pct-text'),
     speedText: document.getElementById('gauge-speed-text'),
     rpmText: document.getElementById('gauge-rpm-text'),
-    gearsWrap: document.getElementById('gauge-gears'),
-    fuelMask: document.getElementById('fuel-mask'),
-    fuelThumb: document.getElementById('fuel-thumb')
+    gearsWrap: document.getElementById('gauge-gears')
   };
 
-  // Ticks estáticos idênticos a Main.dc.html
-  const minor = [];
-  for (let i = 0; i < 16; i++) minor.push('0.7 15.8');
-  minor.push('0.7 200');
-  refs.minorTicks.setAttribute('stroke-dasharray', minor.join(' '));
+  buildStaticDial();
 
-  const major = [];
-  for (let i = 0; i < 8; i++) major.push('1.2 31.8');
-  major.push('1.2 200');
-  refs.majorTicks.setAttribute('stroke-dasharray', major.join(' '));
-
-  // Rótulos 0..220 km/h (raio 112)
-  refs.speedLabels.replaceChildren();
-  for (let v = 0; v <= 220; v += 20) {
-    const p = pol(v / 220, 112, 440);
-    const lbl = el('div', { className: 'gauge-speed-lbl' }, String(v));
-    lbl.style.left = p.x;
-    lbl.style.top = p.y;
-    refs.speedLabels.appendChild(lbl);
-  }
-
-  // Rótulos 0..8 ×1000 RPM (raio 162)
-  refs.rpmLabels.replaceChildren();
-  for (let v = 0; v <= 8; v++) {
-    const p = pol(v / 8, 162, 440);
-    const color = v >= 6 ? '#FB7185' : v >= 3 ? '#FACC15' : '#4ADE80';
-    const lbl = el('div', { className: 'gauge-rpm-lbl' }, String(v));
-    lbl.style.left = p.x;
-    lbl.style.top = p.y;
-    lbl.style.color = color;
-    refs.rpmLabels.appendChild(lbl);
-  }
-
-  // Marchas N 1 2 3 4 5
   refs.gearsWrap.replaceChildren();
   gearNodes.clear();
   for (const g of GEARS_ORDER) {

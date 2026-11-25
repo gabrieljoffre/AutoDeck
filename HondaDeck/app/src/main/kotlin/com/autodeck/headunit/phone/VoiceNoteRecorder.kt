@@ -53,17 +53,25 @@ class VoiceNoteRecorder(private val appContext: Context) {
         outDir.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 30 * 60_000L }?.forEach {
             runCatching { it.delete() }
         }
-        val outFile = File(outDir, "voz_${System.currentTimeMillis()}.m4a")
+        // OGG/Opus (Android 10+): o WhatsApp mostra como recado de voz; antes disso, M4A/AAC.
+        val useOpus = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
+        val outFile = File(outDir, "voz_${System.currentTimeMillis()}." + if (useOpus) "ogg" else "m4a")
 
         val recorder = createRecorder()
         activeRecorder = recorder
         val startedAt = System.currentTimeMillis()
         try {
             recorder.setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+            if (useOpus) {
+                recorder.setOutputFormat(MediaRecorder.OutputFormat.OGG)
+                recorder.setAudioEncoder(MediaRecorder.AudioEncoder.OPUS)
+                recorder.setAudioSamplingRate(16_000)
+            } else {
+                recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                recorder.setAudioSamplingRate(24_000)
+            }
             recorder.setAudioChannels(1)
-            recorder.setAudioSamplingRate(24_000)
             recorder.setAudioEncodingBitRate(32_000)
             recorder.setOutputFile(outFile.absolutePath)
             recorder.prepare()
@@ -114,7 +122,7 @@ class VoiceNoteRecorder(private val appContext: Context) {
                 runCatching { outFile.delete() }
                 return@withContext Result.failure(IllegalStateException("Não captei áudio suficiente na gravação."))
             }
-            Result.success(RecordedVoiceNote(file = outFile, mimeType = "audio/mp4", durationMs = duration))
+            Result.success(RecordedVoiceNote(file = outFile, mimeType = if (useOpus) "audio/ogg; codecs=opus" else "audio/mp4", durationMs = duration))
         } catch (err: Throwable) {
             runCatching { recorder.release() }
             activeRecorder = null
