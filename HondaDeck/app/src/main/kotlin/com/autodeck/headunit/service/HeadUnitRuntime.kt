@@ -1324,9 +1324,14 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     }
 
     override suspend fun resolvePhoneRecipient(recipient: String): ResolvedPhoneRecipient {
-        val clean = recipient.trim()
+        var clean = recipient.trim()
         if (clean.isEmpty()) {
             return ResolvedPhoneRecipient(ok = false, errorMessage = "Informe o contato ou número.")
+        }
+        // "número 62982024049", "telefone (62) 98202-4049": com 10+ dígitos e poucas letras, é um número.
+        val onlyDigits = clean.filter { it.isDigit() }
+        if (onlyDigits.length >= 10 && clean.count { it.isLetter() } <= 12) {
+            clean = onlyDigits
         }
         val normNum = BrazilPhoneNumber.normalizeForDial(clean)
         if (normNum != null && BrazilPhoneNumber.looksLikePhoneNumber(clean)) {

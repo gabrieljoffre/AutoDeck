@@ -186,12 +186,21 @@ class PonteWhatsAppManager(
         }
 
         val resolvedMime = mimeType.trim().ifBlank { "audio/mp4" }
-        val pending = PonteAccessibilityController.arm(PonteAccessibilityController.ActionMode.SEND_VOICE)
+        // Se o WhatsApp abrir o seletor "Enviar para...", a acessibilidade busca por este nome/número.
+        val searchQuery = contactName.ifBlank { contactsManager.resolveDisplayNameByNumber(number).orEmpty() }
+            .ifBlank { number.filter { it.isDigit() }.takeLast(11) }
+        val pending = PonteAccessibilityController.arm(
+            PonteAccessibilityController.ActionMode.SEND_VOICE,
+            windowMs = 30_000L,
+            targetQuery = searchQuery
+        )
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = resolvedMime
             setPackage(pkg)
             putExtra(Intent.EXTRA_STREAM, contentUri)
             putExtra("jid", jid)
+            // Compartilhamento direto (Direct Share): o WhatsApp abre a conversa do jid quando ele é um atalho publicado.
+            putExtra(Intent.EXTRA_SHORTCUT_ID, jid)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         val launched = runCatching {
@@ -208,14 +217,15 @@ class PonteWhatsAppManager(
             )
         }
 
-        val confirmed = withTimeoutOrNull(11_000L) { pending.completion.await() } == true
+        val confirmed = withTimeoutOrNull(28_000L) { pending.completion.await() } == true
         val label = contactName.ifBlank { BrazilPhoneNumber.formatDisplay(number) }
         return if (confirmed) {
             WhatsAppActionOutcome(ok = true, message = "Mensagem de voz enviada no WhatsApp para $label.")
         } else {
             WhatsAppActionOutcome(
-                ok = true,
-                message = "Áudio encaminhado ao WhatsApp para $label."
+                ok = false,
+                message = "Não consegui confirmar o envio do áudio para $label; confira o WhatsApp no celular.",
+                errorCode = PhoneLinkProtocol.ERR_INTERNAL
             )
         }
     }

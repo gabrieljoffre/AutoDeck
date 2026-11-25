@@ -306,11 +306,30 @@ class PonteServerService : Service() {
                 val line = reader.readLine() ?: break
                 val msg = PhoneLinkCodec.decode(line)
                 if (msg is PhoneLinkMessage.Request) {
-                    val wasAuth = session.authenticated
-                    val response = dispatchRequest(session, msg)
-                    session.send(response)
-                    if (!wasAuth && session.authenticated && response.ok) {
-                        sendInitialSnapshotTo(session)
+                    val isHandshake = msg.method == PhoneLinkProtocol.METHOD_PAIR ||
+                        msg.method == PhoneLinkProtocol.METHOD_AUTH || !session.authenticated
+                    if (isHandshake) {
+                        // Pareamento/autenticação continuam em ordem.
+                        val wasAuth = session.authenticated
+                        val response = dispatchRequest(session, msg)
+                        session.send(response)
+                        if (!wasAuth && session.authenticated && response.ok) {
+                            sendInitialSnapshotTo(session)
+                        }
+                    } else {
+                        // Ações longas (áudio no WhatsApp, ligação) não podem bloquear o ping do tablet:
+                        // cada pedido roda em paralelo e responde pelo mesmo socket (envio sincronizado).
+                        scope.launch {
+                            val response = runCatching { dispatchRequest(session, msg) }.getOrElse { err ->
+                                PhoneLinkMessage.Response(
+                                    id = msg.id,
+                                    ok = false,
+                                    error = "Erro interno na Ponte: ${err.message}",
+                                    errorCode = PhoneLinkProtocol.ERR_INTERNAL
+                                )
+                            }
+                            session.send(response)
+                        }
                     }
                 }
             }

@@ -33,7 +33,9 @@ object PonteAccessibilityController {
         val mode: ActionMode,
         val armedAtElapsedMs: Long,
         val expiresAtElapsedMs: Long,
-        val completion: CompletableDeferred<Boolean> = CompletableDeferred()
+        val completion: CompletableDeferred<Boolean> = CompletableDeferred(),
+        /** Nome do contato ou número a procurar se o WhatsApp abrir a tela "Enviar para..." (seletor de contatos). */
+        val targetQuery: String = ""
     ) {
         fun isActive(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Boolean =
             nowElapsedMs in armedAtElapsedMs..expiresAtElapsedMs && !completion.isCompleted
@@ -47,12 +49,13 @@ object PonteAccessibilityController {
     var isServiceConnected: Boolean = false
         internal set
 
-    fun arm(mode: ActionMode, windowMs: Long = WINDOW_MS): PendingAction {
+    fun arm(mode: ActionMode, windowMs: Long = WINDOW_MS, targetQuery: String = ""): PendingAction {
         val now = SystemClock.elapsedRealtime()
         val action = PendingAction(
             mode = mode,
             armedAtElapsedMs = now,
-            expiresAtElapsedMs = now + windowMs
+            expiresAtElapsedMs = now + windowMs,
+            targetQuery = targetQuery.trim()
         )
         pendingRef.getAndSet(action)?.completion?.complete(false)
         return action
@@ -97,6 +100,10 @@ object PonteAccessibilityController {
 class PonteAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Ação de áudio para a qual o contato já foi tocado no seletor (evita desmarcar com um 2º toque). */
+    @Volatile
+    private var tappedPickerFor: PonteAccessibilityController.PendingAction? = null
     private var lastActionClickAtMs: Long = 0L
 
     override fun onServiceConnected() {
@@ -126,6 +133,13 @@ class PonteAccessibilityService : AccessibilityService() {
 
         val root = rootInActiveWindow ?: return
         try {
+            if (pending.mode == PonteAccessibilityController.ActionMode.SEND_VOICE &&
+                !hasSendButton(root, pkg) && handleSharePicker(root, pkg, pending.targetQuery)
+            ) {
+                lastActionClickAtMs = now
+                scheduleVoiceRecheck(pkg)
+                return
+            }
             val handled = when (pending.mode) {
                 PonteAccessibilityController.ActionMode.SEND_TEXT -> tryClickSendButton(root, pkg)
                 PonteAccessibilityController.ActionMode.SEND_VOICE -> tryClickSendMediaOrConfirm(root, pkg)
@@ -137,18 +151,7 @@ class PonteAccessibilityService : AccessibilityService() {
                     PonteAccessibilityController.markCompleted(pending, true)
                     scheduleReturnToPreviousScreen()
                 } else if (pending.mode == PonteAccessibilityController.ActionMode.SEND_VOICE) {
-                    // Em áudio compartilhado pode haver tela intermediária de confirmação; checa uma segunda vez
-                    mainHandler.postDelayed({
-                        val still = PonteAccessibilityController.currentActive()
-                        if (still === pending) {
-                            val r2 = rootInActiveWindow
-                            if (r2 != null) {
-                                tryClickDialogConfirm(r2)
-                            }
-                            PonteAccessibilityController.markCompleted(pending, true)
-                            scheduleReturnToPreviousScreen()
-                        }
-                    }, 900L)
+                    finishVoiceAfterSend(pending, pkg)
                 } else {
                     // Ligação de voz: pode aparecer diálogo "Fazer chamada de voz?" -> confirma se aparecer
                     mainHandler.postDelayed({
@@ -166,6 +169,125 @@ class PonteAccessibilityService : AccessibilityService() {
         } catch (err: Throwable) {
             Log.w(TAG, "Erro ao inspecionar janela do WhatsApp: ${err.message}")
         }
+    }
+
+    /**
+     * O WhatsApp nem sempre emite eventos depois que a busca é preenchida; refaz a checagem sozinho
+     * (busca -> seleciona o contato -> toca em Enviar) enquanto a ação de áudio estiver armada.
+     */
+    private fun scheduleVoiceRecheck(pkg: String) {
+        mainHandler.postDelayed({
+            val pending = PonteAccessibilityController.currentActive() ?: return@postDelayed
+            if (pending.mode != PonteAccessibilityController.ActionMode.SEND_VOICE) return@postDelayed
+            val root = findWhatsAppRoot(pkg) ?: run { scheduleVoiceRecheck(pkg); return@postDelayed }
+            val now = SystemClock.elapsedRealtime()
+            try {
+                if (!hasSendButton(root, pkg) && handleSharePicker(root, pkg, pending.targetQuery)) {
+                    lastActionClickAtMs = now
+                    scheduleVoiceRecheck(pkg)
+                } else if (tryClickSendMediaOrConfirm(root, pkg)) {
+                    lastActionClickAtMs = now
+                    finishVoiceAfterSend(pending, pkg)
+                } else {
+                    scheduleVoiceRecheck(pkg)
+                }
+            } catch (err: Throwable) {
+                Log.w(TAG, "Rechecagem do envio de áudio: ${err.message}")
+            }
+        }, 900L)
+    }
+
+    /** Toque real (gesto) no centro do elemento, para linhas de lista que não aceitam ACTION_CLICK. */
+    private fun tapOnNode(node: AccessibilityNodeInfo): Boolean {
+        val r = android.graphics.Rect()
+        node.getBoundsInScreen(r)
+        if (r.isEmpty) return false
+        val path = android.graphics.Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
+        val gesture = android.accessibilityservice.GestureDescription.Builder()
+            .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0L, 60L))
+            .build()
+        val ok = dispatchGesture(gesture, null, null)
+        Log.i(TAG, "Toque por gesto em (${r.centerX()}, ${r.centerY()}): $ok")
+        return ok
+    }
+
+    /** Janela do WhatsApp mesmo com o teclado aberto (o teclado pode ser a "janela ativa"). */
+    private fun findWhatsAppRoot(pkg: String): AccessibilityNodeInfo? {
+        val active = rootInActiveWindow
+        if (active?.packageName?.toString() == pkg) return active
+        return runCatching { windows.mapNotNull { it.root }.firstOrNull { it.packageName?.toString() == pkg } }.getOrNull() ?: active
+    }
+
+    /** Depois do toque em Enviar: pode haver uma tela de confirmação; confirma, conclui e volta. */
+    private fun finishVoiceAfterSend(pending: PonteAccessibilityController.PendingAction, pkg: String) {
+        mainHandler.postDelayed({
+            val still = PonteAccessibilityController.currentActive()
+            if (still === pending) {
+                val r2 = rootInActiveWindow
+                if (r2 != null && !tryClickDialogConfirm(r2)) {
+                    // Pode ter aberto a pré-visualização com outro botão Enviar
+                    tryClickSendMediaOrConfirm(r2, pkg)
+                }
+                PonteAccessibilityController.markCompleted(pending, true)
+                Log.i(TAG, "Mensagem de voz enviada pelo WhatsApp.")
+                scheduleReturnToPreviousScreen()
+            }
+        }, 1_100L)
+    }
+
+    private fun hasSendButton(root: AccessibilityNodeInfo, pkg: String): Boolean =
+        listOf("$pkg:id/send", "$pkg:id/send_media_btn").any { id ->
+            root.findAccessibilityNodeInfosByViewId(id).any { it.isVisibleToUser }
+        }
+
+    /**
+     * Tela "Enviar para..." do WhatsApp (o WhatsApp ignora o destinatário ao receber um arquivo):
+     * abre a busca, digita o contato/número e seleciona o primeiro resultado. O botão Enviar que
+     * aparece depois é tocado pelo fluxo normal. Retorna true se executou algum passo.
+     */
+    private fun handleSharePicker(root: AccessibilityNodeInfo, pkg: String, query: String): Boolean {
+        if (query.isBlank()) return false
+        val rows = root.findAccessibilityNodeInfosByViewId("$pkg:id/contactpicker_row_name")
+        val searchField = root.findAccessibilityNodeInfosByViewId("$pkg:id/search_src_text").firstOrNull()
+            ?: root.findAccessibilityNodeInfosByViewId("$pkg:id/search_input").firstOrNull()
+        val isPicker = rows.isNotEmpty() || searchField != null ||
+            root.findAccessibilityNodeInfosByViewId("$pkg:id/menuitem_search").isNotEmpty()
+        if (!isPicker) return false
+
+        if (searchField == null) {
+            val searchBtn = root.findAccessibilityNodeInfosByViewId("$pkg:id/menuitem_search").firstOrNull()
+            if (searchBtn != null && clickNodeOrParent(searchBtn)) {
+                Log.i(TAG, "Seletor de contatos: abrindo a busca.")
+                return true
+            }
+            return clickByDescription(root, setOf("pesquisar", "search", "buscar"))
+        }
+        val current = searchField.text?.toString().orEmpty()
+        val digits = { t: String -> t.filter { it.isDigit() } }
+        val qDigits = digits(query)
+        // O WhatsApp reformata números ("+55 (62) 98202-4049"): compara só os dígitos para não redigitar sem fim.
+        val alreadyTyped = if (qDigits.length >= 8) digits(current).endsWith(qDigits.takeLast(8))
+            else current.trim().equals(query.trim(), ignoreCase = true)
+        if (!alreadyTyped) {
+            val args = android.os.Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, query)
+            }
+            searchField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            Log.i(TAG, "Seletor de contatos: buscando \"$query\".")
+            return true
+        }
+        Log.i(TAG, "Seletor: texto=\"$current\" linhas=${rows.size} (${rows.joinToString { it.text?.toString().orEmpty() }})")
+        val norm = { t: String -> t.lowercase().filter { it.isLetterOrDigit() } }
+        val target = rows.firstOrNull { norm(it.text?.toString().orEmpty()).contains(norm(query)) } ?: rows.firstOrNull()
+        // A linha clicável do WhatsApp fica ~6 níveis acima do nome do contato.
+        val action = PonteAccessibilityController.currentActive()
+        if (action != null && tappedPickerFor === action) return false // já selecionou; aguarda o botão Enviar
+        if (target != null && !target.isSelected && (clickNodeOrParent(target, maxHops = 8) || tapOnNode(target))) {
+            tappedPickerFor = action
+            Log.i(TAG, "Seletor de contatos: selecionado \"${target.text}\".")
+            return true
+        }
+        return false
     }
 
     private fun tryClickSendButton(root: AccessibilityNodeInfo, pkg: String): Boolean {
@@ -278,10 +400,10 @@ class PonteAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun clickNodeOrParent(node: AccessibilityNodeInfo?): Boolean {
+    private fun clickNodeOrParent(node: AccessibilityNodeInfo?, maxHops: Int = 4): Boolean {
         var cur: AccessibilityNodeInfo? = node
         var hops = 0
-        while (cur != null && hops < 4) {
+        while (cur != null && hops < maxHops) {
             if (cur.isClickable && cur.isEnabled) {
                 if (cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
                     return true
@@ -305,7 +427,7 @@ class PonteAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "PonteAccessibility"
-        private const val CLICK_DEBOUNCE_MS = 450L
+        private const val CLICK_DEBOUNCE_MS = 650L
 
         private val WHATSAPP_PACKAGES = setOf(
             "com.whatsapp",

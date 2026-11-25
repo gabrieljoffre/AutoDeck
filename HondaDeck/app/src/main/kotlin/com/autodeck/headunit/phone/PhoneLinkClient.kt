@@ -522,7 +522,7 @@ class PhoneLinkClient(
                 "fileName" to audioFile.name,
                 "contactName" to contactName
             ),
-            timeoutMs = 22_000L
+            timeoutMs = 40_000L
         )
         res.map { it.result["message"]?.toString().orEmpty().ifBlank { "Áudio enviado no WhatsApp." } }
     }
@@ -614,6 +614,7 @@ class PhoneLinkClient(
         connectionLoopJob = scope.launch(Dispatchers.IO) {
             var backoffMs = 2_000L
             while (isActive && started) {
+              try {
                 val token = prefs.getString(KEY_TOKEN, null).orEmpty()
                 if (token.isBlank()) {
                     delay(2_500L)
@@ -659,6 +660,14 @@ class PhoneLinkClient(
                     delay(backoffMs)
                     backoffMs = (backoffMs * 2).coerceAtMost(10_000L)
                 }
+              } catch (cancel: kotlinx.coroutines.CancellationException) {
+                throw cancel
+              } catch (err: Throwable) {
+                // Nunca deixar o laço morrer (ex.: a Ponte reiniciou no meio de uma chamada): fecha e tenta de novo.
+                android.util.Log.w("PhoneLinkClient", "Laço de reconexão: ${err.message}; tentando de novo.")
+                runCatching { closeActiveSocket() }
+                delay(3_000L)
+              }
             }
         }
     }
