@@ -1,0 +1,335 @@
+// Ponte única JS <-> Kotlin conforme .agy/contrato-ponte.md
+// Se window.HondaBridge não existir, carrega automaticamente ../mock/mock-backend.js
+
+const VALID_COMMANDS = new Set([
+  'ui.ready',
+  'ui.setAccent',
+  'ui.mode',
+  'audio.setVolume',
+  'audio.toggleMute',
+  'music.toggle',
+  'music.next',
+  'music.prev',
+  'music.shuffle',
+  'music.repeat',
+  'music.like',
+  'music.seek',
+  'music.playUri',
+  'music.search',
+  'music.authorize',
+  'music.openApp',
+  'map.search',
+  'map.route',
+  'map.stopRoute',
+  'map.openExternal',
+  'fav.save',
+  'fav.delete',
+  'fav.useCurrentLocation',
+  'copilot.listen',
+  'copilot.cancel',
+  'copilot.ask',
+  'notif.read',
+  'notif.dismiss',
+  'obd.connect',
+  'obd.disconnect',
+  'obd.readDtc',
+  'obd.clearDtc',
+  'obd.setSimulator',
+  'obd.selectDevice',
+  'fuel.log',
+  'fuel.delete',
+  'fuel.tank',
+  'settings.set',
+  'system.downloadOfflineMap',
+  'camera.toggle'
+]);
+
+export const DEFAULT_STATE = {
+  v: 1,
+  accent: '#22D3EE',
+  brand: 'HONDA',
+  clock: { epochMs: 0 },
+  weather: {
+    available: false,
+    tempC: 0,
+    maxC: 0,
+    minC: 0,
+    kind: 'PARTLY_CLOUDY',
+    summary: '',
+    city: 'Anápolis'
+  },
+  status: {
+    wifi: false,
+    bluetooth: false,
+    btName: '',
+    obd: 'DISCONNECTED',
+    gps: false
+  },
+  telemetry: {
+    speedKmh: 0,
+    rpm: 0,
+    gear: 'N',
+    fuelPct: 0,
+    voltage: 0,
+    coolantC: 0,
+    loadPct: 0,
+    alerts: []
+  },
+  media: {
+    status: 'NOT_CONFIGURED',
+    playing: false,
+    title: '',
+    artist: '',
+    album: '',
+    context: '',
+    positionMs: 0,
+    durationMs: 0,
+    shuffle: false,
+    repeat: 'off',
+    coverUrl: '',
+    liked: false
+  },
+  spotify: {
+    playlists: [],
+    recent: [],
+    recentSearches: [],
+    search: {
+      query: '',
+      loading: false,
+      error: null,
+      tracks: [],
+      artists: [],
+      albums: [],
+      playlists: []
+    }
+  },
+  map: {
+    lat: -16.3281,
+    lon: -48.9534,
+    bearing: 0,
+    hasFix: false,
+    favorites: [],
+    recentPlaces: [],
+    search: { query: '', loading: false, results: [] },
+    route: {
+      active: false,
+      loading: false,
+      error: null,
+      destination: '',
+      polyline: [],
+      nextInstruction: '',
+      nextIcon: 'STRAIGHT',
+      distanceToNextM: 0,
+      remainingM: 0,
+      remainingS: 0,
+      etaEpochMs: 0,
+      arrived: false
+    }
+  },
+  copilot: {
+    listening: false,
+    thinking: false,
+    online: false,
+    model: 'gemini-flash-lite-latest',
+    status: 'Aguardando "ok honda"',
+    lastUser: '',
+    lastReply: '',
+    lastAction: ''
+  },
+  audio: {
+    volumePct: 60,
+    muted: false,
+    route: 'Alto-falante'
+  },
+  notification: null,
+  vehicle: {
+    obdMessage: '',
+    simulator: false,
+    dtcCodes: [],
+    dtcBusy: false,
+    tankLiters: 0,
+    tankPct: 0,
+    pids: [],
+    fuelLog: {
+      entries: [],
+      summary: { lastKmL: 0, avgKmL: 0, avgPrice: 0, spent30d: 0, costPerKm: 0 }
+    },
+    maintenance: { items: [] }
+  },
+  settings: {
+    accentOptions: ['#22D3EE', '#A3E635', '#FB923C', '#A78BFA', '#F472B6'],
+    introMode: 'ANIMATION',
+    spotifyShowPlaylists: true,
+    spotifyShowRecent: true,
+    geminiKeySet: false,
+    geminiModel: 'gemini-flash-lite-latest',
+    wakeWord: 'ok honda',
+    wakeWordEnabled: true,
+    obdDevice: '',
+    pairedDevices: [],
+    ignitionDevice: '',
+    version: '3.0.0'
+  }
+};
+
+function asObj(v) {
+  return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+}
+
+function asArr(v, fallback = []) {
+  return Array.isArray(v) ? v : fallback;
+}
+
+export function normalizeState(raw) {
+  const s = asObj(raw);
+  const sp = asObj(s.spotify);
+  const mp = asObj(s.map);
+  const vh = asObj(s.vehicle);
+  const fl = asObj(vh.fuelLog);
+  const st = asObj(s.settings);
+
+  let notif = null;
+  if (s.notification && typeof s.notification === 'object') {
+    const n = s.notification;
+    if (n.id || n.title || n.text) {
+      notif = {
+        id: String(n.id ?? ''),
+        app: String(n.app ?? 'Mensagem'),
+        title: String(n.title ?? ''),
+        text: String(n.text ?? '')
+      };
+    }
+  }
+
+  return {
+    v: Number(s.v ?? 1),
+    accent: String(s.accent || DEFAULT_STATE.accent),
+    brand: String(s.brand || DEFAULT_STATE.brand),
+    clock: { ...DEFAULT_STATE.clock, ...asObj(s.clock) },
+    weather: { ...DEFAULT_STATE.weather, ...asObj(s.weather) },
+    status: { ...DEFAULT_STATE.status, ...asObj(s.status) },
+    telemetry: {
+      ...DEFAULT_STATE.telemetry,
+      ...asObj(s.telemetry),
+      alerts: asArr(asObj(s.telemetry).alerts)
+    },
+    media: { ...DEFAULT_STATE.media, ...asObj(s.media) },
+    spotify: {
+      playlists: asArr(sp.playlists),
+      recent: asArr(sp.recent),
+      recentSearches: asArr(sp.recentSearches),
+      search: {
+        ...DEFAULT_STATE.spotify.search,
+        ...asObj(sp.search),
+        tracks: asArr(asObj(sp.search).tracks),
+        artists: asArr(asObj(sp.search).artists),
+        albums: asArr(asObj(sp.search).albums),
+        playlists: asArr(asObj(sp.search).playlists)
+      }
+    },
+    map: {
+      ...DEFAULT_STATE.map,
+      ...mp,
+      favorites: asArr(mp.favorites),
+      recentPlaces: asArr(mp.recentPlaces),
+      search: {
+        ...DEFAULT_STATE.map.search,
+        ...asObj(mp.search),
+        results: asArr(asObj(mp.search).results)
+      },
+      route: {
+        ...DEFAULT_STATE.map.route,
+        ...asObj(mp.route),
+        polyline: asArr(asObj(mp.route).polyline)
+      }
+    },
+    copilot: { ...DEFAULT_STATE.copilot, ...asObj(s.copilot) },
+    audio: { ...DEFAULT_STATE.audio, ...asObj(s.audio) },
+    notification: notif,
+    vehicle: {
+      ...DEFAULT_STATE.vehicle,
+      ...vh,
+      dtcCodes: asArr(vh.dtcCodes),
+      pids: asArr(vh.pids),
+      fuelLog: {
+        entries: asArr(fl.entries),
+        summary: { ...DEFAULT_STATE.vehicle.fuelLog.summary, ...asObj(fl.summary) }
+      },
+      maintenance: {
+        items: asArr(asObj(vh.maintenance).items)
+      }
+    },
+    settings: {
+      ...DEFAULT_STATE.settings,
+      ...st,
+      accentOptions: asArr(st.accentOptions, DEFAULT_STATE.settings.accentOptions).length
+        ? asArr(st.accentOptions)
+        : DEFAULT_STATE.settings.accentOptions,
+      pairedDevices: asArr(st.pairedDevices)
+    }
+  };
+}
+
+let mockMode = false;
+let handlers = { onState: null, onTelemetry: null, onEvent: null };
+
+export function isMockBackend() {
+  return mockMode;
+}
+
+export function sendCommand(cmd, args) {
+  if (!VALID_COMMANDS.has(cmd)) {
+    console.warn('[HondaDeck] Comando ignorado fora do contrato:', cmd);
+    return;
+  }
+  const message = args !== undefined ? { cmd, args } : { cmd };
+  const serialized = JSON.stringify(message);
+  if (window.HondaBridge && typeof window.HondaBridge.send === 'function') {
+    try {
+      window.HondaBridge.send(serialized);
+    } catch (err) {
+      console.error('[HondaDeck] Falha ao enviar para HondaBridge:', err);
+    }
+  }
+}
+
+export async function setupBridge(callbacks) {
+  handlers = { ...handlers, ...callbacks };
+
+  window.HD = {
+    receive(rawMsg) {
+      try {
+        const msg = typeof rawMsg === 'string' ? JSON.parse(rawMsg) : rawMsg;
+        if (!msg || typeof msg !== 'object') return;
+        const { type, payload } = msg;
+        if (type === 'state' && handlers.onState) {
+          handlers.onState(normalizeState(payload));
+        } else if (type === 'telemetry' && handlers.onTelemetry) {
+          handlers.onTelemetry(asObj(payload));
+        } else if (type === 'event' && handlers.onEvent) {
+          handlers.onEvent(asObj(payload));
+        }
+      } catch (err) {
+        console.error('[HondaDeck] Erro ao processar mensagem da ponte:', err);
+      }
+    }
+  };
+
+  if (typeof window.HondaBridge === 'undefined' || typeof window.HondaBridge.send !== 'function') {
+    mockMode = true;
+    const mod = await import('../mock/mock-backend.js');
+    if (mod && typeof mod.installMockBackend === 'function') {
+      mod.installMockBackend();
+    }
+  }
+}
+
+/** Avisa o Kotlin que a UI está pronta (ele responde com um state completo). */
+export function signalReady() {
+  sendCommand('ui.ready');
+}
+
+export async function initBridge(callbacks) {
+  await setupBridge(callbacks);
+  signalReady();
+}
