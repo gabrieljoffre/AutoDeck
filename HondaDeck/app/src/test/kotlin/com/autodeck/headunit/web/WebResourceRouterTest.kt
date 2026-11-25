@@ -21,4 +21,16 @@ class WebResourceRouterTest {
         assertNull(WebResourceRouter.parseTilePath("../etc/passwd"))
         assertNull(WebResourceRouter.parseTilePath("25/0/0.png"))
     }
+
+    @Test
+    fun `valida caminho de icone de pacote e bloqueia path traversal`() {
+        assertEquals("com.spotify.music", WebResourceRouter.parsePackageIconPath("com.spotify.music.png"))
+        assertEquals("com.whatsapp", WebResourceRouter.parsePackageIconPath("/com.whatsapp.png?v=3"))
+        assertEquals("com.google.android.apps.maps", WebResourceRouter.parsePackageIconPath("com.google.android.apps.maps.png"))
+        assertNull(WebResourceRouter.parsePackageIconPath("../com.whatsapp.png"))
+        assertNull(WebResourceRouter.parsePackageIconPath("sub/com.whatsapp.png"))
+        assertNull(WebResourceRouter.parsePackageIconPath("com.whatsapp.jpg"))
+        assertNull(WebResourceRouter.parsePackageIconPath("singleword.png"))
+        assertNull(WebResourceRouter.parsePackageIconPath(""))
+    }
 }

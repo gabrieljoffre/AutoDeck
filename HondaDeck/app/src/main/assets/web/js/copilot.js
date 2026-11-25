@@ -5,7 +5,7 @@
 // 3. Fluxo legado de resposta de texto / pergunta digitada (copilot.ask).
 
 import { sendCommand } from './bridge.js';
-import { el, setText } from './util.js';
+import { el, setText, createAppIconEl, appCandidatesForKey } from './util.js';
 import { setDockCopilotPhase } from './dock.js';
 
 const REPLY_TTL_MS = 8000;
@@ -94,6 +94,28 @@ function makeGeminiSparkleSvg(size = 24) {
   p.setAttribute('d', 'M12 2c.7 4.9 4.1 8.3 9 9-4.9.7-8.3 4.1-9 9-.7-4.9-4.1-8.3-9-9 4.9-.7 8.3-4.1 9-9z');
   svg.appendChild(p);
   return svg;
+}
+
+function makeOpenGeminiAppBtn(compact = false) {
+  const icon = createAppIconEl({
+    candidates: appCandidatesForKey('gemini', lastState?.phone?.roles || {}),
+    size: compact ? 20 : 22,
+    radius: 6,
+    alt: 'Gemini',
+    fallback: makeGeminiSparkleSvg(compact ? 16 : 18)
+  });
+  return el(
+    'button',
+    {
+      className: compact ? 'copilot-open-gemini-btn compact' : 'copilot-open-gemini-btn',
+      type: 'button',
+      'data-test': 'copilot-open-gemini',
+      'aria-label': 'Abrir aplicativo Gemini oficial',
+      onClick: () => sendCommand('copilot.openGeminiApp')
+    },
+    icon,
+    el('span', null, compact ? 'Gemini oficial' : 'Abrir Gemini oficial')
+  );
 }
 
 function buildReactiveWave(weights, barClass) {
@@ -191,7 +213,12 @@ function mountLiveCard() {
         statusPill,
         phaseLabel
       ),
-      stopBtn
+      el(
+        'div',
+        { className: 'copilot-live-actions' },
+        makeOpenGeminiAppBtn(true),
+        stopBtn
+      )
     ),
     el('div', { className: 'copilot-live-wave-box' }, wave),
     el('div', { className: 'copilot-live-transcript' }, userLine, replyLine),
@@ -268,9 +295,18 @@ function mountAskSheet() {
     el(
       'div',
       { className: 'copilot-ask-row' },
-      el('span', { className: 'copilot-ask-orb', 'aria-hidden': 'true' }, makeGeminiSparkleSvg(26)),
+      el('span', { className: 'copilot-ask-orb', 'aria-hidden': 'true' },
+        createAppIconEl({
+          candidates: appCandidatesForKey('gemini', lastState?.phone?.roles || {}),
+          size: 32,
+          radius: 9,
+          alt: 'Gemini',
+          fallback: makeGeminiSparkleSvg(26)
+        })
+      ),
       el('div', { className: 'copilot-ask-wave-wrap' }, wave),
       el('div', { className: 'copilot-ask-texts' }, titleNode, userNode, replyNode),
+      makeOpenGeminiAppBtn(true),
       closeBtn
     )
   );
@@ -388,7 +424,7 @@ function renderReply() {
       closeBtn
     ),
     el('div', { className: 'copilot-reply-body' }, replyText),
-    el('div', { className: 'copilot-ask-form' }, askInput, askBtn)
+    el('div', { className: 'copilot-ask-form' }, askInput, askBtn, makeOpenGeminiAppBtn(true))
   );
 }
 

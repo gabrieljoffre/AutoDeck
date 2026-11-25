@@ -1,7 +1,7 @@
 // Cartão grande de Calendário: visão de Mês + lista de Dia/Semana + feriados do Brasil + rota
 
 import { sendCommand } from './bridge.js';
-import { el, jsonSig } from './util.js';
+import { el, jsonSig, createAppIconEl, appCandidatesForKey, getPhoneIconsVersion } from './util.js';
 
 const MESES_COMPLETOS = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -16,6 +16,7 @@ const DIAS_CABECALHO = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
 let modalEl = null;
 let cardEl = null;
 let latestCalendar = { permissionGranted: false, events: [], holidays: [], statusText: '' };
+let latestPhoneRoles = {};
 let currentNowMs = Date.now();
 let viewYear = new Date().getFullYear();
 let viewMonth = new Date().getMonth(); // 0..11
@@ -326,7 +327,7 @@ function render(force = false) {
   if (!selectedIso) selectedIso = todayIso();
 
   const viewKey = `${viewYear}-${viewMonth}|${selectedIso}|${listScope}|${todayIso()}`;
-  const sig = `${viewKey}|${Boolean(latestCalendar.permissionGranted)}|${jsonSig(latestCalendar.events)}|${jsonSig(latestCalendar.holidays)}`;
+  const sig = `${viewKey}|${Boolean(latestCalendar.permissionGranted)}|${getPhoneIconsVersion()}|${jsonSig(latestPhoneRoles)}|${jsonSig(latestCalendar.events)}|${jsonSig(latestCalendar.holidays)}`;
   if (!force && sig === lastRenderedSig && cardEl.childElementCount > 0) {
     return;
   }
@@ -338,10 +339,22 @@ function render(force = false) {
   lastRenderedSig = sig;
   lastViewKey = viewKey;
 
+  const calIcon = createAppIconEl({
+    candidates: appCandidatesForKey('calendar', latestPhoneRoles),
+    size: 36,
+    radius: 10,
+    alt: 'Agenda',
+    className: 'cal-header-icon',
+    fallbackText: 'A'
+  });
+
   const header = el('div', { className: 'modal-card-header' },
-    el('div', { className: 'modal-card-title-group' },
-      el('span', { className: 'modal-card-eyebrow' }, 'AGENDA & FERIADOS'),
-      el('h2', { className: 'modal-card-title' }, 'Calendário')
+    el('div', { className: 'modal-card-title-row' },
+      calIcon,
+      el('div', { className: 'modal-card-title-group' },
+        el('span', { className: 'modal-card-eyebrow' }, 'AGENDA & FERIADOS'),
+        el('h2', { className: 'modal-card-title' }, 'Calendário')
+      )
     ),
     el('button', {
       type: 'button',
@@ -402,5 +415,6 @@ export function closeCalendarCard() {
 export function updateCalendarCard(state, nowMs) {
   if (nowMs) currentNowMs = nowMs;
   if (state?.calendar) latestCalendar = state.calendar;
+  if (state?.phone?.roles) latestPhoneRoles = state.phone.roles;
   if (isOpen) render(false);
 }

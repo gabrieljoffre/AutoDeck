@@ -1,7 +1,15 @@
 // Dock inferior (copiloto, abas, volume), banner de notificação e toasts
 
 import { sendCommand } from './bridge.js';
-import { el, throttle, setText, setHidden } from './util.js';
+import {
+  el,
+  throttle,
+  setText,
+  setHidden,
+  createAppIconEl,
+  appCandidatesForKey,
+  getPhoneIconsVersion
+} from './util.js';
 
 let switchModeFn = null;
 let volumeDragging = false;
@@ -10,6 +18,56 @@ let copilotPhase = 'idle';
 let copilotMode = 'idle';
 let lastNotifId = null;
 let lastNotifSig = '';
+let lastCallIconSig = '';
+
+function createGenericMsgSvg() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '22');
+  svg.setAttribute('height', '22');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'var(--accent)');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', 'M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z');
+  svg.appendChild(p);
+  return svg;
+}
+
+function createGenericPhoneSvg() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '22');
+  svg.setAttribute('height', '22');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  p.setAttribute('d', 'M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.58 2.81.7A2 2 0 0 1 22 16.92z');
+  svg.appendChild(p);
+  return svg;
+}
+
+function candidatesForNotification(notification, phoneRoles = {}) {
+  const pkg = String(notification?.packageName || '').trim();
+  const isPhone = notification?.source !== 'tablet';
+  const candidates = [];
+  if (pkg) {
+    candidates.push({ source: isPhone ? 'phone' : 'tablet', pkg });
+    candidates.push({ source: isPhone ? 'tablet' : 'phone', pkg });
+  }
+  const appLower = String(notification?.app || '').toLowerCase();
+  if (appLower.includes('whatsapp')) {
+    candidates.push(...appCandidatesForKey('whatsapp', phoneRoles));
+  } else if (appLower.includes('mensag') || appLower.includes('sms')) {
+    candidates.push(...appCandidatesForKey('sms', phoneRoles));
+  }
+  return candidates;
+}
 
 const VOL_ICON_ON = 'M4 9h4l5-4v14l-5-4H4zM16.5 8.5a5 5 0 0 1 0 7M19.5 5.5a9 9 0 0 1 0 13';
 const VOL_ICON_MUTED = 'M4 9h4l5-4v14l-5-4H4zM17 9l5 6M22 9l-5 6';
@@ -166,7 +224,7 @@ function hideNotification() {
   setHidden(document.getElementById('notif-banner'), true);
 }
 
-export function updateNotification(notification) {
+export function updateNotification(notification, phone = null) {
   const banner = document.getElementById('notif-banner');
   if (!notification) {
     lastNotifId = null;
@@ -174,10 +232,24 @@ export function updateNotification(notification) {
     setHidden(banner, true);
     return;
   }
-  const sig = `${notification.id}|${notification.app}|${notification.title}|${notification.text}`;
+  const roles = phone?.roles || {};
+  const iconVer = getPhoneIconsVersion();
+  const sig = `${notification.id}|${notification.app}|${notification.packageName || ''}|${notification.title}|${notification.text}|${iconVer}`;
   if (sig === lastNotifSig) return;
   lastNotifSig = sig;
   lastNotifId = notification.id;
+  const iconBox = banner.querySelector('.notif-icon-box');
+  if (iconBox) {
+    iconBox.replaceChildren(
+      createAppIconEl({
+        candidates: candidatesForNotification(notification, roles),
+        size: 32,
+        radius: 9,
+        alt: notification.app || 'Mensagem',
+        fallback: createGenericMsgSvg()
+      })
+    );
+  }
   setText(document.getElementById('notif-app'), notification.app || 'Mensagem');
   setText(document.getElementById('notif-title'), notification.title || '');
   setText(document.getElementById('notif-text'), notification.text || '');
@@ -215,6 +287,24 @@ export function updateCallBanner(phone, nowMs = Date.now()) {
   else if (status === 'ACTIVE') {
     const dur = formatCallDuration(Number(call.startedAtMs || 0), nowMs);
     statusTxt = dur ? `Em chamada · ${dur}` : `Em chamada · ${origin}`;
+  }
+
+  const roles = phone?.roles || {};
+  const callIconSig = `${Boolean(call.isWhatsApp)}|${roles.dialer || ''}|${roles.whatsapp || ''}|${getPhoneIconsVersion()}`;
+  if (callIconSig !== lastCallIconSig) {
+    lastCallIconSig = callIconSig;
+    const iconBox = banner.querySelector('.call-icon-box');
+    if (iconBox) {
+      iconBox.replaceChildren(
+        createAppIconEl({
+          candidates: appCandidatesForKey(call.isWhatsApp ? 'whatsapp' : 'dialer', roles),
+          size: 32,
+          radius: 9,
+          alt: origin,
+          fallback: createGenericPhoneSvg()
+        })
+      );
+    }
   }
 
   setText(document.getElementById('call-status-label'), statusTxt);

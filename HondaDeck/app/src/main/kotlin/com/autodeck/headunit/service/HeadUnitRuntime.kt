@@ -95,6 +95,7 @@ import com.autodeck.headunit.weather.WeatherService
 import com.autodeck.headunit.weather.WeatherState
 import com.autodeck.headunit.calendar.CalendarRepository
 import com.autodeck.headunit.calendar.CalendarState
+import com.autodeck.protocol.apps.LaunchableApp
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -152,6 +153,7 @@ data class HeadUnitUiState(
     val agentState: AgentUiState = AgentUiState(),
     val installedMusicApps: List<InstalledAppOption> = emptyList(),
     val installedMapApps: List<InstalledAppOption> = emptyList(),
+    val installedTabletApps: List<LaunchableApp> = emptyList(),
     val obdCycleHz: Double = 0.0,
     val masterVolumePct: Int = 70,
     val isAudioMuted: Boolean = false,
@@ -290,6 +292,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                 pairedBluetoothDevices = BluetoothDirectory.listBondedDevices(appContext),
                 installedMusicApps = mediaController.listInstalledMusicApps(),
                 installedMapApps = mediaController.listInstalledMapApps(),
+                installedTabletApps = tabletAppsManager.listInstalledApps(),
                 masterVolumePct = initialVol,
                 isAudioMuted = initialMuted,
                 favoritePlaces = placesStore.loadFavorites(),
@@ -331,6 +334,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                 pairedBluetoothDevices = BluetoothDirectory.listBondedDevices(appContext),
                 installedMusicApps = mediaController.listInstalledMusicApps(),
                 installedMapApps = mediaController.listInstalledMapApps(),
+                installedTabletApps = tabletAppsManager.listInstalledApps(),
                 masterVolumePct = readCurrentVolumePct()
             )
         }
@@ -628,10 +632,62 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     fun stopInAppNavigation() = routeNavigator.stopNavigation()
 
     /** Abre o mesmo destino no app de mapa externo (Google Maps/Waze), quando o usuário quiser trânsito ao vivo. */
-    fun navigateExternally(destination: String): Boolean {
-        val pkg = _uiState.value.config.preferredMapPackage
-            .takeIf { it != "INTERNAL_MAP" } ?: "com.google.android.apps.maps"
+    fun navigateExternally(destination: String, packageOverride: String? = null): Boolean {
+        val pkg = packageOverride?.trim()?.takeIf { it.isNotEmpty() }
+            ?: _uiState.value.config.preferredMapPackage.takeIf { it != "INTERNAL_MAP" }
+            ?: "com.google.android.apps.maps"
         return gpsTracker.navigateToDestination(destination, pkg)
+    }
+
+    /** Abre um aplicativo no tablet ou no celular a partir da interface web. */
+    fun openAppFromUi(packageName: String? = null, name: String? = null, target: String = "tablet") {
+        val cleanPkg = packageName?.trim().orEmpty()
+        val cleanName = name?.trim().orEmpty()
+        if (target.equals("phone", ignoreCase = true)) {
+            val query = cleanName.ifBlank { cleanPkg }
+            if (query.isBlank()) return
+            scope.launch(Dispatchers.IO) {
+                val res = phoneLinkClient.openAppOnPhone(query)
+                res.fold(
+                    onSuccess = { msg -> emitWebEvent("toast", msg) },
+                    onFailure = { err -> emitWebEvent("error", err.message ?: "Não foi possível abrir o app no celular.") }
+                )
+            }
+            return
+        }
+        if (cleanPkg.isNotBlank()) {
+            val launchIntent = appContext.packageManager.getLaunchIntentForPackage(cleanPkg)?.apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            }
+            if (launchIntent != null) {
+                val ok = runCatching { appContext.startActivity(launchIntent) }.isSuccess
+                if (ok) {
+                    emitWebEvent("toast", "Abrindo ${cleanName.ifBlank { cleanPkg }}…")
+                    return
+                }
+            }
+        }
+        if (cleanName.isNotBlank()) {
+            tabletAppsManager.openApp(cleanName).fold(
+                onSuccess = { msg -> emitWebEvent("toast", msg) },
+                onFailure = { err -> emitWebEvent("error", err.message ?: "Não foi possível abrir o aplicativo.") }
+            )
+        }
+    }
+
+    /** Abre o aplicativo oficial do Google Gemini instalado no tablet. */
+    fun openOfficialGeminiApp() {
+        val candidates = listOf("com.google.android.apps.bard", "com.google.android.googlequicksearchbox")
+        for (pkg in candidates) {
+            val launch = appContext.packageManager.getLaunchIntentForPackage(pkg)?.apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            }
+            if (launch != null && runCatching { appContext.startActivity(launch) }.isSuccess) {
+                emitWebEvent("toast", "Abrindo Gemini oficial…")
+                return
+            }
+        }
+        emitWebEvent("error", "Aplicativo Gemini não encontrado neste tablet.")
     }
 
     fun connectSpotify(activityContext: Context) = mediaController.spotify.connect(activityContext)

@@ -12,7 +12,9 @@ import {
   setPlayIcon,
   jsonSig,
   createNoteSvg,
-  createClockSvg
+  createClockSvg,
+  createAppIconEl,
+  appCandidatesForKey
 } from './util.js';
 
 const KIND_LABEL = { TRACK: 'MÚSICA', ARTIST: 'ARTISTA', ALBUM: 'ÁLBUM', PLAYLIST: 'PLAYLIST', EPISODE: 'EPISÓDIO', SHOW: 'PODCAST' };
@@ -144,7 +146,13 @@ function renderGate(container, sigKey, info) {
   container.replaceChildren();
   if (!info) return;
   const children = [
-    el('span', { className: 'spotify-dot', 'aria-hidden': 'true' }),
+    createAppIconEl({
+      candidates: appCandidatesForKey('spotify'),
+      size: 36,
+      radius: 10,
+      alt: 'Spotify',
+      fallback: el('span', { className: 'spotify-dot', 'aria-hidden': 'true' })
+    }),
     el('span', { className: 'music-gate-title' }, info.title),
     el('span', { className: 'music-gate-sub' }, info.sub)
   ];

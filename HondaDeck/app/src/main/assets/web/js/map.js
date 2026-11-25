@@ -1230,7 +1230,11 @@ export function initMap({ switchMode, openFavoriteSettings }) {
   });
   document.getElementById('map-external-btn').addEventListener('click', () => {
     const dest = lastMapState?.route?.destination || lastMapState?.route?.nextInstruction || 'Destino';
-    sendCommand('map.openExternal', { name: dest });
+    sendCommand('map.openExternal', { name: dest, package: 'com.google.android.apps.maps' });
+  });
+  document.getElementById('map-waze-btn')?.addEventListener('click', () => {
+    const dest = lastMapState?.route?.destination || lastMapState?.route?.nextInstruction || 'Destino';
+    sendCommand('map.openExternal', { name: dest, package: 'com.waze' });
   });
 
   attachStageToSlot('home');

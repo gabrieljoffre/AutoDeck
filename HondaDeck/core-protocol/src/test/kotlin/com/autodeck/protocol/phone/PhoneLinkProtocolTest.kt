@@ -121,4 +121,31 @@ class PhoneLinkProtocolTest {
         assertNull(PhoneLinkCodec.decode("{\"type\":\"desconhecido\"}"))
         assertNull(PhoneLinkCodec.decode("{\"type\":\"req\",\"method\":\"ping\"}"))
     }
+
+    @Test
+    fun `serializa e desserializa evento e resposta de icones de apps do celular`() {
+        val icon = PhoneAppIcon(
+            packageName = "com.whatsapp",
+            label = "WhatsApp",
+            hash = "deadbeef01234567",
+            pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        val ev = PhoneLinkMessage.Event(
+            event = PhoneLinkProtocol.EVENT_APP_ICONS,
+            data = linkedMapOf(
+                "icons" to listOf(PhoneLinkCodec.appIconToMap(icon)),
+                "roles" to linkedMapOf("whatsapp" to "com.whatsapp", "dialer" to "com.samsung.android.dialer")
+            )
+        )
+        val wire = PhoneLinkCodec.encode(ev)
+        val decoded = PhoneLinkCodec.decode(wire) as? PhoneLinkMessage.Event
+        assertNotNull(decoded)
+        assertEquals(PhoneLinkProtocol.EVENT_APP_ICONS, decoded!!.event)
+        val iconsList = decoded.data["icons"] as? List<*>
+        assertNotNull(iconsList)
+        assertEquals(1, iconsList!!.size)
+        assertEquals(icon, PhoneLinkCodec.mapToAppIcon(iconsList[0]))
+        val roles = decoded.data["roles"] as? Map<*, *>
+        assertEquals("com.samsung.android.dialer", roles?.get("dialer"))
+    }
 }

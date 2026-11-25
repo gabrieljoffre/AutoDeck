@@ -295,6 +295,212 @@ export function createNoteSvg(size = 18, stroke = 'var(--accent)') {
   ]);
 }
 
+// ---------------------------------------------------------------------------
+// Ícones reais dos apps instalados no tablet (/appicon/) e celular (/phoneicon/)
+// ---------------------------------------------------------------------------
+
+let phoneIconsVersion = 0;
+let lastStaticHydrateSig = '';
+
+export function setPhoneIconsVersion(v) {
+  const n = Number(v || 0);
+  if (Number.isFinite(n) && n >= 0) phoneIconsVersion = n;
+}
+
+export function getPhoneIconsVersion() {
+  return phoneIconsVersion;
+}
+
+export function buildAppIconUrl(source, packageName) {
+  const pkg = String(packageName || '').trim();
+  if (!pkg) return '';
+  if (typeof window !== 'undefined' && typeof window.__hdMockIconUrl === 'function') {
+    return window.__hdMockIconUrl(source, pkg);
+  }
+  const safe = encodeURIComponent(pkg);
+  if (source === 'phone') {
+    const v = phoneIconsVersion > 0 ? `?v=${phoneIconsVersion}` : '';
+    return `/phoneicon/${safe}.png${v}`;
+  }
+  return `/appicon/${safe}.png`;
+}
+
+/**
+ * Monta uma lista de URLs candidatas a partir de entradas `{ source: 'tablet'|'phone', pkg }`.
+ */
+export function resolveIconUrls(candidates = []) {
+  const urls = [];
+  const seen = new Set();
+  for (const c of candidates) {
+    if (!c || !c.pkg) continue;
+    const url = buildAppIconUrl(c.source || 'tablet', c.pkg);
+    if (url && !seen.has(url)) {
+      seen.add(url);
+      urls.push(url);
+    }
+  }
+  return urls;
+}
+
+/**
+ * Cria um elemento de ícone real de app com fallback discreto se o pacote não existir (404).
+ */
+export function createAppIconEl({
+  candidates = [],
+  size = 20,
+  radius = 5,
+  alt = '',
+  className = '',
+  fallback = null,
+  fallbackText = ''
+} = {}) {
+  const wrap = el('span', {
+    className: `app-icon-slot${className ? ' ' + className : ''}`,
+    style: `width:${size}px;height:${size}px;border-radius:${radius}px`
+  });
+
+  const fbNode = fallback instanceof Node
+    ? fallback
+    : el('span', { className: 'app-icon-fallback-badge', 'aria-hidden': 'true' },
+      String(fallbackText || alt || '•').trim().charAt(0).toUpperCase() || '•'
+    );
+  wrap.appendChild(fbNode);
+
+  const urls = resolveIconUrls(candidates);
+  if (!urls.length) return wrap;
+
+  const img = el('img', {
+    className: 'app-icon-img hidden',
+    alt: alt || '',
+    decoding: 'async'
+  });
+  let idx = 0;
+  img.addEventListener('load', () => {
+    img.classList.remove('hidden');
+    fbNode.classList.add('hidden');
+  });
+  img.addEventListener('error', () => {
+    idx += 1;
+    if (idx < urls.length) {
+      img.src = urls[idx];
+    } else {
+      img.classList.add('hidden');
+      fbNode.classList.remove('hidden');
+    }
+  });
+  img.src = urls[0];
+  wrap.appendChild(img);
+  return wrap;
+}
+
+/** Retorna a lista de candidatos para chaves conhecidas de apps (tablet + fallback celular). */
+export function appCandidatesForKey(key, phoneRoles = {}) {
+  switch (key) {
+    case 'spotify':
+      return [
+        { source: 'tablet', pkg: 'com.spotify.music' },
+        { source: 'phone', pkg: 'com.spotify.music' }
+      ];
+    case 'maps':
+      return [
+        { source: 'tablet', pkg: 'com.google.android.apps.maps' },
+        { source: 'phone', pkg: 'com.google.android.apps.maps' }
+      ];
+    case 'waze':
+      return [
+        { source: 'tablet', pkg: 'com.waze' },
+        { source: 'phone', pkg: 'com.waze' }
+      ];
+    case 'gemini':
+      return [
+        { source: 'tablet', pkg: 'com.google.android.apps.bard' },
+        { source: 'phone', pkg: 'com.google.android.apps.bard' }
+      ];
+    case 'calendar':
+      return [
+        { source: 'tablet', pkg: 'com.google.android.calendar' },
+        { source: 'tablet', pkg: 'com.samsung.android.calendar' },
+        ...(phoneRoles.calendar ? [{ source: 'phone', pkg: phoneRoles.calendar }] : []),
+        { source: 'phone', pkg: 'com.samsung.android.calendar' },
+        { source: 'phone', pkg: 'com.google.android.calendar' }
+      ];
+    case 'whatsapp':
+      return [
+        ...(phoneRoles.whatsapp ? [{ source: 'phone', pkg: phoneRoles.whatsapp }] : []),
+        { source: 'phone', pkg: 'com.whatsapp' },
+        { source: 'phone', pkg: 'com.whatsapp.w4b' },
+        { source: 'tablet', pkg: 'com.whatsapp' }
+      ];
+    case 'dialer':
+      return [
+        ...(phoneRoles.dialer ? [{ source: 'phone', pkg: phoneRoles.dialer }] : []),
+        { source: 'phone', pkg: 'com.samsung.android.dialer' },
+        { source: 'phone', pkg: 'com.google.android.dialer' },
+        { source: 'phone', pkg: 'com.android.dialer' }
+      ];
+    case 'sms':
+      return [
+        ...(phoneRoles.sms ? [{ source: 'phone', pkg: phoneRoles.sms }] : []),
+        { source: 'phone', pkg: 'com.samsung.android.messaging' },
+        { source: 'phone', pkg: 'com.google.android.apps.messaging' }
+      ];
+    case 'ponte':
+      return [
+        ...(phoneRoles.ponte ? [{ source: 'phone', pkg: phoneRoles.ponte }] : []),
+        { source: 'phone', pkg: 'com.autodeck.hondadeck.ponte' }
+      ];
+    default:
+      return [
+        { source: 'tablet', pkg: key },
+        { source: 'phone', pkg: key }
+      ];
+  }
+}
+
+/**
+ * Hidrata elementos estáticos do HTML com `[data-app-icon]` preservando o filho original como fallback.
+ */
+export function hydrateStaticAppIcons(phoneRoles = {}, iconsVer = 0) {
+  setPhoneIconsVersion(iconsVer);
+  const sig = `${iconsVer}|${jsonSig(phoneRoles)}`;
+  if (sig === lastStaticHydrateSig) return;
+  lastStaticHydrateSig = sig;
+
+  document.querySelectorAll('[data-app-icon]').forEach((slot) => {
+    const key = slot.dataset.appIcon;
+    if (!key) return;
+    const urls = resolveIconUrls(appCandidatesForKey(key, phoneRoles));
+    if (!urls.length) return;
+
+    let img = slot.querySelector(':scope > img.app-icon-img');
+    const fallbackEl = Array.from(slot.children).find((ch) => ch !== img) || null;
+    if (!img) {
+      img = el('img', { className: 'app-icon-img hidden', alt: '', decoding: 'async' });
+      slot.appendChild(img);
+    }
+
+    const urlsSig = urls.join('|');
+    if (img.dataset.urlsSig === urlsSig && !img.classList.contains('hidden')) return;
+    img.dataset.urlsSig = urlsSig;
+
+    let idx = 0;
+    img.onload = () => {
+      img.classList.remove('hidden');
+      if (fallbackEl) fallbackEl.classList.add('hidden');
+    };
+    img.onerror = () => {
+      idx += 1;
+      if (idx < urls.length) {
+        img.src = urls[idx];
+      } else {
+        img.classList.add('hidden');
+        if (fallbackEl) fallbackEl.classList.remove('hidden');
+      }
+    };
+    img.src = urls[0];
+  });
+}
+
 
 // ---------------------------------------------------------------------------
 // Helpers de render incremental (só tocam o DOM quando o valor mudou)

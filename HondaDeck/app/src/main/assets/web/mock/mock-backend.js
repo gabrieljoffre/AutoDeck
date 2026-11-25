@@ -1,6 +1,70 @@
 // Mock completo e realista do backend Kotlin para desenvolvimento e testes no PC
 // Localização: Anápolis-GO (-16.3281, -48.9534)
 
+const MOCK_ICON_CACHE = new Map();
+
+/** Gera um PNG neutro de exemplo (sem logos de marcas) via canvas 2D para o modo mock. */
+function makeNeutralAppPng(label, hue) {
+  const key = `${label}|${hue}`;
+  if (MOCK_ICON_CACHE.has(key)) return MOCK_ICON_CACHE.get(key);
+  let url = '';
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 96;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const r = 24;
+      ctx.beginPath();
+      ctx.moveTo(r, 0);
+      ctx.arcTo(96, 0, 96, 96, r);
+      ctx.arcTo(96, 96, 0, 96, r);
+      ctx.arcTo(0, 96, 0, 0, r);
+      ctx.arcTo(0, 0, 96, 0, r);
+      ctx.closePath();
+      ctx.fillStyle = `hsl(${hue}, 22%, 24%)`;
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = `hsl(${hue}, 32%, 44%)`;
+      ctx.stroke();
+
+      ctx.fillStyle = '#E8EEF6';
+      ctx.font = '700 40px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(label || 'A').slice(0, 2).toUpperCase(), 48, 50);
+      url = canvas.toDataURL('image/png');
+    }
+  } catch {
+    url = '';
+  }
+  MOCK_ICON_CACHE.set(key, url);
+  return url;
+}
+
+function installMockIconResolver() {
+  const MOCK_META = {
+    'com.spotify.music': ['M', 195],
+    'com.google.android.apps.maps': ['G', 205],
+    'com.waze': ['W', 215],
+    'com.google.android.apps.bard': ['AI', 235],
+    'com.google.android.calendar': ['31', 210],
+    'com.samsung.android.calendar': ['31', 210],
+    'com.whatsapp': ['W', 180],
+    'com.samsung.android.messaging': ['MS', 200],
+    'com.google.android.apps.messaging': ['MS', 200],
+    'com.samsung.android.dialer': ['T', 190],
+    'com.google.android.dialer': ['T', 190],
+    'com.autodeck.hondadeck.ponte': ['P', 195],
+    'com.google.android.apps.youtube.music': ['YM', 225],
+    'com.android.chrome': ['CH', 215]
+  };
+  window.__hdMockIconUrl = (_source, pkg) => {
+    const entry = MOCK_META[pkg] || [String(pkg || 'A').split('.').pop()?.slice(0, 2) || 'AP', 210];
+    return makeNeutralAppPng(entry[0], entry[1]);
+  };
+}
+
 function makeCoverDataUri(title, subtitle, c1, c2) {
   const safeT = String(title).slice(0, 16).replace(/[&<>"]/g, '');
   const safeS = String(subtitle).slice(0, 18).replace(/[&<>"]/g, '');
@@ -86,6 +150,7 @@ const ROUTE_AV_BRASIL = [
 ];
 
 export function installMockBackend() {
+  installMockIconResolver();
   let trackIdx = 0;
   let simPhase = 0;
 
@@ -383,9 +448,56 @@ export function installMockBackend() {
       contactsSyncedAtMs: Date.now() - 120000,
       contactsSyncing: false,
       contactsSyncError: null,
+      iconsVersion: 1,
+      iconPackages: [
+        'com.whatsapp',
+        'com.samsung.android.messaging',
+        'com.samsung.android.dialer',
+        'com.samsung.android.calendar',
+        'com.autodeck.hondadeck.ponte'
+      ],
+      roles: {
+        whatsapp: 'com.whatsapp',
+        sms: 'com.samsung.android.messaging',
+        dialer: 'com.samsung.android.dialer',
+        calendar: 'com.samsung.android.calendar',
+        ponte: 'com.autodeck.hondadeck.ponte'
+      },
       discovered: [{ name: 'Samsung Galaxy', host: '192.168.43.1', port: 5290 }],
       call: { status: 'IDLE', number: '', displayName: '', isWhatsApp: false, startedAtMs: 0 },
-      messages: []
+      messages: [
+        {
+          id: 'm1',
+          app: 'WhatsApp',
+          packageName: 'com.whatsapp',
+          sender: 'Ana',
+          text: 'Cheguei no shopping, te espero na entrada!',
+          timestampMs: Date.now() - 180000,
+          canReply: true,
+          read: true
+        }
+      ]
+    },
+    apps: {
+      preferredMapPackage: 'com.google.android.apps.maps',
+      preferredMusicPackage: 'com.spotify.music',
+      mapApps: [
+        { packageName: 'INTERNAL_MAP', label: 'Mapa interno' },
+        { packageName: 'com.google.android.apps.maps', label: 'Google Maps' },
+        { packageName: 'com.waze', label: 'Waze' }
+      ],
+      musicApps: [
+        { packageName: 'com.spotify.music', label: 'Spotify' },
+        { packageName: 'com.google.android.apps.youtube.music', label: 'YouTube Music' }
+      ],
+      tablet: [
+        { packageName: 'com.spotify.music', label: 'Spotify' },
+        { packageName: 'com.google.android.apps.maps', label: 'Google Maps' },
+        { packageName: 'com.waze', label: 'Waze' },
+        { packageName: 'com.google.android.apps.bard', label: 'Gemini' },
+        { packageName: 'com.google.android.calendar', label: 'Agenda' },
+        { packageName: 'com.android.chrome', label: 'Chrome' }
+      ]
     },
     vehicle: {
       obdMessage: 'Simulador OBD-II ativo (Honda Civic 1.8 i-VTEC)',
@@ -789,7 +901,13 @@ export function installMockBackend() {
           emitEvent('toast', { text: 'Rota encerrada' });
           break;
         case 'map.openExternal':
-          emitEvent('toast', { text: `Abrindo Google Maps: ${args.name || 'Destino'}` });
+          emitEvent('toast', { text: `Abrindo ${args.package === 'com.waze' ? 'Waze' : 'Google Maps'}: ${args.name || 'Destino'}` });
+          break;
+        case 'apps.open':
+          emitEvent('toast', { text: `Abrindo ${args.name || args.packageName || 'aplicativo'}…` });
+          break;
+        case 'copilot.openGeminiApp':
+          emitEvent('toast', { text: 'Abrindo Gemini oficial…' });
           break;
         case 'fav.save': {
           const id = args.id || `fav_${Date.now()}`;

@@ -7,7 +7,10 @@ import {
   fmtNum,
   parseDecimal,
   jsonSig,
-  createFavIconSvg
+  createFavIconSvg,
+  createAppIconEl,
+  appCandidatesForKey,
+  getPhoneIconsVersion
 } from './util.js';
 import { showToast } from './dock.js';
 
@@ -388,9 +391,21 @@ function buildSpotifyToggles() {
 
 function buildSpotify(root) {
   const dot = el('span', { className: 'spotify-dot' });
+  const spotifyIcon = createAppIconEl({
+    candidates: appCandidatesForKey('spotify'),
+    size: 26,
+    radius: 7,
+    alt: 'Spotify',
+    fallback: dot
+  });
   const statusText = el('span', { style: 'font-size:16px;font-weight:600' }, '');
   const authBtn = el('button', { className: 'spotify-connect-btn', type: 'button', onClick: () => sendCommand('music.authorize') }, 'Autorizar Spotify');
-  const openBtn = el('button', { className: 'btn-outline', type: 'button', onClick: () => sendCommand('music.openApp') }, 'Abrir aplicativo Spotify');
+  const openBtn = el(
+    'button',
+    { className: 'btn-outline', type: 'button', style: 'display:inline-flex;align-items:center;gap:8px', onClick: () => sendCommand('music.openApp') },
+    createAppIconEl({ candidates: appCandidatesForKey('spotify'), size: 20, radius: 5, alt: 'Spotify', fallbackText: 'S' }),
+    'Abrir aplicativo Spotify'
+  );
   const { pl, rec } = buildSpotifyToggles();
 
   root.append(
@@ -399,7 +414,7 @@ function buildSpotify(root) {
       'div',
       { className: 'settings-card-block' },
       kicker('CONTA'),
-      el('div', { style: 'display:flex;align-items:center;gap:10px' }, dot, statusText),
+      el('div', { style: 'display:flex;align-items:center;gap:10px' }, spotifyIcon, statusText),
       el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, authBtn, openBtn)
     ),
     el('div', { className: 'settings-card-block' }, kicker('EXIBIÇÃO'), pl.node, rec.node)
@@ -470,6 +485,19 @@ function buildCopilot(root) {
   const wakeToggle = toggleRow('Ativar por voz (palavra de ativação)', () => sendCommand('settings.set', { key: 'wakeWordEnabled', value: !lastState?.settings.wakeWordEnabled }));
   const copilotStatus = el('span', { className: 'settings-sub' }, '');
 
+  const openGeminiBtn = el(
+    'button',
+    {
+      className: 'btn-outline',
+      type: 'button',
+      'data-test': 'settings-open-gemini',
+      style: 'display:inline-flex;align-items:center;gap:8px',
+      onClick: () => sendCommand('copilot.openGeminiApp')
+    },
+    createAppIconEl({ candidates: appCandidatesForKey('gemini'), size: 20, radius: 5, alt: 'Gemini', fallbackText: 'G' }),
+    'Abrir Gemini oficial'
+  );
+
   root.append(
     header('Copiloto (voz)', 'Assistente por voz com Gemini para rotas, música e informações do carro.'),
     el(
@@ -478,7 +506,7 @@ function buildCopilot(root) {
       kicker('GEMINI'),
       field('Chave da API', keyIn),
       keyStatus,
-      el('div', { style: 'display:flex;justify-content:flex-end' }, el('button', { className: 'btn-accent-sm', type: 'button', onClick: saveKey }, 'Salvar chave')),
+      el('div', { style: 'display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap' }, openGeminiBtn, el('button', { className: 'btn-accent-sm', type: 'button', onClick: saveKey }, 'Salvar chave')),
       field('Modelo Gemini Live (voz ao vivo)', liveModelSel),
       field('Modelo texto (fallback)', modelSel),
       copilotStatus
@@ -596,6 +624,7 @@ function buildPhone(root) {
     if (e.key === 'Enter') submitPair();
   });
 
+  const phoneAppsStrip = el('div', { className: 'phone-apps-strip', 'data-test': 'phone-apps-strip' });
   const msgsList = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
 
   root.append(
@@ -607,6 +636,7 @@ function buildPhone(root) {
       el('div', { style: 'display:flex;align-items:center;gap:10px' }, statusDot, statusText),
       statusSub,
       flagsRow,
+      phoneAppsStrip,
       el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, discoverBtn, reconnectBtn, unpairBtn)
     ),
     el(
@@ -674,6 +704,27 @@ function buildPhone(root) {
     }
   });
 
+  reg(tabUpdaters, (s) => `${s.phone?.iconsVersion || 0}|${jsonSig(s.phone?.roles || {})}|${jsonSig(s.phone?.iconPackages || [])}`, (s) => {
+    const roles = s.phone?.roles || {};
+    phoneAppsStrip.replaceChildren();
+    const defs = [
+      ['whatsapp', 'WhatsApp'],
+      ['sms', 'Mensagens'],
+      ['dialer', 'Telefone'],
+      ['calendar', 'Agenda']
+    ];
+    for (const [key, label] of defs) {
+      phoneAppsStrip.appendChild(
+        el(
+          'span',
+          { className: 'phone-app-pill' },
+          createAppIconEl({ candidates: appCandidatesForKey(key, roles), size: 22, radius: 6, alt: label, fallbackText: label[0] }),
+          el('span', null, label)
+        )
+      );
+    }
+  });
+
   reg(tabUpdaters, (s) => jsonSig({
     c: s.phone?.connected,
     cnt: s.phone?.contactsCount,
@@ -696,8 +747,9 @@ function buildPhone(root) {
     syncContactsBtn.textContent = syncing ? 'Sincronizando…' : 'Sincronizar agora';
   });
 
-  reg(tabUpdaters, (s) => jsonSig(s.phone?.discovered || []), (s) => {
+  reg(tabUpdaters, (s) => `${jsonSig(s.phone?.discovered || [])}|${s.phone?.iconsVersion || 0}`, (s) => {
     const list = s.phone?.discovered || [];
+    const roles = s.phone?.roles || {};
     discoveredList.replaceChildren();
     if (!list.length) {
       discoveredList.appendChild(el('span', { className: 'settings-sub' }, 'Nenhum celular encontrado ainda na rede. Toque em "Buscar celular" ou informe o IP.'));
@@ -716,7 +768,13 @@ function buildPhone(root) {
               pinIn.focus();
             }
           },
-          el('span', { className: 'fav-ini-box' }, 'P'),
+          createAppIconEl({
+            candidates: appCandidatesForKey('ponte', roles),
+            size: 36,
+            radius: 10,
+            alt: 'HondaDeck Ponte',
+            fallback: el('span', { className: 'fav-ini-box' }, 'P')
+          }),
           el(
             'span',
             { style: 'flex:1;display:flex;flex-direction:column;gap:2px' },
@@ -728,18 +786,31 @@ function buildPhone(root) {
     }
   });
 
-  reg(tabUpdaters, (s) => jsonSig(s.phone?.messages || []), (s) => {
+  reg(tabUpdaters, (s) => `${jsonSig(s.phone?.messages || [])}|${s.phone?.iconsVersion || 0}`, (s) => {
     const msgs = s.phone?.messages || [];
+    const roles = s.phone?.roles || {};
     msgsList.replaceChildren();
     if (!msgs.length) {
       msgsList.appendChild(el('span', { className: 'settings-sub' }, 'Nenhuma mensagem recebida do celular ainda.'));
       return;
     }
     for (const m of msgs.slice(0, 5)) {
+      const candidates = [];
+      if (m.packageName) candidates.push({ source: 'phone', pkg: m.packageName }, { source: 'tablet', pkg: m.packageName });
+      const lower = String(m.app || '').toLowerCase();
+      if (lower.includes('whatsapp')) candidates.push(...appCandidatesForKey('whatsapp', roles));
+      else if (lower.includes('mensag') || lower.includes('sms')) candidates.push(...appCandidatesForKey('sms', roles));
       msgsList.appendChild(
         el(
           'div',
           { className: 'fav-list-row', style: 'padding:10px 14px' },
+          createAppIconEl({
+            candidates,
+            size: 30,
+            radius: 8,
+            alt: m.app || 'Mensagem',
+            fallbackText: (m.app || 'M')[0]
+          }),
           el(
             'span',
             { style: 'flex:1;min-width:0;display:flex;flex-direction:column;gap:3px' },
@@ -988,10 +1059,29 @@ function buildVehicle(root) {
 function buildSystem(root) {
   const ignSel = el('select', { className: 'hd-select', 'aria-label': 'Bluetooth de ignição' });
   ignSel.addEventListener('change', () => sendCommand('settings.set', { key: 'ignitionDevice', value: ignSel.value }));
+  const defaultMapsRow = el('div', { className: 'default-apps-row', 'data-test': 'settings-default-maps' });
+  const defaultMusicRow = el('div', { className: 'default-apps-row', 'data-test': 'settings-default-music' });
+  const tabletAppsGrid = el('div', { className: 'apps-launcher-grid', 'data-test': 'settings-tablet-apps' });
   const version = el('span', { className: 'settings-sub' }, '');
 
   root.append(
-    header('Sistema', 'Bluetooth de ignição, mapa offline, câmera de ré e versão do aplicativo.'),
+    header('Sistema', 'Apps padrão, aplicativos instalados, Bluetooth de ignição, mapa offline e câmera de ré.'),
+    el(
+      'div',
+      { className: 'settings-card-block' },
+      kicker('APPS PADRÃO'),
+      el('span', { className: 'settings-sub' }, 'Navegação externa'),
+      defaultMapsRow,
+      el('span', { className: 'settings-sub', style: 'margin-top:6px' }, 'Música'),
+      defaultMusicRow
+    ),
+    el(
+      'div',
+      { className: 'settings-card-block' },
+      kicker('APLICATIVOS DO TABLET (ABRIR POR VOZ OU TOQUE)'),
+      el('span', { className: 'settings-sub' }, 'Toque em qualquer aplicativo para abrir ou peça ao copiloto (ex.: “abre o Waze”).'),
+      tabletAppsGrid
+    ),
     el(
       'div',
       { className: 'settings-card-block' },
@@ -1016,6 +1106,88 @@ function buildSystem(root) {
     el('div', { className: 'settings-card-block' }, kicker('VERSÃO'), version)
   );
 
+  reg(tabUpdaters, (s) => `${jsonSig(s.apps?.mapApps || [])}|${s.apps?.preferredMapPackage || ''}`, (s) => {
+    defaultMapsRow.replaceChildren();
+    const pref = s.apps?.preferredMapPackage || 'com.google.android.apps.maps';
+    const options = (s.apps?.mapApps || []).length
+      ? s.apps.mapApps
+      : [
+          { packageName: 'com.google.android.apps.maps', label: 'Google Maps' },
+          { packageName: 'com.waze', label: 'Waze' }
+        ];
+    for (const app of options) {
+      const active = app.packageName === pref;
+      const isInternal = app.packageName === 'INTERNAL_MAP';
+      defaultMapsRow.appendChild(
+        el(
+          'button',
+          {
+            className: active ? 'btn-outline active default-app-btn' : 'btn-outline default-app-btn',
+            type: 'button',
+            onClick: () => sendCommand('settings.set', { key: 'preferredMapPackage', value: app.packageName })
+          },
+          isInternal
+            ? null
+            : createAppIconEl({ candidates: [{ source: 'tablet', pkg: app.packageName }, { source: 'phone', pkg: app.packageName }], size: 22, radius: 6, alt: app.label, fallbackText: (app.label || 'M')[0] }),
+          el('span', null, app.label || app.packageName)
+        )
+      );
+    }
+  });
+
+  reg(tabUpdaters, (s) => `${jsonSig(s.apps?.musicApps || [])}|${s.apps?.preferredMusicPackage || ''}`, (s) => {
+    defaultMusicRow.replaceChildren();
+    const pref = s.apps?.preferredMusicPackage || 'com.spotify.music';
+    const options = (s.apps?.musicApps || []).length
+      ? s.apps.musicApps
+      : [{ packageName: 'com.spotify.music', label: 'Spotify' }];
+    for (const app of options) {
+      const active = app.packageName === pref;
+      defaultMusicRow.appendChild(
+        el(
+          'button',
+          {
+            className: active ? 'btn-outline active default-app-btn' : 'btn-outline default-app-btn',
+            type: 'button',
+            onClick: () => sendCommand('settings.set', { key: 'preferredMusicPackage', value: app.packageName })
+          },
+          createAppIconEl({ candidates: [{ source: 'tablet', pkg: app.packageName }, { source: 'phone', pkg: app.packageName }], size: 22, radius: 6, alt: app.label, fallbackText: (app.label || 'S')[0] }),
+          el('span', null, app.label || app.packageName)
+        )
+      );
+    }
+  });
+
+  reg(tabUpdaters, (s) => jsonSig(s.apps?.tablet || []), (s) => {
+    tabletAppsGrid.replaceChildren();
+    const list = s.apps?.tablet || [];
+    if (!list.length) {
+      tabletAppsGrid.appendChild(el('span', { className: 'settings-sub' }, 'Nenhum aplicativo listado.'));
+      return;
+    }
+    for (const app of list.slice(0, 24)) {
+      tabletAppsGrid.appendChild(
+        el(
+          'button',
+          {
+            className: 'app-tile-btn',
+            type: 'button',
+            title: app.label || app.packageName,
+            onClick: () => sendCommand('apps.open', { packageName: app.packageName, name: app.label, target: 'tablet' })
+          },
+          createAppIconEl({
+            candidates: [{ source: 'tablet', pkg: app.packageName }],
+            size: 40,
+            radius: 11,
+            alt: app.label || app.packageName,
+            fallbackText: (app.label || '?')[0]
+          }),
+          el('span', { className: 'app-tile-label' }, app.label || app.packageName)
+        )
+      );
+    }
+  });
+
   reg(tabUpdaters, (s) => `${jsonSig(s.settings.pairedDevices)}|${s.settings.ignitionDevice}`, (s) => {
     const opts = [el('option', { value: '' }, 'Nenhum')];
     for (const d of s.settings.pairedDevices) opts.push(el('option', { value: d.address }, `${d.name || 'Dispositivo'} · ${d.address}`));
@@ -1038,6 +1210,13 @@ function buildAside() {
 
   const swatches = el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' });
   const dot = el('span', { className: 'spotify-dot' });
+  const spotifyAsideIcon = createAppIconEl({
+    candidates: appCandidatesForKey('spotify'),
+    size: 22,
+    radius: 6,
+    alt: 'Spotify',
+    fallback: dot
+  });
   const statusText = el('span', { style: 'font-size:15px' }, '');
   const { pl, rec } = buildSpotifyToggles();
 
@@ -1055,7 +1234,7 @@ function buildAside() {
       kicker('COR DE DESTAQUE'),
       swatches
     ),
-    el('div', { className: 'aside-card grow' }, kicker('SPOTIFY'), el('span', { style: 'display:flex;align-items:center;gap:10px' }, dot, statusText), pl.node, rec.node)
+    el('div', { className: 'aside-card grow' }, kicker('SPOTIFY'), el('span', { style: 'display:flex;align-items:center;gap:10px' }, spotifyAsideIcon, statusText), pl.node, rec.node)
   );
 
   reg(asideUpdaters, (s) => `${s.accent}|${jsonSig(s.settings.accentOptions)}`, (s) => {

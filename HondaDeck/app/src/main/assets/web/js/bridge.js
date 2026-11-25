@@ -22,6 +22,8 @@ const VALID_COMMANDS = new Set([
   'map.route',
   'map.stopRoute',
   'map.openExternal',
+  'apps.open',
+  'copilot.openGeminiApp',
   'fav.save',
   'fav.delete',
   'fav.useCurrentLocation',
@@ -193,6 +195,9 @@ export const DEFAULT_STATE = {
     contactsSyncedAtMs: 0,
     contactsSyncing: false,
     contactsSyncError: null,
+    iconsVersion: 0,
+    iconPackages: [],
+    roles: {},
     discovered: [],
     call: {
       status: 'IDLE',
@@ -202,6 +207,13 @@ export const DEFAULT_STATE = {
       startedAtMs: 0
     },
     messages: []
+  },
+  apps: {
+    preferredMapPackage: 'com.google.android.apps.maps',
+    preferredMusicPackage: 'com.spotify.music',
+    tablet: [],
+    mapApps: [],
+    musicApps: []
   },
   vehicle: {
     obdMessage: '',
@@ -252,6 +264,7 @@ export function normalizeState(raw) {
   const st = asObj(s.settings);
   const cal = asObj(s.calendar);
   const ph = asObj(s.phone);
+  const appsRaw = asObj(s.apps);
 
   let notif = null;
   if (s.notification && typeof s.notification === 'object') {
@@ -260,6 +273,7 @@ export function normalizeState(raw) {
       notif = {
         id: String(n.id ?? ''),
         app: String(n.app ?? 'Mensagem'),
+        packageName: String(n.packageName ?? ''),
         title: String(n.title ?? ''),
         text: String(n.text ?? ''),
         ...(n.source !== undefined ? { source: String(n.source) } : {}),
@@ -322,9 +336,19 @@ export function normalizeState(raw) {
     phone: {
       ...DEFAULT_STATE.phone,
       ...ph,
+      iconsVersion: Number(ph.iconsVersion || 0),
+      iconPackages: asArr(ph.iconPackages),
+      roles: asObj(ph.roles),
       discovered: asArr(ph.discovered),
       call: { ...DEFAULT_STATE.phone.call, ...asObj(ph.call) },
       messages: asArr(ph.messages)
+    },
+    apps: {
+      ...DEFAULT_STATE.apps,
+      ...appsRaw,
+      tablet: asArr(appsRaw.tablet),
+      mapApps: asArr(appsRaw.mapApps),
+      musicApps: asArr(appsRaw.musicApps)
     },
     vehicle: {
       ...DEFAULT_STATE.vehicle,

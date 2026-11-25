@@ -289,6 +289,7 @@ object StateDto {
             unreadPhoneMsg != null -> JSONObject().apply {
                 put("id", unreadPhoneMsg.id)
                 put("app", unreadPhoneMsg.appLabel)
+                put("packageName", unreadPhoneMsg.packageName)
                 put("title", unreadPhoneMsg.sender)
                 put("text", unreadPhoneMsg.text)
                 put("source", "phone")
@@ -297,6 +298,7 @@ object StateDto {
             unreadNotif != null -> JSONObject().apply {
                 put("id", unreadNotif.key)
                 put("app", unreadNotif.appLabel)
+                put("packageName", unreadNotif.packageName)
                 put("title", unreadNotif.sender)
                 put("text", unreadNotif.message)
                 put("source", "tablet")
@@ -323,6 +325,11 @@ object StateDto {
             put("contactsSyncedAtMs", phone.contactsSyncedAtMs)
             put("contactsSyncing", phone.contactsSyncing)
             put("contactsSyncError", phone.contactsSyncError ?: JSONObject.NULL)
+            put("iconsVersion", phone.iconsVersion)
+            put("iconPackages", JSONArray(phone.iconPackages.sorted()))
+            put("roles", JSONObject().apply {
+                phone.appRoles.forEach { (k, v) -> put(k, v) }
+            })
             put("discovered", JSONArray().apply {
                 phone.discoveredPhones.forEach { d ->
                     put(JSONObject().apply {
@@ -344,6 +351,7 @@ object StateDto {
                     put(JSONObject().apply {
                         put("id", m.id)
                         put("app", m.appLabel)
+                        put("packageName", m.packageName)
                         put("sender", m.sender)
                         put("text", m.text)
                         put("timestampMs", m.timestampMs)
@@ -417,7 +425,38 @@ object StateDto {
                 }
             })
             put("ignitionDevice", ui.config.ignitionBtMac)
+            put("preferredMapPackage", ui.config.preferredMapPackage)
+            put("preferredMusicPackage", ui.config.preferredMusicPackage)
             put("version", extras.appVersion)
+        }
+
+        val appsObj = JSONObject().apply {
+            put("preferredMapPackage", ui.config.preferredMapPackage)
+            put("preferredMusicPackage", ui.config.preferredMusicPackage)
+            put("tablet", JSONArray().apply {
+                ui.installedTabletApps.forEach { app ->
+                    put(JSONObject().apply {
+                        put("packageName", app.packageName)
+                        put("label", app.label)
+                    })
+                }
+            })
+            put("mapApps", JSONArray().apply {
+                ui.installedMapApps.forEach { app ->
+                    put(JSONObject().apply {
+                        put("packageName", app.packageName)
+                        put("label", app.label)
+                    })
+                }
+            })
+            put("musicApps", JSONArray().apply {
+                ui.installedMusicApps.forEach { app ->
+                    put(JSONObject().apply {
+                        put("packageName", app.packageName)
+                        put("label", app.label)
+                    })
+                }
+            })
         }
 
         val currentYear = Instant.ofEpochMilli(extras.nowEpochMs).atZone(ZoneId.systemDefault()).year
@@ -470,6 +509,7 @@ object StateDto {
             put("audio", audioObj)
             put("notification", notifValue)
             put("phone", phoneObj)
+            put("apps", appsObj)
             put("vehicle", vehicleObj)
             put("settings", settingsObj)
         }

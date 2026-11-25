@@ -6,7 +6,9 @@ import {
   formatClockAndDate,
   createWeatherSvg,
   setText,
-  setHidden
+  setHidden,
+  setPhoneIconsVersion,
+  hydrateStaticAppIcons
 } from './util.js';
 import { initIntro, updateBrandAndIntroMode } from './intro.js';
 import { initBackground, setBackgroundAccent, setBackgroundSpeed, setBackgroundMode } from './background.js';
@@ -185,13 +187,16 @@ function onState(next) {
   setBackgroundSpeed(next.telemetry.speedKmh);
   surfaceAlerts(next.telemetry.alerts);
 
+  setPhoneIconsVersion(next.phone?.iconsVersion || 0);
+  hydrateStaticAppIcons(next.phone?.roles || {}, next.phone?.iconsVersion || 0);
+
   updateMapState(next.map, nowMs(), {
     mapTheme: next.settings?.mapTheme || 'AUTO'
   });
   updateMusic(next);
   updateDock(next);
   updateCopilot(next);
-  updateNotification(next.notification);
+  updateNotification(next.notification, next.phone);
   updateCallBanner(next.phone, nowMs());
   updateVoiceNotePill(next.phone);
   updateSettings(next);

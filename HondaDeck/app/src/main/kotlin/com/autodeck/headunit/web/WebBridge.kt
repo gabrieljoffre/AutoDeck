@@ -192,8 +192,16 @@ class WebBridge(
                 val name = args.optString("name").trim().ifBlank {
                     runtime.uiState.value.route.destinationLabel
                 }
-                if (name.isNotBlank()) runtime.navigateExternally(name)
+                val pkg = args.optString("package").trim().takeIf { it.isNotBlank() }
+                if (name.isNotBlank()) runtime.navigateExternally(name, pkg)
             }
+            "apps.open" -> {
+                val pkg = args.optString("packageName").trim().takeIf { it.isNotBlank() }
+                val name = args.optString("name").trim().takeIf { it.isNotBlank() }
+                val target = args.optString("target", "tablet").trim().ifBlank { "tablet" }
+                runtime.openAppFromUi(packageName = pkg, name = name, target = target)
+            }
+            "copilot.openGeminiApp" -> runtime.openOfficialGeminiApp()
 
             "fav.save" -> {
                 runtime.saveFavoritePlace(
@@ -364,6 +372,22 @@ class WebBridge(
                     )
                 }
             }
+            "preferredMapPackage" -> {
+                val pkg = args.optString("value").trim()
+                if (pkg.isNotBlank()) {
+                    val label = runtime.uiState.value.installedMapApps
+                        .firstOrNull { it.packageName == pkg }?.label ?: pkg
+                    runtime.updateConfig { it.copy(preferredMapPackage = pkg, preferredMapLabel = label) }
+                }
+            }
+            "preferredMusicPackage" -> {
+                val pkg = args.optString("value").trim()
+                if (pkg.isNotBlank()) {
+                    val label = runtime.uiState.value.installedMusicApps
+                        .firstOrNull { it.packageName == pkg }?.label ?: pkg
+                    runtime.updateConfig { it.copy(preferredMusicPackage = pkg, preferredMusicLabel = label) }
+                }
+            }
             else -> Log.w(TAG, "Chave desconhecida em settings.set: '$key'")
         }
     }
@@ -434,6 +458,8 @@ class WebBridge(
             "map.route",
             "map.stopRoute",
             "map.openExternal",
+            "apps.open",
+            "copilot.openGeminiApp",
             "fav.save",
             "fav.delete",
             "fav.useCurrentLocation",
