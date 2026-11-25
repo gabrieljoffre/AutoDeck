@@ -25,6 +25,9 @@ enum class VoiceAssistantMode(val labelPt: String, val descriptionPt: String) {
     )
 }
 
+/** Modelo do Copiloto: responde no plano gratuito da chave (os 2.x foram desativados). */
+const val DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+
 data class HeadUnitConfig(
     val setupCompleted: Boolean = true,
     val obdDeviceMac: String? = "00:10:CC:4F:36:03",
@@ -62,7 +65,7 @@ data class HeadUnitConfig(
     val showBootSplashOnIgnition: Boolean = true,
     // Agente Gemini & Voz
     val geminiApiKey: String = "",
-    val geminiModel: String = "gemini-2.5-flash",
+    val geminiModel: String = DEFAULT_GEMINI_MODEL,
     val voiceAssistantMode: VoiceAssistantMode = VoiceAssistantMode.HYBRID_GEMINI,
     val wakeWordEnabled: Boolean = true,
     val wakeWordPhrase: String = "ok honda",
@@ -137,7 +140,9 @@ class HeadUnitPreferences(context: Context) {
             showBootSplashOnIgnition = prefs.getBoolean(KEY_SHOW_BOOT_ON_IGNITION, true),
             // Vazio nas Configurações = usa a chave embutida no build (local.properties).
             geminiApiKey = (prefs.getString(KEY_GEMINI_API_KEY, "") ?: "").ifBlank { BuildConfig.GEMINI_API_KEY },
-            geminiModel = prefs.getString(KEY_GEMINI_MODEL, "gemini-2.5-flash") ?: "gemini-2.5-flash",
+            // Os modelos 2.x foram desativados pelo Google: quem ainda tiver um salvo passa para o atual.
+            geminiModel = (prefs.getString(KEY_GEMINI_MODEL, null) ?: "")
+                .takeIf { it.isNotBlank() && !it.startsWith("gemini-2.") } ?: DEFAULT_GEMINI_MODEL,
             voiceAssistantMode = voiceAssistantMode,
             wakeWordEnabled = prefs.getBoolean(KEY_WAKE_WORD_ENABLED, true),
             wakeWordPhrase = prefs.getString(KEY_WAKE_WORD_PHRASE, "ok honda") ?: "ok honda",

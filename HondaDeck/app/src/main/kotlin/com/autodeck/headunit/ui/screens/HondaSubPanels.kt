@@ -1307,7 +1307,7 @@ fun HondaSettingsPanel(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash").forEach { m ->
+                listOf("gemini-flash-lite-latest", "gemini-flash-latest", "gemini-3.8-flash").forEach { m ->
                     FilterChip(
                         selected = cfg.geminiModel == m,
                         onClick = { onUpdateConfig { it.copy(geminiModel = m) } },

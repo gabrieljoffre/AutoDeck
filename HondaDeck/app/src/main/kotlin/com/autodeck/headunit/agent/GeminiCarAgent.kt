@@ -7,12 +7,14 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
+import android.util.Log
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
+import com.autodeck.headunit.data.DEFAULT_GEMINI_MODEL
 import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.VoiceAssistantMode
 import com.autodeck.headunit.media.MediaPlaybackState
@@ -495,27 +497,44 @@ class GeminiCarAgent(
             }
         )
 
-        val body = JSONObject().apply {
+        fun requestBody(withSearch: Boolean) = JSONObject().apply {
             put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
             put("contents", contents)
             // Pesquisa Google: o Copilot passa a responder sobre notícias, trânsito, horários,
             // resultados de jogos etc., como o app do Gemini, sem perder os dados do carro.
-            put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+            if (withSearch) put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
             put("generationConfig", JSONObject().apply {
                 put("temperature", 0.4)
                 put("maxOutputTokens", 400)
             })
         }
 
-        val apiResult = runCatching {
-            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/${cfg.geminiModel}:generateContent"
+        // 1) modelo escolhido com pesquisa; 2) sem pesquisa (o plano gratuito recusa a pesquisa com 429);
+        // 3) modelo padrão sem pesquisa (caso o escolhido tenha sido desativado: 404).
+        val attempts = listOf(
+            cfg.geminiModel to true,
+            cfg.geminiModel to false,
+            DEFAULT_GEMINI_MODEL to false
+        ).distinct()
+        var apiResult: Result<String> = Result.failure(IllegalStateException("sem tentativa"))
+        for ((model, withSearch) in attempts) {
+            apiResult = requestGemini(model, requestBody(withSearch), cfg.geminiApiKey)
+            if (apiResult.isSuccess) break
+            Log.w("GeminiCarAgent", "Gemini $model (pesquisa=$withSearch) falhou: ${apiResult.exceptionOrNull()?.message?.take(160)}")
+        }
+        rawGeminiReply(apiResult, userText)
+    }
+
+    private fun requestGemini(model: String, body: JSONObject, apiKey: String): Result<String> =
+        runCatching {
+            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
             val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 7_000
                 readTimeout = 12_000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-                setRequestProperty("x-goog-api-key", cfg.geminiApiKey.trim())
+                setRequestProperty("x-goog-api-key", apiKey.trim())
             }
             OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
                 writer.write(body.toString())
@@ -537,13 +556,15 @@ class GeminiCarAgent(
                 .mapNotNull { parts.getJSONObject(it).optString("text").takeIf { t -> t.isNotBlank() } }
                 .joinToString("")
                 .trim()
+                .ifBlank { throw IllegalStateException("Resposta vazia do Gemini") }
         }
 
+    private fun rawGeminiReply(apiResult: Result<String>, userText: String): AgentReplyResult {
         val rawText = apiResult.getOrNull()
         if (rawText.isNullOrBlank()) {
             // Se falhar rede/cota, responde localmente sem deixar o motorista na mão!
             val local = runLocalOfflineAgent(userText)
-            return@withContext local.copy(
+            return local.copy(
                 replyText = local.replyText,
                 isOffline = true
             )
@@ -555,7 +576,7 @@ class GeminiCarAgent(
         if (conversationHistory.size > 16) {
             repeat(2) { conversationHistory.removeAt(0) }
         }
-        parsed
+        return parsed
     }
 
     private fun buildSystemContextPrompt(): String {
