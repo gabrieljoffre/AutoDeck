@@ -183,7 +183,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
     private val audioMonitor = AudioBtMonitor(appContext)
     private val mediaController = MediaAndNotificationController.get(appContext)
-    private val gpsTracker = GpsNavigationTracker(appContext, scope)
+    private val gpsTracker = GpsNavigationTracker(appContext)
     private val routeNavigator = InAppRouteNavigator(scope)
     private val placeSearch = PlaceSearch()
     private val spotifyWeb = SpotifyWebApi(appContext)

@@ -117,6 +117,7 @@ class NectarLinkAndMobileAgentTest {
     @Test
     fun nectarlink_manifest_play_protect_and_automotive_compliance() {
         val manifest = File(resolveAppDir(), "src/main/AndroidManifest.xml").readText()
+        val completoManifest = File(resolveAppDir(), "src/completo/AndroidManifest.xml").readText()
 
         val blockedPermissions = listOf(
             "BIND_NOTIFICATION_LISTENER_SERVICE",
@@ -127,10 +128,18 @@ class NectarLinkAndMobileAgentTest {
         )
         blockedPermissions.forEach { perm ->
             assertFalse(
-                "Manifest must NOT declare Play-Protect-risky permission: $perm",
+                "Main manifest must NOT declare Play-Protect-risky permission: $perm",
                 manifest.contains(perm)
             )
         }
+        assertTrue(
+            "Flavor completo must declare BIND_NOTIFICATION_LISTENER_SERVICE",
+            completoManifest.contains("BIND_NOTIFICATION_LISTENER_SERVICE")
+        )
+        assertFalse(
+            "Flavor qr must not have a notification listener manifest",
+            File(resolveAppDir(), "src/qr/AndroidManifest.xml").exists()
+        )
 
         assertTrue(manifest.contains("android:allowBackup=\"false\""))
         assertTrue(manifest.contains("android.permission.FOREGROUND_SERVICE_LOCATION"))
@@ -277,50 +286,77 @@ class NectarLinkAndMobileAgentTest {
 
     @Test
     fun mobile_agent_a11y_and_large_font_source_audit() {
-        val screensDir = File(resolveAppDir(), "src/main/kotlin/com/autodeck/headunit/ui/screens")
-        val components = File(screensDir, "HondaComponents.kt").readText()
-        val headUnit = File(screensDir, "HeadUnitScreen.kt").readText()
-        val subPanels = File(screensDir, "HondaSubPanels.kt").readText()
-        val wizard = File(screensDir, "SetupWizardScreen.kt").readText()
+        val appDir = resolveAppDir()
+        val screensDir = File(appDir, "src/main/kotlin/com/autodeck/headunit/ui/screens")
+        val overlayDir = File(appDir, "src/main/kotlin/com/autodeck/headunit/ui/overlay")
+        val webDir = File(appDir, "src/main/assets/web")
 
-        // 1. Strict accessibility & layout guards (no sub-48dp headers, Role.Switch merging, seek fix, dialog reverse guard)
-        assertTrue(components.contains(".heightIn(min = 56.dp)"))
-        assertTrue(components.contains("onLongClickLabel = longPressDesc"))
-        assertTrue(components.contains("rememberUpdatedState(onSeekFraction)"))
-        assertTrue(components.contains("onDragEnd"))
-        assertTrue(components.contains(".heightIn(min = 62.dp)"))
-        assertFalse(components.contains(".size(46.dp)"))
-        assertFalse(components.contains(".height(16.dp)\n            .semantics"))
-        assertTrue(headUnit.contains("if (showClearDtcDialog && !headUnit.isReverseOverlayVisible)"))
-        assertTrue(headUnit.contains("clearAndSetSemantics"))
-        assertTrue(subPanels.contains("Role.Switch"))
-        assertTrue(subPanels.contains("Lifecycle.Event.ON_RESUME"))
+        // Old Compose screens must be deleted
+        listOf(
+            "HeadUnitScreen.kt",
+            "HondaComponents.kt",
+            "HondaSubPanels.kt",
+            "FuelLogWidgets.kt",
+            "WeatherWidgets.kt"
+        ).forEach { removedFile ->
+            assertFalse(
+                "Old Compose file $removedFile should have been removed",
+                File(screensDir, removedFile).exists()
+            )
+        }
+
+        // Kept Compose files (SetupWizardScreen, BootSplashOverlay, ReverseCameraOverlay)
+        val wizard = File(screensDir, "SetupWizardScreen.kt").readText()
+        val reverseOverlay = File(overlayDir, "ReverseCameraOverlay.kt").readText()
+        assertTrue(File(screensDir, "BootSplashOverlay.kt").exists())
+        assertTrue(File(overlayDir, "FloatingHudOverlayManager.kt").exists())
         assertTrue(wizard.contains("Role.Switch"))
         assertTrue(wizard.contains("Lifecycle.Event.ON_RESUME"))
+        assertTrue(reverseOverlay.contains("fun ReverseCameraOverlay("))
 
-        // 2. Semantic descriptions & >= 48dp touch targets on small controls
-        assertTrue(components.contains("contentDescription = \"Status e Configurações\""))
-        assertTrue(components.contains("contentDescription = \"Barra de progresso da música\""))
-        assertTrue(components.contains(".sizeIn(minWidth = 48.dp, minHeight = 48.dp)"))
-        assertTrue(headUnit.contains("contentDescription = \"Fechar alerta WhatsApp\""))
-
-        // 3. Map preserves user zoom/pan via followGps + LifecycleEventObserver
-        assertTrue(components.contains("LifecycleEventObserver"))
-        assertTrue(components.contains("onUserDragMap"))
-        assertFalse(components.contains("map.controller.setZoom("))
-
-        // 4. Every FilterChip call is wrapped inside FlowRow rather than an unwrapping Row
-        listOf(headUnit, subPanels, wizard).forEach { src ->
-            val lines = src.lines()
-            lines.forEachIndexed { idx, line ->
-                if (line.contains("FilterChip(")) {
-                    val window = lines.subList((idx - 8).coerceAtLeast(0), idx).joinToString("\n")
-                    assertFalse(
-                        "FilterChip near line ${idx + 1} should not sit directly inside a non-wrapping Row",
-                        window.contains("Row(") && !window.contains("FlowRow(")
-                    )
-                }
+        // Every FilterChip call in SetupWizardScreen is wrapped inside FlowRow rather than an unwrapping Row
+        val wizardLines = wizard.lines()
+        wizardLines.forEachIndexed { idx, line ->
+            if (line.contains("FilterChip(")) {
+                val window = wizardLines.subList((idx - 8).coerceAtLeast(0), idx).joinToString("\n")
+                assertFalse(
+                    "FilterChip near line ${idx + 1} should not sit directly inside a non-wrapping Row",
+                    window.contains("Row(") && !window.contains("FlowRow(")
+                )
             }
+        }
+
+        // Web UI (assets/web): buttons with aria-label, >= 48px touch targets in CSS, no external CDN
+        val indexHtml = File(webDir, "index.html").readText()
+        val orbitaCss = File(webDir, "css/orbita.css").readText()
+
+        val ariaLabelCount = Regex("""<button\b[^>]*\baria-label="[^"]+"""").findAll(indexHtml).count()
+        assertTrue("Web index.html must define aria-label on interactive buttons (found $ariaLabelCount)", ariaLabelCount >= 25)
+        assertTrue(indexHtml.contains("aria-label=\"Falar com o copiloto\""))
+        assertTrue(indexHtml.contains("aria-label=\"Tocar ou pausar\""))
+        assertTrue(indexHtml.contains("aria-label=\"Silenciar ou reativar o som\""))
+
+        // Touch targets >= 48px in CSS
+        val minHeight48Count = Regex("""min-height:\s*(48|5[0-9]|6[0-9]|7[0-9])px""").findAll(orbitaCss).count()
+        assertTrue("orbita.css must enforce >= 48px touch targets (found $minHeight48Count)", minHeight48Count >= 5)
+        assertTrue(orbitaCss.contains("width: 48px;\n  height: 48px;"))
+
+        // No external CDN references in HTML, CSS, or app JS files
+        assertFalse("index.html must not load scripts or styles from http(s)", Regex("""https?://""", RegexOption.IGNORE_CASE).containsMatchIn(indexHtml))
+        assertFalse("orbita.css must not load fonts or assets from http(s)", Regex("""https?://""", RegexOption.IGNORE_CASE).containsMatchIn(orbitaCss))
+
+        val bannedCdnRegex = Regex("""(googleapis\.com|gstatic\.com|unpkg\.com|jsdelivr\.net|cdnjs\.cloudflare\.com|cdn\.)""", RegexOption.IGNORE_CASE)
+        val webSourceFiles = listOf(
+            File(webDir, "index.html"),
+            File(webDir, "css/orbita.css")
+        ) + (File(webDir, "js").listFiles()?.filter { it.extension == "js" }.orEmpty())
+
+        webSourceFiles.forEach { file ->
+            val content = file.readText()
+            assertFalse(
+                "Web file ${file.name} must not load from an external CDN",
+                bannedCdnRegex.containsMatchIn(content)
+            )
         }
     }
 }

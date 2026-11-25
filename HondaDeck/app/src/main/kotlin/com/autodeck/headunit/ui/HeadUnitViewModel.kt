@@ -1,117 +1,47 @@
 package com.autodeck.headunit.ui
 
 import android.app.Application
+import android.content.Context
 import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
 import com.autodeck.headunit.data.HeadUnitConfig
-import com.autodeck.headunit.media.WhatsAppNotificationItem
-import com.autodeck.headunit.service.CameraDebugState
 import com.autodeck.headunit.service.HeadUnitRuntime
 import com.autodeck.headunit.service.HeadUnitUiState
-import com.autodeck.headunit.service.WebBridgeEvent
-import com.autodeck.headunit.web.WebResourceRouter
-import com.autodeck.protocol.coordinator.MainTab
-import com.autodeck.protocol.obd2.TransmissionType
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
+/**
+ * ViewModel enxuto da Activity principal: coordena ciclo de vida, assistente inicial,
+ * autorização Spotify, câmera de ré e alertas críticos sobre a WebView.
+ * Toda a interação das abas principais acontece via `WebBridge` direto no `HeadUnitRuntime`.
+ */
 class HeadUnitViewModel(application: Application) : AndroidViewModel(application) {
 
     val runtime: HeadUnitRuntime = HeadUnitRuntime.get(application)
-
     val uiState: StateFlow<HeadUnitUiState> = runtime.uiState
-    val webEvents: SharedFlow<WebBridgeEvent> = runtime.webEvents
-    val tileRouter: WebResourceRouter = runtime.tileRouter
-    val cameraDebug: StateFlow<CameraDebugState> = runtime.cameraDebug
 
     fun setAppForeground(inForeground: Boolean) = runtime.setAppForeground(inForeground)
     fun onPermissionsUpdated() = runtime.onPermissionsUpdated()
     fun completeSetup(newConfig: HeadUnitConfig) = runtime.completeSetup(newConfig)
-    fun reopenSetup() = runtime.reopenSetup()
     fun updateConfig(transform: (HeadUnitConfig) -> HeadUnitConfig) = runtime.updateConfig(transform)
     fun setLauncherModeEnabled(enabled: Boolean) = runtime.setLauncherModeEnabled(enabled)
-    fun selectTab(tab: MainTab) = runtime.selectTab(tab)
     fun dismissCurrentAlert(title: String) = runtime.dismissCurrentAlert(title)
 
     // Ignição & Standby
-    fun enterStandbyManually() = runtime.enterStandbyManually()
     fun wakeFromStandbyManually() = runtime.wakeFromStandbyManually()
 
-    // Música & Volume
-    fun toggleMusicPlayPause() = runtime.toggleMusicPlayPause()
-    fun skipMusicNext() = runtime.skipMusicNext()
-    fun skipMusicPrevious() = runtime.skipMusicPrevious()
-    fun seekMusicTo(posMs: Long) = runtime.seekMusicTo(posMs)
-    fun openPreferredMusicApp(): Boolean = runtime.openPreferredMusicApp()
-    fun setMasterVolumePct(pct: Int) = runtime.setMasterVolumePct(pct)
-    fun toggleAudioMute() = runtime.toggleAudioMute()
-
-    // Navegação & Mapa Offline
-    fun openPreferredMapApp(): Boolean = runtime.openPreferredMapApp()
-    fun navigateToDestination(destination: String): Boolean = runtime.navigateToDestination(destination)
-    fun searchPlaces(query: String) = runtime.searchPlaces(query)
-    fun routeToPlace(name: String, lat: Double?, lon: Double?): Boolean = runtime.routeToPlace(name, lat, lon)
-    fun saveFavoritePlace(
-        id: String?,
-        name: String,
-        address: String,
-        lat: Double?,
-        lon: Double?,
-        voice: String?,
-        icon: String?
-    ) = runtime.saveFavoritePlace(id, name, address, lat, lon, voice, icon)
-    fun deleteFavoritePlace(id: String) = runtime.deleteFavoritePlace(id)
-    fun saveCurrentLocationAsFavorite(name: String, voice: String?, icon: String?) =
-        runtime.saveCurrentLocationAsFavorite(name, voice, icon)
-    fun stopInAppNavigation() = runtime.stopInAppNavigation()
-    fun navigateExternally(destination: String): Boolean = runtime.navigateExternally(destination)
-    fun connectSpotify(activityContext: android.content.Context) = runtime.connectSpotify(activityContext)
-    fun spotifyToggleShuffle() { runtime.spotifyToggleShuffle() }
-    fun spotifyToggleLike() { runtime.spotifyToggleLike() }
+    // Spotify OAuth & App Remote
+    fun connectSpotify(activityContext: Context) = runtime.connectSpotify(activityContext)
     fun onSpotifyToken(token: String, expiresInSec: Int) = runtime.onSpotifyToken(token, expiresInSec)
-    fun requestSpotifyWebAuth() = runtime.requestSpotifyWebAuth()
-    fun refreshSpotifyPlaylists() = runtime.refreshSpotifyPlaylists()
-    fun searchSpotify(query: String) = runtime.searchSpotify(query)
-    fun playSpotifyUri(uri: String) = runtime.playSpotifyUri(uri)
     fun setSpotifyAuthRequester(requester: (() -> Unit)?) = runtime.setSpotifyAuthRequester(requester)
-    fun onSpotifyAuthorized(activityContext: android.content.Context) = runtime.onSpotifyAuthorized(activityContext)
+    fun onSpotifyAuthorized(activityContext: Context) = runtime.onSpotifyAuthorized(activityContext)
     fun onSpotifyAuthFailed(reason: String) = runtime.onSpotifyAuthFailed(reason)
-    fun spotifyToggleRepeat() { runtime.spotifyToggleRepeat() }
-    fun downloadOfflineMap(radiusKm: Double = 12.0) = runtime.downloadOfflineMap(radiusKm)
 
-    // Agente Gemini & WhatsApp
-    fun triggerVoiceAgent() = runtime.triggerVoiceAgent()
-    fun stopVoiceAgent() = runtime.stopVoiceAgent()
-    fun sendAgentPrompt(text: String) = runtime.sendAgentPrompt(text)
-    fun readLatestWhatsAppAloud() = runtime.readLatestWhatsAppAloud()
-    fun replyToWhatsApp(item: WhatsAppNotificationItem, replyText: String): Boolean =
-        runtime.replyToWhatsApp(item, replyText)
-    fun dismissWhatsApp(key: String) = runtime.dismissWhatsApp(key)
-    fun launchWhatsApp(): Boolean = runtime.launchWhatsApp()
-
-    // Câmera de Ré
-    fun toggleManualCameraPreview() = runtime.toggleManualCameraPreview()
+    // Câmera de Ré & USB
     fun exitManualCameraPreview() = runtime.exitManualCameraPreview()
     fun toggleSimulatedReverse() = runtime.toggleSimulatedReverse()
     fun calibrateCameraNoSignal(): Boolean = runtime.calibrateCameraNoSignal()
-    fun clearNoSignalCalibration() = runtime.clearNoSignalCalibration()
     fun attachCameraSurface(surface: Surface?) = runtime.attachCameraSurface(surface)
     fun selectCameraChannel(channel: Int) = runtime.selectCameraChannel(channel)
     fun setCameraStandardNtsc(isNtsc: Boolean) = runtime.setCameraStandardNtsc(isNtsc)
-
-    // OBD-II & USB
-    fun connectObdNow() = runtime.connectObdNow()
-    fun disconnectObd() = runtime.disconnectObd()
-    fun readDtcCodes() = runtime.readDtcCodes()
-    fun clearDtcCodes() = runtime.clearDtcCodes()
-    fun resetTripConsumption() = runtime.resetTripConsumption()
-    fun markTankFull() = runtime.markTankFull()
-    fun addFuelLiters(liters: Double) = runtime.addFuelLiters(liters)
-    fun logRefuel(liters: Double, pricePerLiter: Double?, odometerKm: Double?, fullTank: Boolean): String =
-        runtime.logRefuel(liters, pricePerLiter, odometerKm, fullTank)
-    fun deleteFuelEntry(timestampMs: Long) = runtime.deleteFuelEntry(timestampMs)
-    fun setVirtualTankLiters(liters: Double) = runtime.setVirtualTankLiters(liters)
-    fun setTransmissionType(type: TransmissionType) = runtime.setTransmissionType(type)
     fun refreshUsbDevices() = runtime.refreshUsbDevices()
-    fun requestUsbPermission(deviceName: String) = runtime.requestUsbPermission(deviceName)
 }

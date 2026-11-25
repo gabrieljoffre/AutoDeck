@@ -34,11 +34,11 @@ import com.spotify.sdk.android.auth.AuthorizationClient
 import com.spotify.sdk.android.auth.AuthorizationRequest
 import com.spotify.sdk.android.auth.AuthorizationResponse
 import com.autodeck.headunit.ui.HeadUnitViewModel
+import com.autodeck.headunit.ui.overlay.CriticalAlertBanner
+import com.autodeck.headunit.ui.overlay.ReverseCameraOverlay
+import com.autodeck.headunit.ui.overlay.StandbyBlackOverlay
 import com.autodeck.headunit.ui.screens.BootSplashOverlay
-import com.autodeck.headunit.ui.screens.CriticalAlertBanner
-import com.autodeck.headunit.ui.screens.ReverseCameraOverlay
 import com.autodeck.headunit.ui.screens.SetupWizardScreen
-import com.autodeck.headunit.ui.screens.StandbyBlackOverlay
 import com.autodeck.headunit.ui.theme.AutoDeckTheme
 import com.autodeck.headunit.web.WebUiHost
 

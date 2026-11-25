@@ -3,6 +3,13 @@
 **Padrão: instalar pelo USB, em casa, com o notebook ligado ao tablet.**
 O QR code é só a alternativa para quando não há computador por perto.
 
+## Arquitetura (HondaDeck 3.0 — Órbita)
+
+- **Interface Web (WebView + `WebViewAssetLoader`)**: layout **Órbita** em `app/src/main/assets/web/` (HTML/CSS/JS + Leaflet local e fontes `woff2` offline, sem CDN externo), servido em `https://appassets.androidplatform.net/` com tiles Esri Dark Gray cacheados em disco (`/tiles/` e `/labels/`) e capa da música (`/cover/current.jpg`).
+- **Ponte Bidirecional (`WebBridge` + `StateDto`)**: `window.HondaBridge.send(json)` recebe comandos da UI web e `window.HD.receive(...)` publica estado (`state` conflatado, `telemetry` a ~10 Hz e `event`).
+- **Camadas Compose Mantidas**: apenas assistente de 1ª configuração (`SetupWizardScreen`), vídeo de partida opcional (`BootSplashOverlay`), overlay prioritário de câmera de ré / alertas OBD / standby (`ReverseCameraOverlay`) e cápsula flutuante sobre apps externos (`FloatingHudOverlayManager`).
+- **Backend Nativo Kotlin (`HeadUnitRuntime`)**: OBD-II ELM327 Turbo, Spotify App Remote + Web API, GPS e rota curva-a-curva no app (OSRM/Nominatim), câmera de ré USB STK1160, clima Open-Meteo, diário de abastecimentos e Copiloto híbrido (regras locais + Gemini com Function Calling).
+
 ## As duas versões
 
 | | **completo** (padrão) | **qr** (alternativa) |
@@ -54,7 +61,7 @@ Pelo Gradle direto: `.\gradlew.bat :app:installCompletoDebug`.
 1. **Configurações → Notificações → Acesso a notificações → HondaDeck** → ativar.
 2. Se a opção estiver cinza: **Configurações → Apps → HondaDeck → ⋮ → Permitir configurações restritas**,
    e tentar o passo 1 de novo.
-3. No app, **Configurações → Agente**: colar a chave do Gemini (se o build não tiver uma, veja abaixo).
+3. No app, **Ajustes → Copiloto (voz)**: colar a chave do Gemini (se o build não tiver uma, veja abaixo).
 
 ## Instalar pelo QR code (alternativa)
 
@@ -74,20 +81,13 @@ Acesso restrito: só o dono abre; para qualquer outra pessoa o link pede permiss
 
 | Chave | Para que serve | Onde entra | Onde ver ou gerar outra |
 |---|---|---|---|
-| **Google AI Studio (Gemini)** | Copilot de voz/chat (Gemini + pesquisa Google) | `HondaDeck/local.properties` → `GEMINI_API_KEY=...` (build no notebook), ou no tablet em Configurações → Agente | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| **HondaDeck Maps Android** | Mapa, busca de endereço e rotas do Google (ainda não usado pelo app) | `HondaDeck/local.properties` → `MAPS_API_KEY=...` | Google Cloud → projeto `hondadeck` → APIs e serviços → Credenciais |
+| **Google AI Studio (Gemini)** | Copiloto de voz/chat (Gemini + pesquisa Google) | `HondaDeck/local.properties` → `GEMINI_API_KEY=...` (build no notebook), ou no tablet em Ajustes → Copiloto (voz) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| **Spotify Client ID** | Spotify App Remote + Web API (busca e playlists) | `HondaDeck/local.properties` → `spotify.clientId=...` | [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) |
 
-A chave do Maps é restrita ao app Android `com.autodeck.hondadeck` com o SHA-1 do keystore de debug
-(`95:EB:E7:B0:A4:81:B8:E8:2C:90:5F:2B:F8:02:46:BB:F1:14:09:A3`) e às APIs Maps SDK for Android,
-Places (New) e Routes. Alerta de orçamento do projeto: R$ 30/mês (e-mail em 50% e 100%).
-
-Se uma chave vazar: gere outra no link da tabela, apague a antiga, atualize o documento do Drive
-e o `local.properties`.
-
-- **Build local (USB em casa):** a chave do Gemini pode ficar em `HondaDeck/local.properties`
-  (fora do Git) na linha `GEMINI_API_KEY=...`; o APK já sai configurado. **Não publique esse APK.**
+- **Build local (USB em casa):** as chaves ficam em `HondaDeck/local.properties`
+  (fora do Git); o APK já sai configurado. **Não publique esse APK.**
 - **Builds do GitHub (release pública):** saem **sem** chave, de propósito. O repositório é público e
-  qualquer pessoa poderia extrair a chave do APK. A chave é digitada uma vez em Configurações → Agente
+  qualquer pessoa poderia extrair a chave do APK. A chave do Gemini é digitada uma vez em Ajustes → Copiloto (voz)
   e fica salva só no tablet.
 
 ## Links fixos da release `hondadeck-latest`
