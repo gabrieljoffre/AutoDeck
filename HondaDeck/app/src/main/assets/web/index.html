@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="./css/orbita.css">
 </head>
 <body>
-  <!-- Fundo synthwave em perspectiva -->
+  <!-- Fundo estrada em perspectiva -->
   <canvas id="bg-canvas" aria-hidden="true"></canvas>
 
   <!-- Tela de introdução animada (~2,8 s) -->
@@ -192,9 +192,9 @@
             <!-- Player normal -->
             <div id="home-music-body" class="music-home-body">
               <button id="home-music-track-btn" class="music-track-hero-btn" type="button" aria-label="Abrir player expandido">
-                <span class="cover-box cover-112">
+                <span class="cover-box cover-124">
                   <img id="home-cover-img" class="cover-img hidden" alt="">
-                  <svg id="home-cover-fallback" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+                  <svg id="home-cover-fallback" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
                     <path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle>
                   </svg>
                 </span>
@@ -219,15 +219,26 @@
               </div>
 
               <div class="transport-row-home">
-                <button id="home-prev-btn" class="transport-circle-btn" type="button" data-test="music-prev" aria-label="Faixa anterior">
+                <button id="home-shuffle-btn" class="aux-media-btn home-aux" type="button" data-test="music-shuffle" aria-label="Aleatório" title="Aleatório">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"></path></svg>
+                </button>
+                <button id="home-prev-btn" class="transport-circle-btn sm" type="button" data-test="music-prev" aria-label="Faixa anterior">
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="#E8EEF6" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"></path></svg>
                 </button>
-                <button id="home-play-btn" class="transport-play-btn" type="button" data-test="music-toggle" aria-label="Tocar ou pausar">
+                <button id="home-play-btn" class="transport-play-btn home-play" type="button" data-test="music-toggle" aria-label="Tocar ou pausar">
                   <svg id="home-play-icon" width="24" height="24" viewBox="0 0 24 24" fill="#06090F" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
                 </button>
-                <button id="home-next-btn" class="transport-circle-btn" type="button" data-test="music-next" aria-label="Próxima faixa">
+                <button id="home-next-btn" class="transport-circle-btn sm" type="button" data-test="music-next" aria-label="Próxima faixa">
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="#E8EEF6" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"></path></svg>
                 </button>
+                <button id="home-like-btn" class="aux-media-btn home-aux" type="button" data-test="music-like" aria-label="Curtir" title="Curtir">
+                  <svg id="home-like-svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"></path></svg>
+                </button>
+              </div>
+
+              <!-- Faixa horizontal rolável: playlists Honda + Recentes -->
+              <div id="home-music-shelf-wrap" class="home-music-shelf-wrap hidden">
+                <div id="home-music-shelf" class="home-music-shelf" data-test="home-music-shelf" aria-label="Playlists Honda e recentes"></div>
               </div>
             </div>
           </div>

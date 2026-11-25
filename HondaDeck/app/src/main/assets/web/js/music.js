@@ -29,7 +29,7 @@ const seekers = [];
 let homeFocused = false;
 let homeDropClosed = false;
 
-const sigs = { gateHome: '', gateFull: '', playlists: '', recents: '', homeDrop: '', fullSearch: '' };
+const sigs = { gateHome: '', gateFull: '', playlists: '', recents: '', homeDrop: '', fullSearch: '', homeShelf: '' };
 
 const $ = (id) => document.getElementById(id);
 
@@ -468,6 +468,95 @@ function renderLibrary() {
 }
 
 // ---------------------------------------------------------------------------
+// Faixa horizontal no cartão do Início (playlists Honda + Recentes)
+// ---------------------------------------------------------------------------
+
+function shelfTile(item, isHonda) {
+  const art = el('span', { className: 'home-shelf-art' });
+  if (item.imageUrl) {
+    const img = el('img', { alt: '', loading: 'lazy' });
+    img.addEventListener('error', () => {
+      img.remove();
+      art.appendChild(createNoteSvg(24));
+    });
+    img.src = item.imageUrl;
+    art.appendChild(img);
+  } else {
+    art.appendChild(createNoteSvg(24));
+  }
+  if (isHonda) {
+    art.appendChild(el('span', { className: 'home-shelf-badge' }, 'HONDA'));
+  }
+  return el(
+    'button',
+    {
+      className: isHonda ? 'home-shelf-tile honda' : 'home-shelf-tile',
+      type: 'button',
+      title: item.name || '',
+      onClick: () => playItem(item)
+    },
+    art,
+    el('span', { className: 'home-shelf-title' }, item.name || 'Spotify')
+  );
+}
+
+function renderHomeShelf() {
+  const wrap = $('home-music-shelf-wrap');
+  const shelf = $('home-music-shelf');
+  if (!wrap || !shelf) return;
+
+  const showPl = settings.spotifyShowPlaylists !== false;
+  const showRec = settings.spotifyShowRecent !== false;
+  const hondaPlaylists = showPl ? (spotify.playlists || []).filter((p) => Boolean(p && p.honda && p.uri)) : [];
+  const recents = showRec ? (spotify.recent || []).filter((r) => Boolean(r && r.uri)) : [];
+
+  const sig = jsonSig([
+    hondaPlaylists.map((p) => [p.uri, p.name, p.imageUrl]),
+    recents.map((r) => [r.uri, r.name, r.imageUrl])
+  ]);
+  if (sig === sigs.homeShelf) return;
+  sigs.homeShelf = sig;
+
+  shelf.replaceChildren();
+  if (!hondaPlaylists.length && !recents.length) {
+    setHidden(wrap, true);
+    return;
+  }
+
+  if (hondaPlaylists.length) {
+    const row = el('div', { className: 'home-shelf-row' });
+    for (const pl of hondaPlaylists) row.appendChild(shelfTile(pl, true));
+    shelf.appendChild(
+      el(
+        'div',
+        { className: 'home-shelf-group' },
+        el('span', { className: 'home-shelf-label honda' }, 'PLAYLISTS HONDA'),
+        row
+      )
+    );
+  }
+
+  if (hondaPlaylists.length && recents.length) {
+    shelf.appendChild(el('span', { className: 'home-shelf-sep', 'aria-hidden': 'true' }));
+  }
+
+  if (recents.length) {
+    const row = el('div', { className: 'home-shelf-row' });
+    for (const item of recents.slice(0, 10)) row.appendChild(shelfTile(item, false));
+    shelf.appendChild(
+      el(
+        'div',
+        { className: 'home-shelf-group' },
+        el('span', { className: 'home-shelf-label' }, 'RECENTES'),
+        row
+      )
+    );
+  }
+
+  setHidden(wrap, false);
+}
+
+// ---------------------------------------------------------------------------
 // Init e update
 // ---------------------------------------------------------------------------
 
@@ -487,9 +576,9 @@ export function initMusic({ switchMode }) {
   }
   for (const id of ['home-prev-btn', 'full-prev-btn']) $(id).addEventListener('click', () => sendCommand('music.prev'));
   for (const id of ['home-next-btn', 'full-next-btn']) $(id).addEventListener('click', () => sendCommand('music.next'));
-  $('full-shuffle-btn').addEventListener('click', () => sendCommand('music.shuffle'));
+  for (const id of ['home-shuffle-btn', 'full-shuffle-btn']) $(id).addEventListener('click', () => sendCommand('music.shuffle'));
   $('full-repeat-btn').addEventListener('click', () => sendCommand('music.repeat'));
-  $('full-like-btn').addEventListener('click', () => sendCommand('music.like'));
+  for (const id of ['home-like-btn', 'full-like-btn']) $(id).addEventListener('click', () => sendCommand('music.like'));
 
   bindSeek('home');
   bindSeek('full');
@@ -614,14 +703,19 @@ export function updateMusic(state) {
   setPlayIcon($('full-play-icon'), playing);
 
   // Auxiliares
-  $('full-shuffle-btn').classList.toggle('active', Boolean(media.shuffle));
+  const shuffleOn = Boolean(media.shuffle);
+  $('home-shuffle-btn')?.classList.toggle('active', shuffleOn);
+  $('full-shuffle-btn').classList.toggle('active', shuffleOn);
   const repeat = String(media.repeat || 'off').toLowerCase();
   $('full-repeat-btn').classList.toggle('active', repeat !== 'off');
   setHidden($('full-repeat-one'), repeat !== 'one');
   const liked = Boolean(media.liked);
+  $('home-like-btn')?.classList.toggle('active', liked);
   $('full-like-btn').classList.toggle('active', liked);
-  const heart = $('full-like-svg');
-  if (heart) heart.setAttribute('fill', liked ? 'currentColor' : 'none');
+  for (const heartId of ['home-like-svg', 'full-like-svg']) {
+    const heart = $(heartId);
+    if (heart) heart.setAttribute('fill', liked ? 'currentColor' : 'none');
+  }
 
   // Progresso: só ressincroniza quando muda a faixa/estado ou o desvio é grande
   const duration = Math.max(0, Number(media.durationMs || 0));
@@ -637,12 +731,13 @@ export function updateMusic(state) {
   progress.durationMs = duration;
   tickProgress();
 
-  // Busca, biblioteca
+  // Busca, biblioteca e faixa rápida do início
   if (!homeDropClosed && (homeFocused || $('home-music-input').value.trim())) {
     renderHomeDropdown();
   }
   renderFullSearch();
   renderLibrary();
+  renderHomeShelf();
 }
 
 /** Zera a busca local quando o modo música é reaberto. */

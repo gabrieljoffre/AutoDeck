@@ -972,10 +972,10 @@ button:active {
   flex: 1;
   min-height: 0;
   position: relative;
-  padding: 18px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 
 .music-home-searchbar {
@@ -987,7 +987,7 @@ button:active {
 }
 
 .music-card-search-label {
-  height: 48px;
+  height: 46px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
@@ -1006,7 +1006,8 @@ button:active {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .music-track-hero-btn {
@@ -1016,9 +1017,9 @@ button:active {
   color: inherit;
   text-align: left;
   display: flex;
-  gap: 16px;
+  gap: 14px;
   align-items: center;
-  min-height: 112px;
+  min-height: 124px;
 }
 
 .cover-box {
@@ -1034,6 +1035,7 @@ button:active {
 }
 
 .cover-112 { width: 112px; height: 112px; }
+.cover-124 { width: 124px; height: 124px; border-radius: 16px; }
 .cover-72  { width: 72px;  height: 72px;  border-radius: 14px; }
 .cover-150 { width: 150px; height: 150px; border-radius: 18px; }
 
@@ -1048,15 +1050,15 @@ button:active {
 .track-meta-col {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
   flex: 1;
 }
 
 .track-title-home {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 600;
-  line-height: 1.2;
+  line-height: 1.18;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1064,8 +1066,9 @@ button:active {
 }
 
 .track-artist-home {
-  font-size: 14px;
-  color: var(--text-muted);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1074,7 +1077,7 @@ button:active {
 .track-context-home {
   font-size: 11px;
   color: var(--text-muted);
-  letter-spacing: 1px;
+  letter-spacing: 1.1px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1083,11 +1086,11 @@ button:active {
 .progress-group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 
 .seek-hit-area {
-  height: 32px;
+  height: 28px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -1132,10 +1135,147 @@ button:active {
 
 .transport-row-home {
   display: flex;
-  justify-content: center;
+  justify-content: space-between;
   align-items: center;
-  gap: 22px;
-  margin-top: auto;
+  gap: 6px;
+}
+
+.aux-media-btn.home-aux {
+  width: 44px;
+  height: 44px;
+}
+
+.transport-play-btn.home-play {
+  width: 56px;
+  height: 56px;
+}
+
+/* Faixa horizontal rolável no cartão do Spotify (playlists Honda + Recentes) */
+.home-music-shelf-wrap {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 10px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.home-music-shelf {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.home-music-shelf::-webkit-scrollbar {
+  display: none;
+}
+
+.home-shelf-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.home-shelf-label {
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.home-shelf-label.honda {
+  color: var(--accent);
+}
+
+.home-shelf-row {
+  display: flex;
+  gap: 8px;
+}
+
+.home-shelf-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 14px 2px 4px;
+  background: rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.home-shelf-tile {
+  width: 78px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text-primary);
+  text-align: left;
+  flex-shrink: 0;
+  scroll-snap-align: start;
+}
+
+.home-shelf-tile:active .home-shelf-art {
+  transform: scale(0.95);
+}
+
+.home-shelf-art {
+  position: relative;
+  width: 78px;
+  height: 78px;
+  border-radius: 12px;
+  background: var(--a15);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.12s ease;
+}
+
+.home-shelf-tile.honda .home-shelf-art {
+  border-color: var(--a35);
+}
+
+.home-shelf-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.home-shelf-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(6, 9, 15, 0.82);
+  border: 1px solid var(--a35);
+  color: var(--accent);
+  font-family: 'Chakra Petch', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  line-height: 1.2;
+}
+
+.home-shelf-title {
+  width: 100%;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
 }
 
 .transport-circle-btn {
