@@ -749,6 +749,10 @@ button:active {
   right: 0;
   max-height: 330px;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   background: var(--bg-elevated);
   border: 1px solid var(--a35);
   border-radius: 14px;
@@ -762,6 +766,7 @@ button:active {
 
 .dropdown-item {
   min-height: 48px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1225,6 +1230,8 @@ button:active {
   overflow-y: hidden;
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
   scrollbar-width: none;
   padding-bottom: 2px;
 }
@@ -1567,6 +1574,10 @@ button:active {
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .section-kicker {
@@ -1613,13 +1624,20 @@ button:active {
 }
 
 .map-recents-list {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .place-row-btn {
   min-height: 48px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -2099,6 +2117,10 @@ button:active {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: 54px;
@@ -2175,12 +2197,17 @@ button:active {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   display: flex;
   flex-direction: column;
 }
 
 .recent-music-btn {
   min-height: 48px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2206,6 +2233,10 @@ button:active {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
@@ -2516,6 +2547,10 @@ button:active {
   color: var(--text-primary);
   max-height: 180px;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   white-space: pre-line;
 }
 
@@ -2671,6 +2706,10 @@ button:active {
   gap: 8px;
   max-height: 150px;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .copilot-transcript-line {
@@ -2958,6 +2997,11 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .settings-nav-header {
@@ -3007,6 +3051,10 @@ button:active {
   flex-direction: column;
   gap: 18px;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .settings-quick-aside {
@@ -3016,6 +3064,11 @@ button:active {
   flex-direction: column;
   gap: 20px;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .aside-card {
@@ -3049,6 +3102,7 @@ button:active {
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .settings-card-block {
@@ -3059,6 +3113,7 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  flex-shrink: 0;
 }
 
 .settings-dashed-box {
@@ -3068,6 +3123,7 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  flex-shrink: 0;
 }
 
 .form-grid-2 {
@@ -3361,7 +3417,8 @@ button:active {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 20px 24px;
+  overscroll-behavior: contain;
   animation: fadeBackdrop 0.18s ease-out;
 }
 
@@ -3376,7 +3433,8 @@ button:active {
 
 .detail-modal-card {
   width: min(1040px, 100%);
-  max-height: min(680px, calc(100vh - 48px));
+  max-height: min(680px, calc(100vh - 40px));
+  max-height: min(680px, calc(100dvh - 40px));
   background: rgba(12, 18, 28, 0.98);
   border: 1px solid var(--a35);
   border-radius: 26px;
@@ -3429,7 +3487,8 @@ button:active {
   grid-template-columns: 1.05fr 1fr;
   gap: 22px;
   min-height: 0;
-  flex: 1;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 
 .cal-month-pane,
@@ -3442,6 +3501,18 @@ button:active {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+}
+
+.cal-month-pane {
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.cal-agenda-pane {
+  overflow: hidden;
 }
 
 .cal-month-nav {
@@ -3602,15 +3673,21 @@ button:active {
 }
 
 .cal-events-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-right: 4px;
-  flex: 1;
+  padding-right: 6px;
 }
 
 .cal-holiday-banner {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3634,6 +3711,7 @@ button:active {
 }
 
 .cal-ev-item {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -3723,14 +3801,24 @@ button:active {
 
 /* --- Clima Detalhado --- */
 .wx-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  /* Permite pan-y no cartão e pan-x na faixa interna de 24h (Chromium interseciona touch-action dos ancestrais) */
+  touch-action: pan-x pan-y;
   display: flex;
   flex-direction: column;
   gap: 18px;
-  padding-right: 4px;
+  padding-right: 6px;
+  padding-bottom: 6px;
 }
 
 .wx-now-section {
+  flex-shrink: 0;
+  touch-action: pan-y;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3806,6 +3894,7 @@ button:active {
 }
 
 .wx-section {
+  flex-shrink: 0;
   background: rgba(17, 26, 39, 0.72);
   border: 1px solid var(--border-subtle);
   border-radius: 20px;
@@ -3826,7 +3915,11 @@ button:active {
   display: flex;
   gap: 10px;
   overflow-x: auto;
-  padding-bottom: 4px;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x;
+  padding-bottom: 6px;
 }
 
 .wx-hour-item {
@@ -3840,6 +3933,7 @@ button:active {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  touch-action: pan-x;
 }
 
 .wx-hour-time {
@@ -3871,6 +3965,7 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  touch-action: pan-y;
 }
 
 .wx-day-row {

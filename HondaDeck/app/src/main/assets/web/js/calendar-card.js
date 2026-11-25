@@ -1,7 +1,7 @@
 // Cartão grande de Calendário: visão de Mês + lista de Dia/Semana + feriados do Brasil + rota
 
 import { sendCommand } from './bridge.js';
-import { el, setText, setHidden } from './util.js';
+import { el, jsonSig } from './util.js';
 
 const MESES_COMPLETOS = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -23,6 +23,9 @@ let selectedIso = '';
 let listScope = 'day'; // 'day' | 'week'
 let isOpen = false;
 let swipeStartX = null;
+let swipeStartY = null;
+let lastRenderedSig = '';
+let lastViewKey = '';
 
 function toIsoDate(date) {
   const y = date.getFullYear();
@@ -132,14 +135,24 @@ function renderMonthGrid() {
 
   const grid = el('div', {
     className: 'cal-days-grid',
-    onPointerdown: (e) => { swipeStartX = e.clientX; },
-    onPointerup: (e) => {
-      if (swipeStartX === null) return;
-      const dx = e.clientX - swipeStartX;
-      swipeStartX = null;
-      if (Math.abs(dx) >= 48) shiftMonth(dx < 0 ? 1 : -1);
+    onPointerdown: (e) => {
+      swipeStartX = e.clientX;
+      swipeStartY = e.clientY;
     },
-    onPointercancel: () => { swipeStartX = null; }
+    onPointerup: (e) => {
+      if (swipeStartX === null || swipeStartY === null) return;
+      const dx = e.clientX - swipeStartX;
+      const dy = e.clientY - swipeStartY;
+      swipeStartX = null;
+      swipeStartY = null;
+      if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+        shiftMonth(dx < 0 ? 1 : -1);
+      }
+    },
+    onPointercancel: () => {
+      swipeStartX = null;
+      swipeStartY = null;
+    }
   }, cells);
 
   return el('div', { className: 'cal-month-pane' },
@@ -304,9 +317,22 @@ function renderAgendaPane() {
   );
 }
 
-function render() {
+function render(force = false) {
   if (!cardEl || !isOpen) return;
   if (!selectedIso) selectedIso = todayIso();
+
+  const viewKey = `${viewYear}-${viewMonth}|${selectedIso}|${listScope}|${todayIso()}`;
+  const sig = `${viewKey}|${Boolean(latestCalendar.permissionGranted)}|${jsonSig(latestCalendar.events)}|${jsonSig(latestCalendar.holidays)}`;
+  if (!force && sig === lastRenderedSig && cardEl.childElementCount > 0) {
+    return;
+  }
+
+  const sameView = viewKey === lastViewKey;
+  const prevScroll = cardEl.querySelector('.cal-events-scroll');
+  const prevScrollTop = sameView && prevScroll ? prevScroll.scrollTop : 0;
+
+  lastRenderedSig = sig;
+  lastViewKey = viewKey;
 
   const header = el('div', { className: 'modal-card-header' },
     el('div', { className: 'modal-card-title-group' },
@@ -328,6 +354,10 @@ function render() {
   );
 
   cardEl.replaceChildren(header, body);
+  if (sameView && prevScrollTop > 0) {
+    const nextScroll = body.querySelector('.cal-events-scroll');
+    if (nextScroll) nextScroll.scrollTop = prevScrollTop;
+  }
 }
 
 export function initCalendarCard() {
@@ -343,6 +373,8 @@ export function initCalendarCard() {
 export function openCalendarCard() {
   if (!modalEl) return;
   isOpen = true;
+  lastRenderedSig = '';
+  lastViewKey = '';
   const iso = todayIso();
   const d = parseIsoDate(iso);
   viewYear = d.getFullYear();
@@ -350,13 +382,15 @@ export function openCalendarCard() {
   selectedIso = iso;
   modalEl.classList.remove('hidden');
   modalEl.classList.add('open');
-  render();
+  render(true);
   sendCommand('calendar.refresh');
 }
 
 export function closeCalendarCard() {
   if (!modalEl) return;
   isOpen = false;
+  lastRenderedSig = '';
+  lastViewKey = '';
   modalEl.classList.remove('open');
   modalEl.classList.add('hidden');
 }
@@ -364,5 +398,5 @@ export function closeCalendarCard() {
 export function updateCalendarCard(state, nowMs) {
   if (nowMs) currentNowMs = nowMs;
   if (state?.calendar) latestCalendar = state.calendar;
-  if (isOpen) render();
+  if (isOpen) render(false);
 }

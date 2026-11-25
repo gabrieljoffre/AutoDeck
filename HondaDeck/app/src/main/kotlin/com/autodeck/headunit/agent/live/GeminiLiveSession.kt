@@ -11,12 +11,12 @@ import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
+import android.os.Process
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -31,7 +31,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.math.sqrt
 
 enum class LiveSessionMode(val wireValue: String) {
     LIVE("live"),
@@ -71,12 +70,14 @@ interface GeminiLiveCallbacks {
 
 /**
  * Sessão de voz em tempo real com a Gemini Live API (WebSocket BidiGenerateContent):
- * - Captura PCM 16 kHz mono com VOICE_COMMUNICATION + AEC/NS (quando suportado pelo aparelho).
- * - Reprodução PCM 24 kHz mono via AudioTrack dedicado.
- * - Barge-in (interrupção imediata ao falar por cima ou ao receber `interrupted`).
- * - Foco de áudio com ducking (`AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`) que abaixa a música e restaura ao encerrar.
- * - Reconexão controlada, limite máximo de sessão e encerramento automático após 20 s de silêncio no modo Conversar.
- * - Modo "Peça ao Gemini" (one-shot): grava imediatamente, executa ação, responde e encerra sozinho.
+ * - Captura PCM 16 kHz mono com VOICE_COMMUNICATION + AEC/NS na mesma sessão de áudio.
+ * - Supressão de eco no envio: pausa o envio do microfone enquanto o modelo fala e por ~450 ms depois;
+ *   interrupção ocorre pelo botão manual ou por voz muito alta sustentada acima de limiar alto.
+ * - Reprodução PCM 24 kHz mono via thread dedicada de escrita + jitter buffer (~200 ms) + AudioTrack >= 4x mínimo,
+ *   sem nunca chamar stop/flush entre pedaços do mesmo turno.
+ * - Foco de áudio com ducking (`AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`) pedido uma única vez por turno
+ *   de fala e liberado somente após o drain do `turnComplete` (ou em `interrupted` real / fim da sessão).
+ * - Modo "Peça ao Gemini" (one-shot): grava imediatamente, executa ação, responde inteiro e encerra sozinho.
  */
 class GeminiLiveSession(
     private val appContext: Context,
@@ -95,7 +96,6 @@ class GeminiLiveSession(
     private val running = AtomicBoolean(false)
     private val stopped = AtomicBoolean(false)
     private val setupDone = AtomicBoolean(false)
-    private val modelSpeaking = AtomicBoolean(false)
     private val toolBusy = AtomicBoolean(false)
     private val turnDonePendingDrain = AtomicBoolean(false)
     private val sawAnyUserSpeech = AtomicBoolean(false)
@@ -106,8 +106,6 @@ class GeminiLiveSession(
     private val lastLevelEmitMs = AtomicLong(0L)
     private val reconnectCount = AtomicInteger(0)
     private val languageRetryDone = AtomicBoolean(false)
-    private val playbackGen = AtomicInteger(0)
-    private val queuedAudioChunks = AtomicInteger(0)
 
     @Volatile
     private var webSocket: WebSocket? = null
@@ -123,6 +121,8 @@ class GeminiLiveSession(
 
     @Volatile
     private var audioTrack: AudioTrack? = null
+
+    private val audioFocusLock = Any()
 
     @Volatile
     private var audioFocusRequest: AudioFocusRequest? = null
@@ -142,10 +142,52 @@ class GeminiLiveSession(
     private val recordedTurns = mutableListOf<CopilotMemoryTurn>()
 
     private var recordJob: Job? = null
-    private var playbackJob: Job? = null
+    private var playbackThread: Thread? = null
     private var watchdogJob: Job? = null
     private var reconnectJob: Job? = null
-    private var playbackChannel: Channel<Pair<Int, ByteArray>>? = null
+
+    private val playbackController: LiveAudioPlaybackController = LiveAudioPlaybackController(
+        listener = object : LiveAudioStateListener {
+            override fun onRequestAudioFocus() {
+                requestDuckingAudioFocus()
+            }
+
+            override fun onAbandonAudioFocus() {
+                abandonAudioFocus()
+            }
+
+            override fun onSpeakingStateChanged(speaking: Boolean, reason: String) {
+                Log.i(TAG, "Estado de fala do modelo -> speaking=$speaking (motivo=$reason)")
+                if (stopped.get()) return
+                if (speaking) {
+                    updateSnapshot(
+                        phase = LiveSessionPhase.SPEAKING,
+                        status = "Gemini respondendo…",
+                        force = true
+                    )
+                } else if (!toolBusy.get() && !turnDonePendingDrain.get()) {
+                    updateSnapshot(
+                        phase = LiveSessionPhase.LISTENING,
+                        level = 0f,
+                        status = if (mode == LiveSessionMode.ASK) "Ouvindo…" else "Ao vivo · pode falar.",
+                        force = true
+                    )
+                }
+            }
+
+            override fun onTurnFinished(wasInterrupted: Boolean) {
+                if (!wasInterrupted && mode == LiveSessionMode.ASK && turnDonePendingDrain.get() && !stopped.get()) {
+                    scope.launch(Dispatchers.IO) {
+                        // Pequena folga para o motorista terminar de ler o texto e o BT A2DP assentar
+                        delay(ASK_POST_REPLY_GRACE_MS)
+                        if (!stopped.get() && turnDonePendingDrain.get() && !playbackController.isModelSpeaking) {
+                            stop("Pronto.")
+                        }
+                    }
+                }
+            }
+        }
+    )
 
     fun isActive(): Boolean = running.get() && !stopped.get()
 
@@ -154,7 +196,7 @@ class GeminiLiveSession(
         stopped.set(false)
         lastActivityMs.set(System.currentTimeMillis())
 
-        requestDuckingAudioFocus()
+        Log.i(TAG, "Iniciando sessão Gemini Live (mode=${mode.wireValue}, model=$model)")
         updateSnapshot(
             phase = LiveSessionPhase.CONNECTING,
             status = if (mode == LiveSessionMode.ASK) "Conectando ao Gemini…" else "Iniciando conversa ao vivo…"
@@ -163,18 +205,29 @@ class GeminiLiveSession(
         startWatchdog()
     }
 
+    /**
+     * Interrompe manualmente a fala atual do modelo (ex.: botão de interromper), mantendo a sessão viva.
+     */
+    fun interruptPlayback(reason: String = "manual_button") {
+        if (stopped.get()) return
+        val dropped = playbackController.onInterrupted(System.currentTimeMillis(), reason)
+        turnDonePendingDrain.set(false)
+        lastActivityMs.set(System.currentTimeMillis())
+        Log.i(TAG, "Interrupção manual da fala ($reason); chunks descartados=$dropped")
+    }
+
     fun stop(reason: String = "Conversa encerrada.") {
         if (!stopped.compareAndSet(false, true)) return
         running.set(false)
         setupDone.set(false)
-        modelSpeaking.set(false)
+        turnDonePendingDrain.set(false)
         reconnectJob?.cancel()
         watchdogJob?.cancel()
         recordJob?.cancel()
-        playbackJob?.cancel()
 
-        runCatching { playbackChannel?.close() }
-        playbackChannel = null
+        playbackController.close()
+        playbackThread?.interrupt()
+        playbackThread = null
 
         runCatching { webSocket?.close(1000, "client_stop") }
         webSocket = null
@@ -186,6 +239,7 @@ class GeminiLiveSession(
         flushCurrentTurnLocked()
         val turnsSnapshot = synchronized(transcriptLock) { recordedTurns.toList() }
         val endedAt = System.currentTimeMillis()
+        Log.i(TAG, "Sessão Gemini Live encerrada (mode=${mode.wireValue}, turnos=${turnsSnapshot.size}, motivo=$reason)")
         updateSnapshot(phase = LiveSessionPhase.ENDED, level = 0f, status = reason, force = true)
         callbacks.onSessionEnded(
             mode = mode,
@@ -264,6 +318,7 @@ class GeminiLiveSession(
                 setupDone.set(true)
                 reconnectCount.set(0)
                 lastActivityMs.set(System.currentTimeMillis())
+                Log.i(TAG, "SetupComplete recebido; iniciando pipeline de áudio (captura 16 kHz + playback 24 kHz)")
                 startAudioPipelineIfNeeded()
                 updateSnapshot(
                     phase = LiveSessionPhase.LISTENING,
@@ -306,12 +361,13 @@ class GeminiLiveSession(
         val now = System.currentTimeMillis()
 
         if (sc.interrupted) {
-            clearPlaybackQueue()
-            modelSpeaking.set(false)
+            val dropped = playbackController.onInterrupted(now, "server_interrupted")
             turnDonePendingDrain.set(false)
             lastActivityMs.set(now)
+            Log.w(TAG, "Servidor enviou interrupted=true (chunks descartados=$dropped)")
             updateSnapshot(
                 phase = LiveSessionPhase.LISTENING,
+                level = 0f,
                 status = "Ouvindo você…",
                 force = true
             )
@@ -321,13 +377,13 @@ class GeminiLiveSession(
             sawAnyUserSpeech.set(true)
             lastActivityMs.set(now)
             synchronized(transcriptLock) {
-                if (currentModelBuf.isNotEmpty() && !modelSpeaking.get()) {
+                if (currentModelBuf.isNotEmpty() && !playbackController.isModelSpeaking) {
                     flushCurrentTurnLocked()
                 }
                 appendTranscriptChunk(currentUserBuf, sc.inputTranscription)
             }
             updateSnapshot(
-                phase = if (modelSpeaking.get()) LiveSessionPhase.SPEAKING else LiveSessionPhase.LISTENING,
+                phase = if (playbackController.isModelSpeaking) LiveSessionPhase.SPEAKING else LiveSessionPhase.LISTENING,
                 status = if (mode == LiveSessionMode.ASK) "Ouvindo…" else "Ouvindo você…",
                 force = true
             )
@@ -336,19 +392,8 @@ class GeminiLiveSession(
         if (sc.audioChunks.isNotEmpty()) {
             sawAnyModelOutput.set(true)
             lastActivityMs.set(now)
-            modelSpeaking.set(true)
-            val gen = playbackGen.get()
             for (chunk in sc.audioChunks) {
-                if (playbackChannel?.trySend(gen to chunk)?.isSuccess == true) {
-                    queuedAudioChunks.incrementAndGet()
-                }
-            }
-            if (currentPhase != LiveSessionPhase.SPEAKING) {
-                updateSnapshot(
-                    phase = LiveSessionPhase.SPEAKING,
-                    status = "Gemini respondendo…",
-                    force = true
-                )
+                playbackController.enqueueChunk(chunk)
             }
         }
 
@@ -360,7 +405,7 @@ class GeminiLiveSession(
                 appendTranscriptChunk(currentModelBuf, outText)
             }
             updateSnapshot(
-                phase = if (modelSpeaking.get()) LiveSessionPhase.SPEAKING else currentPhase,
+                phase = if (playbackController.isModelSpeaking) LiveSessionPhase.SPEAKING else currentPhase,
                 status = "Gemini respondendo…",
                 force = true
             )
@@ -368,21 +413,17 @@ class GeminiLiveSession(
 
         if (sc.turnComplete) {
             lastActivityMs.set(now)
+            Log.i(
+                TAG,
+                "turnComplete recebido (queuedChunks=${playbackController.queuedChunkCount}, state=${playbackController.state})"
+            )
             synchronized(transcriptLock) {
                 flushCurrentTurnLocked()
             }
             if (mode == LiveSessionMode.ASK && sawAnyModelOutput.get()) {
                 turnDonePendingDrain.set(true)
-                scope.launch(Dispatchers.IO) {
-                    waitPlaybackDrainAndCloseAsk()
-                }
-            } else if (!modelSpeaking.get()) {
-                updateSnapshot(
-                    phase = LiveSessionPhase.LISTENING,
-                    status = if (mode == LiveSessionMode.ASK) "Ouvindo…" else "Ao vivo · pode falar.",
-                    force = true
-                )
             }
+            playbackController.onTurnComplete(now)
         }
     }
 
@@ -424,18 +465,6 @@ class GeminiLiveSession(
         }
     }
 
-    private suspend fun waitPlaybackDrainAndCloseAsk() {
-        val waitStart = System.currentTimeMillis()
-        while (!stopped.get() && modelSpeaking.get() && (System.currentTimeMillis() - waitStart) < 15_000L) {
-            delay(120L)
-        }
-        // Pequena folga para o áudio terminar de tocar no Bluetooth A2DP e o motorista ler o texto
-        delay(ASK_POST_REPLY_GRACE_MS)
-        if (!stopped.get() && turnDonePendingDrain.get()) {
-            stop("Pronto.")
-        }
-    }
-
     private fun handleConnectionFailure(httpCode: Int?, reason: String) {
         if (stopped.get()) return
         if (GeminiLiveProtocol.isRateLimitOrQuotaError(httpCode, reason) || httpCode == 401 || httpCode == 403) {
@@ -468,7 +497,7 @@ class GeminiLiveSession(
             return
         }
         setupDone.set(false)
-        clearPlaybackQueue()
+        playbackController.onInterrupted(System.currentTimeMillis(), "reconnect")
         runCatching { webSocket?.cancel() }
         webSocket = null
         updateSnapshot(phase = LiveSessionPhase.CONNECTING, level = 0f, status = statusMsg, force = true)
@@ -485,13 +514,13 @@ class GeminiLiveSession(
         if (!stopped.compareAndSet(false, true)) return
         running.set(false)
         setupDone.set(false)
-        modelSpeaking.set(false)
+        turnDonePendingDrain.set(false)
         reconnectJob?.cancel()
         watchdogJob?.cancel()
         recordJob?.cancel()
-        playbackJob?.cancel()
-        runCatching { playbackChannel?.close() }
-        playbackChannel = null
+        playbackController.close()
+        playbackThread?.interrupt()
+        playbackThread = null
         runCatching { webSocket?.cancel() }
         webSocket = null
         releaseAudioInput()
@@ -504,7 +533,7 @@ class GeminiLiveSession(
         if (recordJob?.isActive != true) {
             startAudioCapture()
         }
-        if (playbackJob?.isActive != true) {
+        if (playbackThread?.isAlive != true) {
             startAudioPlayback()
         }
     }
@@ -536,22 +565,29 @@ class GeminiLiveSession(
         audioRecord = record
 
         val sessionId = record.audioSessionId
-        if (AcousticEchoCanceler.isAvailable()) {
+        val aecAvailable = AcousticEchoCanceler.isAvailable()
+        if (aecAvailable) {
             echoCanceler = runCatching {
                 AcousticEchoCanceler.create(sessionId)?.apply { enabled = true }
             }.getOrNull()
         }
-        if (NoiseSuppressor.isAvailable()) {
+        val nsAvailable = NoiseSuppressor.isAvailable()
+        if (nsAvailable) {
             noiseSuppressor = runCatching {
                 NoiseSuppressor.create(sessionId)?.apply { enabled = true }
             }.getOrNull()
         }
+        Log.i(
+            TAG,
+            "AudioRecord VOICE_COMMUNICATION iniciado (rate=$sampleRate, minBuf=$minBuf, sessionId=$sessionId, " +
+                "AEC=${echoCanceler?.enabled == true}/avail=$aecAvailable, NS=${noiseSuppressor?.enabled == true}/avail=$nsAvailable)"
+        )
 
         recordJob = scope.launch(Dispatchers.IO) {
             try {
                 record.startRecording()
                 val pcmBuffer = ByteArray(INPUT_CHUNK_BYTES)
-                var loudBargeInFrames = 0
+                var echoGateLogged = false
 
                 while (isActive && !stopped.get()) {
                     val read = record.read(pcmBuffer, 0, pcmBuffer.size)
@@ -560,39 +596,49 @@ class GeminiLiveSession(
                         continue
                     }
                     val slice = if (read == pcmBuffer.size) pcmBuffer.copyOf() else pcmBuffer.copyOf(read)
-                    val level = computePcm16Level(slice)
+                    val now = System.currentTimeMillis()
 
-                    if (level >= SPEECH_VAD_THRESHOLD) {
-                        sawAnyUserSpeech.set(true)
-                        lastActivityMs.set(System.currentTimeMillis())
-                    }
-
-                    // Barge-in local: se o motorista falar alto por cima da resposta, corta a reprodução na hora
-                    if (modelSpeaking.get() && level >= BARGE_IN_LEVEL_THRESHOLD) {
-                        loudBargeInFrames++
-                        if (loudBargeInFrames >= BARGE_IN_CONSECUTIVE_FRAMES) {
-                            loudBargeInFrames = 0
-                            clearPlaybackQueue()
-                            modelSpeaking.set(false)
-                            turnDonePendingDrain.set(false)
-                            updateSnapshot(
-                                phase = LiveSessionPhase.LISTENING,
-                                level = level,
-                                status = "Ouvindo você…",
-                                force = true
-                            )
+                    when (val decision = playbackController.evaluateMicFrame(slice, now)) {
+                        is MicFrameDecision.SuppressEcho -> {
+                            if (!echoGateLogged) {
+                                echoGateLogged = true
+                                Log.d(TAG, "Microfone pausado no envio para evitar eco (motivo=${decision.reason})")
+                            }
+                            // Não envia áudio do microfone enquanto o modelo fala + hangover (~450 ms)
                         }
-                    } else {
-                        loudBargeInFrames = 0
-                    }
 
-                    if (!modelSpeaking.get()) {
-                        emitAudioLevel(level)
-                    }
+                        is MicFrameDecision.LocalBargeIn -> {
+                            echoGateLogged = false
+                            val dropped = playbackController.onInterrupted(now, "local_loud_barge_in")
+                            turnDonePendingDrain.set(false)
+                            sawAnyUserSpeech.set(true)
+                            lastActivityMs.set(now)
+                            Log.i(
+                                TAG,
+                                "Barge-in por voz alta (rms=${"%.3f".format(decision.rms)}); chunks descartados=$dropped"
+                            )
+                            emitAudioLevel(decision.visualLevel)
+                            if (setupDone.get()) {
+                                val msg = GeminiLiveProtocol.buildRealtimeAudioMessage(slice, sampleRate).toString()
+                                webSocket?.send(msg)
+                            }
+                        }
 
-                    if (setupDone.get()) {
-                        val msg = GeminiLiveProtocol.buildRealtimeAudioMessage(slice, sampleRate).toString()
-                        webSocket?.send(msg)
+                        is MicFrameDecision.SendMic -> {
+                            if (echoGateLogged) {
+                                echoGateLogged = false
+                                Log.d(TAG, "Envio do microfone reaberto após fim da fala + hangover")
+                            }
+                            if (decision.speechDetected) {
+                                sawAnyUserSpeech.set(true)
+                                lastActivityMs.set(now)
+                            }
+                            emitAudioLevel(decision.visualLevel)
+                            if (setupDone.get()) {
+                                val msg = GeminiLiveProtocol.buildRealtimeAudioMessage(slice, sampleRate).toString()
+                                webSocket?.send(msg)
+                            }
+                        }
                     }
                 }
             } catch (_: CancellationException) {
@@ -607,11 +653,12 @@ class GeminiLiveSession(
 
     private fun startAudioPlayback() {
         val sampleRate = GeminiLiveProtocol.OUTPUT_SAMPLE_RATE_HZ
-        val minBuf = AudioTrack.getMinBufferSize(
+        val sysMinBuf = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(OUTPUT_MIN_BUFFER_BYTES)
+        )
+        val bufferSize = LiveAudioPlaybackController.computeAudioTrackBufferSize(sysMinBuf)
 
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_ASSISTANT)
@@ -627,78 +674,166 @@ class GeminiLiveSession(
             AudioTrack.Builder()
                 .setAudioAttributes(attrs)
                 .setAudioFormat(format)
-                .setBufferSizeInBytes(minBuf)
+                .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
         }.getOrNull()
 
         if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {
             runCatching { track?.release() }
-            Log.w(TAG, "AudioTrack 24 kHz não inicializado.")
+            Log.w(TAG, "AudioTrack 24 kHz não inicializado (sysMinBuf=$sysMinBuf, bufferSize=$bufferSize).")
             return
         }
         audioTrack = track
-        runCatching { track.play() }
+        Log.i(
+            TAG,
+            "AudioTrack 24 kHz criado (sysMinBuf=$sysMinBuf, bufferSize=$bufferSize >= 4x, " +
+                "jitterTarget=${LiveAudioPlaybackController.DEFAULT_JITTER_BUFFER_BYTES}B / ~200ms)"
+        )
 
-        val ch = Channel<Pair<Int, ByteArray>>(capacity = Channel.UNLIMITED)
-        playbackChannel = ch
+        val worker = Thread({
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
+            runPlaybackLoop(track, bufferSize)
+        }, "GeminiLiveAudioOut").apply {
+            isDaemon = true
+            start()
+        }
+        playbackThread = worker
+    }
 
-        playbackJob = scope.launch(Dispatchers.IO) {
-            try {
-                for ((gen, pcm) in ch) {
-                    val remaining = queuedAudioChunks.decrementAndGet().coerceAtLeast(0)
-                    if (stopped.get()) break
-                    if (gen != playbackGen.get()) continue
-                    modelSpeaking.set(true)
-                    lastActivityMs.set(System.currentTimeMillis())
-                    val outLevel = computePcm16Level(pcm)
-                    emitAudioLevel(outLevel)
-                    runCatching {
-                        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                            track.play()
+    private fun runPlaybackLoop(track: AudioTrack, bufferSizeBytes: Int) {
+        var writtenFramesInTurn = 0L
+        var turnStartHeadFrames = readPlaybackHeadFrames(track)
+        var turnHasStarted = false
+
+        try {
+            while (!stopped.get()) {
+                val action = playbackController.takeNextAction()
+                when (action) {
+                    PlaybackAction.Shutdown -> break
+
+                    is PlaybackAction.Flush -> {
+                        Log.i(TAG, "AudioTrack flush (motivo=${action.reason}, gen=${action.generation})")
+                        runCatching {
+                            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                                track.pause()
+                                track.flush()
+                            }
                         }
-                        track.write(pcm, 0, pcm.size)
+                        writtenFramesInTurn = 0L
+                        turnHasStarted = false
+                        turnStartHeadFrames = readPlaybackHeadFrames(track)
                     }
-                    if (remaining == 0 && gen == playbackGen.get()) {
-                        modelSpeaking.set(false)
-                        if (!stopped.get() && !toolBusy.get() && !turnDonePendingDrain.get()) {
-                            updateSnapshot(
-                                phase = LiveSessionPhase.LISTENING,
-                                level = 0f,
-                                status = if (mode == LiveSessionMode.ASK) "Ouvindo…" else "Ao vivo · pode falar.",
-                                force = true
-                            )
+
+                    is PlaybackAction.WriteChunk -> {
+                        if (action.generation != playbackController.generation) continue
+                        lastActivityMs.set(System.currentTimeMillis())
+
+                        if (action.startPlayback || !turnHasStarted) {
+                            turnHasStarted = true
+                            writtenFramesInTurn = 0L
+                            turnStartHeadFrames = readPlaybackHeadFrames(track)
+                            runCatching {
+                                if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                    track.play()
+                                }
+                            }
+                            Log.d(TAG, "AudioTrack iniciou reprodução contínua do turno (gen=${action.generation})")
+                        }
+
+                        val outLevel = LiveAudioPlaybackController.rmsToVisualLevel(
+                            LiveAudioPlaybackController.computePcm16Rms(action.pcm)
+                        )
+                        emitAudioLevel(outLevel)
+
+                        val writtenBytes = writeAllBlocking(track, action.pcm, action.generation)
+                        if (writtenBytes > 0) {
+                            writtenFramesInTurn += writtenBytes / LiveAudioPlaybackController.BYTES_PER_SAMPLE
+                        }
+                    }
+
+                    is PlaybackAction.DrainTurn -> {
+                        // Aguarda o hardware tocar todos os frames já escritos no buffer sem dar flush/stop
+                        waitForHardwareDrain(
+                            track = track,
+                            generation = action.generation,
+                            turnStartHeadFrames = turnStartHeadFrames,
+                            writtenFramesInTurn = writtenFramesInTurn,
+                            maxDrainMs = ((bufferSizeBytes / LiveAudioPlaybackController.BYTES_PER_MS_24KHZ) + 400L)
+                                .coerceIn(400L, 2_000L)
+                        )
+                        val completed = playbackController.completeTurnDrain(
+                            generation = action.generation,
+                            nowMs = System.currentTimeMillis()
+                        )
+                        if (completed) {
+                            // Pausa suavemente após o hardware drenar tudo (sem flush), pronto para pré-buffer do próximo turno
+                            runCatching {
+                                if (track.state == AudioTrack.STATE_INITIALIZED &&
+                                    track.playState == AudioTrack.PLAYSTATE_PLAYING
+                                ) {
+                                    track.pause()
+                                }
+                            }
+                            writtenFramesInTurn = 0L
+                            turnHasStarted = false
+                            turnStartHeadFrames = readPlaybackHeadFrames(track)
+                            Log.d(TAG, "AudioTrack drenou turno completamente (gen=${action.generation})")
                         }
                     }
                 }
-            } catch (_: CancellationException) {
-                // encerramento normal
-            } finally {
-                modelSpeaking.set(false)
-                releaseAudioOutput()
             }
+        } catch (_: InterruptedException) {
+            // encerramento normal
+        } catch (e: Exception) {
+            Log.w(TAG, "Erro na thread de reprodução Live: ${e.message}")
+        } finally {
+            releaseAudioOutput()
         }
     }
 
-    private fun clearPlaybackQueue() {
-        playbackGen.incrementAndGet()
-        val ch = playbackChannel
-        if (ch != null) {
-            while (ch.tryReceive().isSuccess) {
-                // descarta áudio enfileirado anterior ao barge-in
-            }
+    private fun writeAllBlocking(track: AudioTrack, pcm: ByteArray, expectedGen: Int): Int {
+        var offset = 0
+        while (offset < pcm.size && !stopped.get() && expectedGen == playbackController.generation) {
+            val wrote = runCatching {
+                track.write(pcm, offset, pcm.size - offset, AudioTrack.WRITE_BLOCKING)
+            }.getOrDefault(-1)
+            if (wrote <= 0) break
+            offset += wrote
         }
-        queuedAudioChunks.set(0)
-        runCatching {
-            audioTrack?.let { t ->
-                if (t.state == AudioTrack.STATE_INITIALIZED) {
-                    t.pause()
-                    t.flush()
-                    t.play()
-                }
-            }
+        return offset
+    }
+
+    private fun waitForHardwareDrain(
+        track: AudioTrack,
+        generation: Int,
+        turnStartHeadFrames: Long,
+        writtenFramesInTurn: Long,
+        maxDrainMs: Long
+    ) {
+        if (writtenFramesInTurn <= 0L) return
+        val targetHead = turnStartHeadFrames + writtenFramesInTurn
+        val deadline = System.currentTimeMillis() + maxDrainMs
+
+        while (!playbackController.shouldAbortDrain(generation)) {
+            val now = System.currentTimeMillis()
+            if (now >= deadline) break
+            val head = readPlaybackHeadFrames(track)
+            if (head >= targetHead) break
+            val remainingFrames = (targetHead - head).coerceAtLeast(0L)
+            val remainingMs = (remainingFrames * 1000L) / GeminiLiveProtocol.OUTPUT_SAMPLE_RATE_HZ
+            val sleepMs = remainingMs.coerceIn(15L, 40L)
+            Thread.sleep(sleepMs)
         }
     }
+
+    private fun readPlaybackHeadFrames(track: AudioTrack): Long = runCatching {
+        if (track.state == AudioTrack.STATE_INITIALIZED) {
+            track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+        } else {
+            0L
+        }
+    }.getOrDefault(0L)
 
     private fun startWatchdog() {
         watchdogJob?.cancel()
@@ -724,7 +859,7 @@ class GeminiLiveSession(
                     return@launch
                 }
 
-                if (setupDone.get() && !modelSpeaking.get() && !toolBusy.get()) {
+                if (setupDone.get() && !playbackController.isModelSpeaking && !toolBusy.get()) {
                     if (mode == LiveSessionMode.LIVE && idleMs >= LIVE_SILENCE_TIMEOUT_MS) {
                         stop("Conversa encerrada após 20 s de silêncio.")
                         return@launch
@@ -744,27 +879,39 @@ class GeminiLiveSession(
 
     private fun requestDuckingAudioFocus() {
         val mgr = audioManager ?: return
-        if (audioFocusRequest != null) return
-        val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANT)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-            .build()
-        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-            .setAudioAttributes(attrs)
-            .setWillPauseWhenDucked(false)
-            .build()
-        runCatching {
-            if (mgr.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                audioFocusRequest = req
+        synchronized(audioFocusLock) {
+            if (audioFocusRequest != null) return
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(attrs)
+                .setWillPauseWhenDucked(false)
+                .build()
+            runCatching {
+                val res = mgr.requestAudioFocus(req)
+                if (res == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                    audioFocusRequest = req
+                    Log.i(TAG, "Foco de áudio adquirido para o turno (AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)")
+                } else {
+                    Log.w(TAG, "Pedido de foco de áudio retornou $res")
+                }
             }
         }
     }
 
     private fun abandonAudioFocus() {
         val mgr = audioManager ?: return
-        val req = audioFocusRequest ?: return
-        audioFocusRequest = null
-        runCatching { mgr.abandonAudioFocusRequest(req) }
+        val req = synchronized(audioFocusLock) {
+            val r = audioFocusRequest
+            audioFocusRequest = null
+            r
+        } ?: return
+        runCatching {
+            mgr.abandonAudioFocusRequest(req)
+            Log.i(TAG, "Foco de áudio liberado ao fim do turno")
+        }
     }
 
     private fun releaseAudioInput() {
@@ -782,17 +929,17 @@ class GeminiLiveSession(
     }
 
     private fun releaseAudioOutput() {
-        runCatching {
-            audioTrack?.let { t ->
-                if (t.state == AudioTrack.STATE_INITIALIZED) {
-                    t.pause()
-                    t.flush()
-                    t.stop()
-                }
-                t.release()
-            }
-        }
+        val t = audioTrack
         audioTrack = null
+        if (t == null) return
+        runCatching {
+            if (t.state == AudioTrack.STATE_INITIALIZED) {
+                t.pause()
+                t.flush()
+                t.stop()
+            }
+            t.release()
+        }
     }
 
     private fun emitAudioLevel(level: Float) {
@@ -860,21 +1007,16 @@ class GeminiLiveSession(
 
         /** ~80 ms a 16 kHz mono 16-bit (1280 samples = 2560 bytes). */
         private const val INPUT_CHUNK_BYTES = 2560
-        private const val OUTPUT_MIN_BUFFER_BYTES = 9600
 
         private const val LEVEL_EMIT_INTERVAL_MS = 65L
         private const val SETUP_TIMEOUT_MS = 10_000L
         const val LIVE_SILENCE_TIMEOUT_MS = 20_000L
         private const val ASK_NO_SPEECH_TIMEOUT_MS = 12_000L
         private const val ASK_IDLE_AFTER_SPEECH_MS = 15_000L
-        private const val ASK_POST_REPLY_GRACE_MS = 900L
+        private const val ASK_POST_REPLY_GRACE_MS = 700L
         private const val MAX_LIVE_SESSION_DURATION_MS = 14 * 60_000L
         private const val MAX_ONESHOT_DURATION_MS = 60_000L
         private const val MAX_RECONNECT_ATTEMPTS = 2
-
-        private const val SPEECH_VAD_THRESHOLD = 0.09f
-        private const val BARGE_IN_LEVEL_THRESHOLD = 0.24f
-        private const val BARGE_IN_CONSECUTIVE_FRAMES = 3
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -882,23 +1024,8 @@ class GeminiLiveSession(
             .pingInterval(20, TimeUnit.SECONDS)
             .build()
 
-        internal fun computePcm16Level(pcm: ByteArray): Float {
-            if (pcm.size < 2) return 0f
-            val samples = pcm.size / 2
-            var sumSq = 0.0
-            var i = 0
-            while (i + 1 < pcm.size) {
-                val lo = pcm[i].toInt() and 0xFF
-                val hi = pcm[i + 1].toInt()
-                val s = (hi shl 8) or lo
-                val norm = s / 32768.0
-                sumSq += norm * norm
-                i += 2
-            }
-            val rms = sqrt(sumSq / samples)
-            // Ganho suave para deixar a onda visualmente expressiva na faixa de voz normal
-            return (rms * 3.8).toFloat().coerceIn(0f, 1f)
-        }
+        internal fun computePcm16Level(pcm: ByteArray): Float =
+            LiveAudioPlaybackController.rmsToVisualLevel(LiveAudioPlaybackController.computePcm16Rms(pcm))
 
         internal fun appendTranscriptChunk(target: StringBuilder, chunk: String) {
             val clean = chunk.trim()

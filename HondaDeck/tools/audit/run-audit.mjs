@@ -52,6 +52,10 @@ export const VALID_BRIDGE_CMDS = new Set([
   'copilot.listen',
   'copilot.cancel',
   'copilot.ask',
+  'copilot.live.start',
+  'copilot.live.stop',
+  'copilot.ask.voice',
+  'copilot.clearMemory',
   'notif.read',
   'notif.dismiss',
   'obd.connect',
@@ -66,6 +70,8 @@ export const VALID_BRIDGE_CMDS = new Set([
   'settings.set',
   'system.downloadOfflineMap',
   'camera.toggle',
+  'calendar.refresh',
+  'calendar.requestPermission',
 ]);
 
 const VALID_ACTIONS = new Set(['click', 'type', 'eval', 'wait', 'screenshot', 'send']);

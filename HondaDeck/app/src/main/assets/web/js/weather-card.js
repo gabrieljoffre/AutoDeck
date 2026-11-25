@@ -1,11 +1,12 @@
 // Cartão grande de Clima detalhado: Agora + Próximas 24h + 7 Dias
 
-import { el, createWeatherSvg, fmtNum } from './util.js';
+import { el, createWeatherSvg, fmtNum, jsonSig } from './util.js';
 
 let modalEl = null;
 let cardEl = null;
 let latestWeather = null;
 let isOpen = false;
+let lastRenderedSig = '';
 
 function metricBox(label, value, sub = '') {
   return el('div', { className: 'wx-metric-box' },
@@ -123,9 +124,21 @@ function renderDailySection(w) {
   );
 }
 
-function render() {
+function render(force = false) {
   if (!cardEl || !isOpen) return;
   const w = latestWeather || {};
+  const sig = jsonSig(w);
+  if (!force && sig === lastRenderedSig && cardEl.childElementCount > 0) {
+    return;
+  }
+  lastRenderedSig = sig;
+
+  // Preserva posição de rolagem caso o clima atualize enquanto o motorista lê o cartão
+  const prevBody = cardEl.querySelector('.wx-modal-body');
+  const prevScrollTop = prevBody ? prevBody.scrollTop : 0;
+  const prevStrip = cardEl.querySelector('.wx-hourly-strip');
+  const prevScrollLeft = prevStrip ? prevStrip.scrollLeft : 0;
+
   const city = w.city || 'Anápolis';
 
   const header = el('div', { className: 'modal-card-header' },
@@ -142,13 +155,20 @@ function render() {
     }, '✕')
   );
 
-  const body = el('div', { className: 'wx-modal-body' },
+  const body = el('div', { className: 'wx-modal-body', dataset: { test: 'weather-scroll' } },
     renderNowSection(w),
     renderHourlySection(w),
     renderDailySection(w)
   );
 
   cardEl.replaceChildren(header, body);
+  if (!force && prevScrollTop > 0) {
+    body.scrollTop = prevScrollTop;
+  }
+  if (!force && prevScrollLeft > 0) {
+    const nextStrip = body.querySelector('.wx-hourly-strip');
+    if (nextStrip) nextStrip.scrollLeft = prevScrollLeft;
+  }
 }
 
 export function initWeatherCard() {
@@ -164,19 +184,21 @@ export function initWeatherCard() {
 export function openWeatherCard() {
   if (!modalEl) return;
   isOpen = true;
+  lastRenderedSig = '';
   modalEl.classList.remove('hidden');
   modalEl.classList.add('open');
-  render();
+  render(true);
 }
 
 export function closeWeatherCard() {
   if (!modalEl) return;
   isOpen = false;
+  lastRenderedSig = '';
   modalEl.classList.remove('open');
   modalEl.classList.add('hidden');
 }
 
 export function updateWeatherCard(weather) {
   latestWeather = weather || null;
-  if (isOpen) render();
+  if (isOpen) render(false);
 }

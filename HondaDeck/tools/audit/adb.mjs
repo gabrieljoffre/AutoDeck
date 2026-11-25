@@ -281,21 +281,33 @@ export async function checkScreenLock(opts = {}) {
   const isKeyguardShowing = /\bisKeyguardShowing\s*=\s*true\b/i.test(stdout);
   const mDreamingLockscreen = /\bmDreamingLockscreen\s*=\s*true\b/i.test(stdout);
   const mShowingLockscreen = /\bmShowingLockscreen\s*=\s*true\b/i.test(stdout);
+  const occluded = /\bmKeyguardOccluded\s*=\s*true\b/i.test(stdout) || /\boccluded\s*=\s*true\b/i.test(stdout);
+  const mainFocused = /mCurrentFocus=Window\{[^\r\n]*com\.autodeck\.hondadeck/i.test(stdout);
+  const notificationShadeOnScreen = /Window\{[^\r\n]*NotificationShade\}[\s\S]{0,220}isOnScreen=true/i.test(stdout);
   const awakeFalse = /\bmAwake\s*=\s*false\b/i.test(stdout);
 
   const rawMatches = [];
   for (const line of stdout.split(/\r?\n/)) {
-    if (/(isKeyguardShowing|mDreamingLockscreen|mShowingLockscreen|mAwake=)/i.test(line)) {
+    if (/(isKeyguardShowing|mDreamingLockscreen|mShowingLockscreen|mKeyguardOccluded|mCurrentFocus=|mAwake=)/i.test(line)) {
       rawMatches.push(line.trim());
-      if (rawMatches.length >= 10) break;
+      if (rawMatches.length >= 12) break;
     }
   }
 
-  const locked = Boolean(isKeyguardShowing || mDreamingLockscreen || mShowingLockscreen);
+  // MainActivity usa showWhenLocked=true; quando o keyguard está ocluído por ela e não há dream/shade, a UI está acessível.
+  const occludedByApp = occluded && mainFocused && !notificationShadeOnScreen;
+  const locked = Boolean(
+    mDreamingLockscreen ||
+    mShowingLockscreen ||
+    (isKeyguardShowing && !occludedByApp) ||
+    notificationShadeOnScreen
+  );
   return {
     locked,
     isKeyguardShowing,
     mDreamingLockscreen,
+    occluded,
+    mainFocused,
     awake: !awakeFalse,
     rawMatches,
   };

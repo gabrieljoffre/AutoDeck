@@ -112,25 +112,39 @@ class PlaceSearch(
             }
         }
 
-        // 2) Complemento via Nominatim se Photon falhou ou trouxe menos de 4 resultados úteis
+        // Se a consulta expandida (ex.: "posto de combustível") não trouxe resultados próximos (<=25 km),
+        // busca também o termo original ("posto") no Photon para encontrar nomes reais locais (Posto Shell/BR/Alé).
+        if (!alreadyGotNominatimArray && effectiveQuery != raw && photonResults.count { it.distanceKm <= 25.0 } < 3) {
+            val rawPhotonUrl = buildPhotonUrl(raw, originLat, originLon)
+            val rawPhotonBody = runCatching { httpFetcher(rawPhotonUrl) }.getOrNull()
+            if (!rawPhotonBody.isNullOrBlank()) {
+                val rawParsed = runCatching {
+                    parsePhotonResults(rawPhotonBody.trimStart(), originLat, originLon)
+                }.getOrDefault(emptyList())
+                if (rawParsed.isNotEmpty()) {
+                    photonResults = deduplicateAndSort(rawParsed + photonResults)
+                }
+            }
+        }
+
+        // 2) Complemento via Nominatim se Photon falhou ou trouxe poucos resultados próximos (<=25 km)
         var remote = photonResults
-        if (!alreadyGotNominatimArray && photonResults.size < 4) {
-            val nomUrl = buildUrl(effectiveQuery, originLat, originLon)
-            val nomBody = runCatching { fetchNominatimRateLimited(nomUrl) }.getOrNull()
-            var nomParsed = if (!nomBody.isNullOrBlank()) {
-                runCatching { parseResults(nomBody, originLat, originLon) }.getOrDefault(emptyList())
+        val nearbyCount = photonResults.count { it.distanceKm <= 25.0 }
+        if (!alreadyGotNominatimArray && (photonResults.size < 4 || nearbyCount < 3)) {
+            val nearUrl = buildUrl(raw, originLat, originLon, radiusDeg = 0.20, bounded = true)
+            val nearBody = runCatching { fetchNominatimRateLimited(nearUrl) }.getOrNull()
+            var nomParsed = if (!nearBody.isNullOrBlank()) {
+                runCatching { parseResults(nearBody, originLat, originLon) }.getOrDefault(emptyList())
             } else {
                 emptyList()
             }
 
-            // Se atalho local ("posto"/"oficina") só retornou locais distantes (>25 km), tenta busca restrita perto
-            if (effectiveQuery != raw && (nomParsed.isEmpty() || nomParsed.first().distanceKm > 25.0)) {
-                val nearUrl = buildUrl(raw, originLat, originLon, radiusDeg = 0.15, bounded = true)
-                val nearParsed = runCatching {
-                    parseResults(fetchNominatimRateLimited(nearUrl), originLat, originLon)
-                }.getOrDefault(emptyList())
-                if (nearParsed.isNotEmpty()) {
-                    nomParsed = deduplicateAndSort(nearParsed + nomParsed)
+            if (nomParsed.size < 4) {
+                val nomUrl = buildUrl(effectiveQuery, originLat, originLon)
+                val nomBody = runCatching { fetchNominatimRateLimited(nomUrl) }.getOrNull()
+                if (!nomBody.isNullOrBlank()) {
+                    val broadParsed = runCatching { parseResults(nomBody, originLat, originLon) }.getOrDefault(emptyList())
+                    nomParsed = deduplicateAndSort(nomParsed + broadParsed)
                 }
             }
 

@@ -253,6 +253,10 @@ class GeminiCarAgent(
     private var fallbackOneShotAsk = false
     private var restartWakeJob: Job? = null
     private var liveSession: GeminiLiveSession? = null
+    @Volatile
+    private var liveSessionActive: Boolean = false
+
+    private fun isLiveBusy(): Boolean = liveSessionActive || liveSession?.isActive() == true
 
     init {
         scope.launch(mainDispatcher) {
@@ -285,10 +289,10 @@ class GeminiCarAgent(
                                 )
                             }
                             val cfg = host.getConfig()
-                            if (!wasAskOneShot && continuousSession && cfg.continuousConversationEnabled && isForeground) {
+                            if (!wasAskOneShot && continuousSession && cfg.continuousConversationEnabled && isForeground && !isLiveBusy()) {
                                 delay(280L)
                                 startDirectVoiceCommand(fromContinuous = true)
-                            } else if (cfg.wakeWordEnabled && isForeground && liveSession?.isActive() != true) {
+                            } else if (cfg.wakeWordEnabled && isForeground && !isLiveBusy()) {
                                 scheduleWakeWordRestart(400L)
                             }
                         }
@@ -315,9 +319,9 @@ class GeminiCarAgent(
     fun setAppForeground(inForeground: Boolean) {
         isForeground = inForeground
         val cfg = host.getConfig()
-        if (inForeground && cfg.wakeWordEnabled && cfg.voiceAssistantMode != VoiceAssistantMode.SYSTEM_ASSISTANT && liveSession?.isActive() != true) {
+        if (inForeground && cfg.wakeWordEnabled && cfg.voiceAssistantMode != VoiceAssistantMode.SYSTEM_ASSISTANT && !isLiveBusy()) {
             scheduleWakeWordRestart(700L)
-        } else if (!inForeground && !activeCommandMode && liveSession?.isActive() != true) {
+        } else if (!inForeground && !activeCommandMode && !isLiveBusy()) {
             stopRecognizerNow()
         }
     }
@@ -328,7 +332,7 @@ class GeminiCarAgent(
             isForeground &&
             config.voiceAssistantMode != VoiceAssistantMode.SYSTEM_ASSISTANT &&
             !activeCommandMode &&
-            liveSession?.isActive() != true
+            !isLiveBusy()
         ) {
             scheduleWakeWordRestart(500L)
         } else if (!config.wakeWordEnabled) {
@@ -367,6 +371,7 @@ class GeminiCarAgent(
     fun stopLiveConversation() {
         val active = liveSession
         liveSession = null
+        liveSessionActive = false
         if (active != null && active.isActive()) {
             active.stop("Conversa encerrada.")
         } else {
@@ -403,15 +408,12 @@ class GeminiCarAgent(
             liveSession = null
             if (prev.isActive()) prev.stop("Reiniciando sessão…")
         }
+        liveSessionActive = true
         restartWakeJob?.cancel()
         wakeLoopActive = false
         activeCommandMode = false
         continuousSession = false
         fallbackOneShotAsk = false
-        scope.launch(mainDispatcher) {
-            stopRecognizerNow()
-            runCatching { tts?.stop() }
-        }
 
         refreshConnectivityBadge()
         val canUseLive = cfg.voiceAssistantMode == VoiceAssistantMode.HYBRID_GEMINI &&
@@ -419,8 +421,29 @@ class GeminiCarAgent(
             cfg.geminiApiKey.isNotBlank()
 
         if (!canUseLive) {
+            liveSessionActive = false
+            scope.launch(mainDispatcher) {
+                stopRecognizerNow()
+                runCatching { tts?.stop() }
+            }
             startFallbackVoice(mode, "Usando modo local/texto…")
             return
+        }
+
+        Log.i("GeminiCarAgent", "Pausando wake word / SpeechRecognizer antes de iniciar sessão Live (${mode.wireValue})")
+        _state.update {
+            it.copy(
+                userText = "",
+                replyText = "",
+                isWakeWordListening = false,
+                copilotMode = mode.wireValue,
+                livePhase = "connecting",
+                statusText = if (mode == LiveSessionMode.LIVE) {
+                    "Iniciando conversa ao vivo…"
+                } else {
+                    "Ouvindo… pode falar."
+                }
+            )
         }
 
         val session = GeminiLiveSession(
@@ -467,6 +490,7 @@ class GeminiCarAgent(
                 override fun onFallbackRequired(reason: String, mode: LiveSessionMode) {
                     Log.w("GeminiCarAgent", "Gemini Live indisponível ($reason); alternando para fluxo texto/offline.")
                     liveSession = null
+                    liveSessionActive = false
                     startFallbackVoice(mode, "Gemini Live indisponível · usando fallback")
                 }
 
@@ -478,6 +502,7 @@ class GeminiCarAgent(
                     reason: String
                 ) {
                     liveSession = null
+                    liveSessionActive = false
                     if (turns.isNotEmpty()) {
                         memoryStore.recordSession(
                             mode = mode.wireValue,
@@ -512,8 +537,9 @@ class GeminiCarAgent(
                             statusText = reason
                         )
                     }
-                    if (host.getConfig().wakeWordEnabled && isForeground) {
-                        scheduleWakeWordRestart(600L)
+                    if (host.getConfig().wakeWordEnabled && isForeground && !isLiveBusy()) {
+                        Log.i("GeminiCarAgent", "Sessão Live encerrada; retomando wake word.")
+                        scheduleWakeWordRestart(800L)
                     }
                 }
             }
@@ -527,12 +553,20 @@ class GeminiCarAgent(
                 userText = "",
                 replyText = "",
                 isListening = true,
+                isWakeWordListening = false,
                 isThinking = false,
                 isSpeaking = false,
                 statusText = if (mode == LiveSessionMode.ASK) "Conectando ao Gemini…" else "Iniciando conversa ao vivo…"
             )
         }
-        session.start()
+        // Garante que o SpeechRecognizer/wake word seja destruído na Main Thread ANTES do AudioRecord Live abrir
+        scope.launch(mainDispatcher) {
+            stopRecognizerNow()
+            runCatching { tts?.stop() }
+            if (liveSession === session && liveSessionActive) {
+                session.start()
+            }
+        }
     }
 
     private fun startFallbackVoice(mode: LiveSessionMode, statusHint: String) {
@@ -574,8 +608,10 @@ class GeminiCarAgent(
     fun stopListening() {
         liveSession?.let { active ->
             liveSession = null
+            liveSessionActive = false
             if (active.isActive()) active.stop("Escuta pausada.")
         }
+        liveSessionActive = false
         continuousSession = false
         fallbackOneShotAsk = false
         activeCommandMode = false
@@ -659,10 +695,11 @@ class GeminiCarAgent(
 
     private fun scheduleWakeWordRestart(delayMs: Long) {
         restartWakeJob?.cancel()
+        if (isLiveBusy()) return
         restartWakeJob = scope.launch(mainDispatcher) {
             delay(delayMs)
             val cfg = host.getConfig()
-            if (!cfg.wakeWordEnabled || !isForeground || activeCommandMode || _state.value.isSpeaking || liveSession?.isActive() == true) return@launch
+            if (!cfg.wakeWordEnabled || !isForeground || activeCommandMode || _state.value.isSpeaking || isLiveBusy()) return@launch
             if (cfg.voiceAssistantMode == VoiceAssistantMode.SYSTEM_ASSISTANT) return@launch
             if (!hasAudioPermission() || !SpeechRecognizer.isRecognitionAvailable(appContext)) return@launch
 
@@ -694,6 +731,10 @@ class GeminiCarAgent(
     }
 
     private fun startRecognizerInternal(isWakeWordMode: Boolean) {
+        if (isLiveBusy()) {
+            stopRecognizerNow()
+            return
+        }
         stopRecognizerNow()
         val recognizer = SpeechRecognizer.createSpeechRecognizer(appContext)
         speechRecognizer = recognizer
@@ -702,7 +743,7 @@ class GeminiCarAgent(
             override fun onReadyForSpeech(params: Bundle?) = Unit
             override fun onBeginningOfSpeech() = Unit
             override fun onRmsChanged(rmsdB: Float) {
-                if (!isWakeWordMode) {
+                if (!isWakeWordMode && !isLiveBusy()) {
                     val norm = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
                     _state.update { it.copy(audioLevel = norm) }
                 }
@@ -712,6 +753,7 @@ class GeminiCarAgent(
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
 
             override fun onPartialResults(partialResults: Bundle?) {
+                if (isLiveBusy()) return
                 val text = partialResults
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
@@ -730,6 +772,7 @@ class GeminiCarAgent(
             }
 
             override fun onResults(results: Bundle?) {
+                if (isLiveBusy()) return
                 val spoken = results
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
@@ -748,7 +791,7 @@ class GeminiCarAgent(
                         } else {
                             startDirectVoiceCommand(fromContinuous = false)
                         }
-                    } else if (cfg.wakeWordEnabled && isForeground && !activeCommandMode) {
+                    } else if (cfg.wakeWordEnabled && isForeground && !activeCommandMode && !isLiveBusy()) {
                         scheduleWakeWordRestart(450L)
                     }
                     return
@@ -760,7 +803,7 @@ class GeminiCarAgent(
                     continuousSession = false
                     fallbackOneShotAsk = false
                     _state.update { it.copy(copilotMode = "idle", livePhase = "idle") }
-                    if (host.getConfig().wakeWordEnabled) scheduleWakeWordRestart(500L)
+                    if (host.getConfig().wakeWordEnabled && !isLiveBusy()) scheduleWakeWordRestart(500L)
                 } else if (isStopPhrase(spoken)) {
                     continuousSession = false
                     fallbackOneShotAsk = false
@@ -776,8 +819,9 @@ class GeminiCarAgent(
             }
 
             override fun onError(error: Int) {
+                if (isLiveBusy()) return
                 if (isWakeWordMode) {
-                    if (host.getConfig().wakeWordEnabled && isForeground && !activeCommandMode) {
+                    if (host.getConfig().wakeWordEnabled && isForeground && !activeCommandMode && !isLiveBusy()) {
                         val backoff = when (error) {
                             SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
                             SpeechRecognizer.ERROR_CLIENT -> 1_200L
@@ -807,7 +851,7 @@ class GeminiCarAgent(
                         }
                     )
                 }
-                if (host.getConfig().wakeWordEnabled && isForeground) {
+                if (host.getConfig().wakeWordEnabled && isForeground && !isLiveBusy()) {
                     scheduleWakeWordRestart(700L)
                 }
             }

@@ -252,8 +252,9 @@ object StateDto {
 
         val lastUserMsg = ui.agentState.messages.lastOrNull { it.isUser }
         val lastBotMsg = ui.agentState.messages.lastOrNull { !it.isUser }
-        val resolvedUserText = ui.agentState.userText.ifBlank { lastUserMsg?.text ?: "" }
-        val resolvedReplyText = ui.agentState.replyText.ifBlank { lastBotMsg?.text ?: "" }
+        val inVoiceSession = ui.agentState.copilotMode == "live" || ui.agentState.copilotMode == "ask"
+        val resolvedUserText = if (inVoiceSession) ui.agentState.userText else ui.agentState.userText.ifBlank { lastUserMsg?.text ?: "" }
+        val resolvedReplyText = if (inVoiceSession) ui.agentState.replyText else ui.agentState.replyText.ifBlank { lastBotMsg?.text ?: "" }
         val copilotObj = JSONObject().apply {
             put("listening", ui.agentState.isListening)
             put("thinking", ui.agentState.isThinking)

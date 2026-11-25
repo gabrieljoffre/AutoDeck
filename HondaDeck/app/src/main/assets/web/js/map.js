@@ -83,7 +83,7 @@ let lastMapState = null;
 let lastAccent = '#22D3EE';
 let lastClockMs = Date.now();
 let configuredMapTheme = 'AUTO';
-let effectiveTheme = 'dark'; // 'light' | 'dark'
+let effectiveTheme = null; // 'light' | 'dark' — null força aplicar as camadas na primeira vez
 let polySignature = '';
 let favsSignature = '';
 let recentsSignature = '';
@@ -696,6 +696,9 @@ function getMergedSearchSuggestions(q, maxRemote = 6) {
   return { mp, favHits, recentHits, remoteHits, loading };
 }
 
+let lastHomeDropSig = '';
+let lastFullSearchSig = '';
+
 function renderActiveSearchUIs() {
   if (document.getElementById('home-map-input')?.value.trim()) {
     renderHomeDropdown();
@@ -713,13 +716,25 @@ function renderHomeDropdown() {
   clearBtn.classList.toggle('hidden', q.length === 0);
 
   if (!q) {
+    lastHomeDropSig = '';
     dropdown.classList.add('hidden');
     dropdown.replaceChildren();
     return;
   }
 
-  dropdown.replaceChildren();
   const { mp, favHits, recentHits, remoteHits } = getMergedSearchSuggestions(q, 5);
+  const sig = JSON.stringify({
+    q,
+    favs: favHits.slice(0, 3).map((f) => [f.id, f.name, f.lat, f.lon]),
+    recs: recentHits.slice(0, 3).map((r) => [r.name, r.lat, r.lon]),
+    rem: remoteHits.map((r) => [r.name, r.address, r._placeId, r.lat, r.lon])
+  });
+  if (sig === lastHomeDropSig && !dropdown.classList.contains('hidden')) {
+    return;
+  }
+  lastHomeDropSig = sig;
+  const prevScrollTop = dropdown.scrollTop;
+  dropdown.replaceChildren();
 
   // 1) Favoritos
   for (const fav of favHits.slice(0, 3)) {
@@ -829,6 +844,7 @@ function renderHomeDropdown() {
   );
 
   dropdown.classList.remove('hidden');
+  if (prevScrollTop > 0) dropdown.scrollTop = prevScrollTop;
 }
 
 function renderFullSearchResults() {
@@ -842,6 +858,7 @@ function renderFullSearchResults() {
   clearBtn.classList.toggle('hidden', q.length === 0);
 
   if (!q) {
+    lastFullSearchSig = '';
     defaultBox.classList.remove('hidden');
     resultsBox.classList.add('hidden');
     return;
@@ -849,9 +866,21 @@ function renderFullSearchResults() {
 
   defaultBox.classList.add('hidden');
   resultsBox.classList.remove('hidden');
-  listEl.replaceChildren();
 
   const { mp, favHits, recentHits, remoteHits, loading } = getMergedSearchSuggestions(q, 8);
+  const sig = JSON.stringify({
+    q,
+    loading,
+    favs: favHits.map((f) => [f.id, f.name, f.lat, f.lon]),
+    recs: recentHits.map((r) => [r.name, r.lat, r.lon]),
+    rem: remoteHits.map((r) => [r.name, r.address, r._placeId, r.lat, r.lon])
+  });
+  if (sig === lastFullSearchSig) {
+    return;
+  }
+  lastFullSearchSig = sig;
+  const prevScrollTop = listEl.scrollTop;
+  listEl.replaceChildren();
 
   // Favoritos filtrados
   for (const fav of favHits) {
@@ -967,6 +996,7 @@ function renderFullSearchResults() {
       )
     )
   );
+  if (prevScrollTop > 0) listEl.scrollTop = prevScrollTop;
 }
 
 function renderDrawerLists(mp) {

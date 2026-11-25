@@ -588,7 +588,11 @@ function buildVehicle(root) {
 
   // Diário de abastecimento
   const kpiGrid = el('div', { className: 'summary-kpi-grid' });
-  const fuelList = el('div', { 'data-test': 'fuel-log-list', style: 'display:flex;flex-direction:column;gap:8px;max-height:230px;overflow-y:auto' });
+  const fuelList = el('div', {
+    className: 'fuel-log-list',
+    'data-test': 'fuel-log-list',
+    style: 'display:flex;flex-direction:column;gap:8px;max-height:230px;overflow-y:auto;overflow-x:hidden;touch-action:pan-y;overscroll-behavior:contain;-webkit-overflow-scrolling:touch'
+  });
   const litersIn = textInput({ inputmode: 'decimal', placeholder: 'Litros', 'data-test': 'fuel-log-liters' });
   const priceIn = textInput({ inputmode: 'decimal', placeholder: 'R$/L (opcional)', 'data-test': 'fuel-log-price' });
   const kmIn = textInput({ inputmode: 'numeric', placeholder: 'Km do painel (opcional)', 'data-test': 'fuel-log-odometer' });

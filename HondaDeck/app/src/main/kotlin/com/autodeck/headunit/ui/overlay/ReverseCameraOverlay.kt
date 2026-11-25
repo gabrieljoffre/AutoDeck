@@ -184,27 +184,32 @@ fun ReverseCameraOverlay(
         )
 
         if (!uiState.cameraHardware.isStreamingVideo) {
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 88.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.Black.copy(alpha = 0.72f))
+                    .padding(horizontal = 20.dp, vertical = 10.dp)
             ) {
-                Text(
-                    text = if (uiState.config.useSimulatedCamera) {
-                        "CÂMERA DE RÉ ATIVA (MODO SIMULADOR)"
-                    } else {
-                        "CÂMERA DE RÉ ATIVA — ${uiState.cameraHardware.connectedDeviceLabel}"
-                    },
-                    color = AutoDeckColors.AccentCyan,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = if (guide.mirrorHorizontal) "Espelhamento: ATIVO" else "Espelhamento: NORMAL (padrão aftermarket)",
-                    color = AutoDeckColors.TextSecondary,
-                    fontSize = 13.sp
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = if (uiState.config.useSimulatedCamera) {
+                            "CÂMERA DE RÉ ATIVA (MODO SIMULADOR)"
+                        } else {
+                            "CÂMERA DE RÉ ATIVA — ${uiState.cameraHardware.connectedDeviceLabel}"
+                        },
+                        color = AutoDeckColors.AccentCyan,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (guide.mirrorHorizontal) "Espelhamento: ATIVO" else "Espelhamento: NORMAL (padrão aftermarket)",
+                        color = AutoDeckColors.TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
             }
         }
 

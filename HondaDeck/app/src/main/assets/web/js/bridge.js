@@ -45,7 +45,9 @@ const VALID_COMMANDS = new Set([
   'fuel.tank',
   'settings.set',
   'system.downloadOfflineMap',
-  'camera.toggle'
+  'camera.toggle',
+  'calendar.refresh',
+  'calendar.requestPermission'
 ]);
 
 export const DEFAULT_STATE = {
@@ -61,6 +63,13 @@ export const DEFAULT_STATE = {
     kind: 'PARTLY_CLOUDY',
     summary: '',
     city: 'Anápolis'
+  },
+  calendar: {
+    permissionGranted: false,
+    updatedAtMs: 0,
+    statusText: '',
+    events: [],
+    holidays: []
   },
   status: {
     wifi: false,
@@ -202,6 +211,7 @@ export function normalizeState(raw) {
   const vh = asObj(s.vehicle);
   const fl = asObj(vh.fuelLog);
   const st = asObj(s.settings);
+  const cal = asObj(s.calendar);
 
   let notif = null;
   if (s.notification && typeof s.notification === 'object') {
@@ -222,6 +232,12 @@ export function normalizeState(raw) {
     brand: String(s.brand || DEFAULT_STATE.brand),
     clock: { ...DEFAULT_STATE.clock, ...asObj(s.clock) },
     weather: { ...DEFAULT_STATE.weather, ...asObj(s.weather) },
+    calendar: {
+      ...DEFAULT_STATE.calendar,
+      ...cal,
+      events: asArr(cal.events),
+      holidays: asArr(cal.holidays)
+    },
     status: { ...DEFAULT_STATE.status, ...asObj(s.status) },
     telemetry: {
       ...DEFAULT_STATE.telemetry,
