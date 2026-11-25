@@ -34,6 +34,14 @@ const VALID_COMMANDS = new Set([
   'copilot.clearMemory',
   'notif.read',
   'notif.dismiss',
+  'phone.pair',
+  'phone.unpair',
+  'phone.discover',
+  'phone.reconnect',
+  'phone.syncContacts',
+  'phone.call.answer',
+  'phone.call.end',
+  'phone.voice.cancel',
   'obd.connect',
   'obd.disconnect',
   'obd.readDtc',
@@ -76,7 +84,10 @@ export const DEFAULT_STATE = {
     bluetooth: false,
     btName: '',
     obd: 'DISCONNECTED',
-    gps: false
+    gps: false,
+    phone: false,
+    phoneState: 'DISCONNECTED',
+    phoneName: ''
   },
   telemetry: {
     speedKmh: 0,
@@ -164,6 +175,34 @@ export const DEFAULT_STATE = {
     route: 'Alto-falante'
   },
   notification: null,
+  phone: {
+    connected: false,
+    state: 'DISCONNECTED',
+    paired: false,
+    phoneName: '',
+    host: '',
+    port: 5290,
+    locked: false,
+    accessibilityEnabled: false,
+    notificationsEnabled: false,
+    statusMessage: 'Celular desconectado',
+    lastError: null,
+    recordingVoiceNote: false,
+    voiceNoteStatus: '',
+    contactsCount: 0,
+    contactsSyncedAtMs: 0,
+    contactsSyncing: false,
+    contactsSyncError: null,
+    discovered: [],
+    call: {
+      status: 'IDLE',
+      number: '',
+      displayName: '',
+      isWhatsApp: false,
+      startedAtMs: 0
+    },
+    messages: []
+  },
   vehicle: {
     obdMessage: '',
     simulator: false,
@@ -212,6 +251,7 @@ export function normalizeState(raw) {
   const fl = asObj(vh.fuelLog);
   const st = asObj(s.settings);
   const cal = asObj(s.calendar);
+  const ph = asObj(s.phone);
 
   let notif = null;
   if (s.notification && typeof s.notification === 'object') {
@@ -221,7 +261,9 @@ export function normalizeState(raw) {
         id: String(n.id ?? ''),
         app: String(n.app ?? 'Mensagem'),
         title: String(n.title ?? ''),
-        text: String(n.text ?? '')
+        text: String(n.text ?? ''),
+        ...(n.source !== undefined ? { source: String(n.source) } : {}),
+        ...(n.canReply !== undefined ? { canReply: Boolean(n.canReply) } : {})
       };
     }
   }
@@ -277,6 +319,13 @@ export function normalizeState(raw) {
     copilot: { ...DEFAULT_STATE.copilot, ...asObj(s.copilot) },
     audio: { ...DEFAULT_STATE.audio, ...asObj(s.audio) },
     notification: notif,
+    phone: {
+      ...DEFAULT_STATE.phone,
+      ...ph,
+      discovered: asArr(ph.discovered),
+      call: { ...DEFAULT_STATE.phone.call, ...asObj(ph.call) },
+      messages: asArr(ph.messages)
+    },
     vehicle: {
       ...DEFAULT_STATE.vehicle,
       ...vh,

@@ -32,6 +32,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class StateDtoTest {
 
@@ -312,5 +313,23 @@ class StateDtoTest {
         assertEquals("m-phone-1", notif.getString("id"))
         assertEquals("Ana", notif.getString("title"))
         assertEquals("phone", notif.getString("source"))
+    }
+
+    @Test
+    fun `bridge js aceita todos os comandos de WebBridge e normaliza phone`() {
+        val candidates = listOf(
+            File("src/main/assets/web/js/bridge.js"),
+            File("app/src/main/assets/web/js/bridge.js")
+        )
+        val bridgeFile = candidates.firstOrNull { it.exists() }
+            ?: error("Arquivo bridge.js não encontrado")
+        val content = bridgeFile.readText()
+
+        val missing = WebBridge.ALLOWED_COMMANDS.filterNot { cmd ->
+            content.contains("'$cmd'") || content.contains("\"$cmd\"")
+        }
+        assertTrue("Comandos de WebBridge ausentes em bridge.js: $missing", missing.isEmpty())
+        assertTrue("bridge.js deve declarar DEFAULT_STATE.phone", content.contains("phone:"))
+        assertTrue("bridge.js deve normalizar s.phone", content.contains("asObj(s.phone)"))
     }
 }
