@@ -101,16 +101,16 @@ class WebKnowledgeToolsAndLoopTest {
     }
 
     @Test
-    fun `functionDeclarationsJson declara as cinco ferramentas obrigatorias em JSON valido`() {
+    fun `functionDeclarationsJson declara as seis ferramentas obrigatorias em JSON valido`() {
         val parsed = CopilotJson.parseObjOrNull(WebKnowledgeTools.functionDeclarationsJson())
         assertNotNull(parsed)
         val decls = parsed!!.optArr("functionDeclarations")
         assertNotNull(decls)
-        assertEquals(5, decls!!.size)
+        assertEquals(6, decls!!.size)
 
         val names = (0 until decls.size).mapNotNull { decls.optObj(it)?.optStrictString("name") }.toSet()
         assertEquals(
-            setOf("buscar_noticias", "buscar_wikipedia", "clima", "buscar_lugar", "dados_do_carro"),
+            setOf("buscar_noticias", "buscar_wikipedia", "clima", "buscar_lugar", "dados_do_carro", "minha_agenda"),
             names
         )
     }

@@ -45,6 +45,7 @@ import com.autodeck.headunit.navigation.GpsLocationState
 import com.autodeck.headunit.navigation.GpsNavigationTracker
 import com.autodeck.headunit.navigation.InAppRouteNavigator
 import com.autodeck.headunit.navigation.InAppRouteState
+import com.autodeck.headunit.navigation.LocalPlaceHint
 import com.autodeck.headunit.navigation.PlaceSearch
 import com.autodeck.headunit.navigation.PlaceSearchState
 import com.autodeck.headunit.navigation.RoutePoint
@@ -77,6 +78,8 @@ import com.autodeck.protocol.obd2.FuelLogCalculator
 import com.autodeck.protocol.obd2.FuelLogSummary
 import com.autodeck.headunit.weather.WeatherService
 import com.autodeck.headunit.weather.WeatherState
+import com.autodeck.headunit.calendar.CalendarRepository
+import com.autodeck.headunit.calendar.CalendarState
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -127,6 +130,7 @@ data class HeadUnitUiState(
     val spotifySearchResults: SpotifySearchResults = SpotifySearchResults(),
     val spotifySearchError: String? = null,
     val weather: WeatherState = WeatherState(),
+    val calendar: CalendarState = CalendarState(),
     val fuelEntries: List<FuelEntry> = emptyList(),
     val fuelSummary: FuelLogSummary = FuelLogSummary(),
     val ignitionStatus: IgnitionStatus = IgnitionStatus(),
@@ -296,6 +300,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         usbCamera.refreshFromUsb()
         gpsTracker.refreshPermissionAndStart()
         mediaController.refreshAccessAndSessions()
+        refreshCalendar(force = true)
         carAgent.onConfigUpdated(_uiState.value.config)
         _uiState.update {
             it.copy(
@@ -487,9 +492,18 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
         _uiState.update { it.copy(placeSearch = it.placeSearch.copy(query = q, loading = true)) }
         placeSearchJob = scope.launch {
-            val gps = _uiState.value.gpsState
+            val snap = _uiState.value
+            val gps = snap.gpsState
+            val hints = buildList {
+                snap.favoritePlaces.forEach {
+                    add(LocalPlaceHint(it.name, it.address, it.lat, it.lon, isFavorite = true))
+                }
+                snap.recentPlaces.forEach {
+                    add(LocalPlaceHint(it.name, it.address, it.lat, it.lon, isFavorite = false))
+                }
+            }
             val results = runCatching {
-                placeSearch.search(q, gps.latitude, gps.longitude)
+                placeSearch.search(q, gps.latitude, gps.longitude, hints)
             }.getOrDefault(emptyList())
             _uiState.update {
                 it.copy(placeSearch = PlaceSearchState(query = q, loading = false, results = results))
@@ -597,7 +611,27 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     }
 
     fun connectSpotify(activityContext: Context) = mediaController.spotify.connect(activityContext)
+    @Volatile
+    private var calendarPermissionRequester: (() -> Unit)? = null
+
     fun setSpotifyAuthRequester(requester: (() -> Unit)?) { mediaController.spotify.authRequester = requester }
+
+    fun setCalendarPermissionRequester(requester: (() -> Unit)?) { calendarPermissionRequester = requester }
+
+    fun requestCalendarPermission() {
+        calendarPermissionRequester?.invoke()
+        refreshCalendar(force = true)
+    }
+
+    fun refreshCalendar(force: Boolean = true) {
+        val current = _uiState.value.calendar
+        val stale = System.currentTimeMillis() - current.updatedAtMs > WEATHER_REFRESH_MS
+        if (!force && current.updatedAtMs > 0L && !stale) return
+        scope.launch {
+            val loaded = CalendarRepository.load(appContext)
+            _uiState.update { it.copy(calendar = loaded) }
+        }
+    }
     fun onSpotifyAuthorized(activityContext: Context) = mediaController.spotify.onAuthorized(activityContext)
     fun onSpotifyAuthFailed(reason: String) = mediaController.spotify.onAuthFailed(reason)
     fun spotifyToggleShuffle() { mediaController.spotify.toggleShuffle() }
@@ -954,6 +988,22 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         return "Tela ${tab.name}"
     }
 
+    override fun setMapTheme(theme: String): String {
+        val norm = when (theme.trim().uppercase()) {
+            "LIGHT" -> "LIGHT"
+            "DARK" -> "DARK"
+            else -> "AUTO"
+        }
+        updateConfig { it.copy(mapTheme = norm) }
+        return "Tema do mapa: $norm"
+    }
+
+    override fun openMapFullScreen(): String {
+        selectTab(MainTab.NAVIGATION)
+        emitWebEvent("openMode", mode = "mapFull")
+        return "Mapa em tela cheia"
+    }
+
     override fun toggleReverseCamera(): String {
         toggleManualCameraPreview()
         return "Câmera de Ré"
@@ -971,6 +1021,9 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     }
 
     override fun getWeatherSummary(): String? = _uiState.value.weather.spokenSummary()
+
+    override fun getCalendarAgendaSummary(dayOffset: Int): String =
+        CalendarRepository.formatAgendaSummary(_uiState.value.calendar, dayOffset)
 
     override fun markMessagesRead() {
         mediaController.messages.value.firstOrNull()?.let { mediaController.markMessageRead(it.key) }
@@ -1301,6 +1354,12 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
             }
         }
         scope.launch { weatherLoop() }
+        scope.launch {
+            while (isActive) {
+                refreshCalendar(force = true)
+                delay(WEATHER_REFRESH_MS)
+            }
+        }
         scope.launch(Dispatchers.IO) { refreshFuelLogState() }
         scope.launch {
             ignitionMonitor.status.collect { ign ->

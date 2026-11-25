@@ -238,4 +238,23 @@ class CopilotIntentParserTest {
             CopilotIntentParser.parse("Ok Honda, Tocar Coldplay", favorites)
         )
     }
+
+    @Test
+    fun `minha agenda de hoje e amanha resolvem para CalendarAgenda`() {
+        assertEquals(CopilotIntent.CalendarAgenda(0), CopilotIntentParser.parse("minha agenda de hoje", favorites))
+        assertEquals(CopilotIntent.CalendarAgenda(0), CopilotIntentParser.parse("o que tenho hoje", favorites))
+        assertEquals(CopilotIntent.CalendarAgenda(1), CopilotIntentParser.parse("agenda de amanhã", favorites))
+        assertEquals(CopilotIntent.CalendarAgenda(1), CopilotIntentParser.parse("tenho algum compromisso amanhã?", favorites))
+    }
+
+    @Test
+    fun `comandos de voz para tema do mapa e mapa em tela cheia`() {
+        assertEquals(CopilotIntent.SetMapTheme("LIGHT"), CopilotIntentParser.parse("mapa claro", favorites))
+        assertEquals(CopilotIntent.SetMapTheme("LIGHT"), CopilotIntentParser.parse("colocar o mapa no modo claro", favorites))
+        assertEquals(CopilotIntent.SetMapTheme("DARK"), CopilotIntentParser.parse("deixar o mapa escuro", favorites))
+        assertEquals(CopilotIntent.SetMapTheme("DARK"), CopilotIntentParser.parse("tema noturno do mapa", favorites))
+        assertEquals(CopilotIntent.SetMapTheme("AUTO"), CopilotIntentParser.parse("mapa no modo automático", favorites))
+        assertEquals(CopilotIntent.ExpandMapFull, CopilotIntentParser.parse("aumentar o mapa", favorites))
+        assertEquals(CopilotIntent.ExpandMapFull, CopilotIntentParser.parse("mapa em tela cheia", favorites))
+    }
 }

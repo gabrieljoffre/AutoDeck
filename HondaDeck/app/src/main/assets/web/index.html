@@ -27,15 +27,15 @@
     <header id="topbar" class="topbar">
       <div class="topbar-left">
         <span id="clock-time" class="clock-time">--:--</span>
-        <span id="clock-date" class="clock-date">---, -- ---</span>
+        <button id="clock-date" class="clock-date-btn" type="button" data-test="date-card" aria-label="Abrir calendário">---, -- ---</button>
         <span class="topbar-sep" aria-hidden="true"></span>
-        <div id="weather-box" class="weather-box" title="Clima local">
+        <button id="weather-box" class="weather-box" type="button" data-test="weather-card" title="Clima local" aria-label="Abrir previsão do tempo">
           <span id="weather-icon" class="weather-icon" aria-hidden="true"></span>
           <div class="weather-texts">
             <span id="weather-temp" class="weather-temp">--°C</span>
             <span id="weather-range" class="weather-range">máx --° · mín --°</span>
           </div>
-        </div>
+        </button>
       </div>
 
       <button id="top-logo-btn" class="top-logo-btn" type="button" data-test="intro" aria-label="Logo da marca (tocar animação)">
@@ -290,6 +290,11 @@
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
               </button>
             </label>
+            <button id="map-fullscreen-btn" class="close-hero-btn large" type="button" data-test="map-fullscreen" aria-label="Mapa em tela cheia" title="Tela cheia">
+              <svg id="map-fullscreen-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E8EEF6" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+              </svg>
+            </button>
             <button id="map-close-btn" class="close-hero-btn large" type="button" data-test="mode-close" aria-label="Fechar e voltar ao painel">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E8EEF6" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
                 <path d="M6 6l12 12M18 6L6 18"></path>
@@ -661,13 +666,26 @@
     <!-- Overlay do Copiloto (Ouvindo / Pensando / Resposta + Perguntar) -->
     <div id="copilot-overlay" class="copilot-overlay hidden" role="dialog" aria-label="Copiloto Honda"></div>
 
+    <!-- Modal de Calendário -->
+    <div id="calendar-modal" class="detail-modal-backdrop hidden" data-test="calendar-modal" role="dialog" aria-label="Calendário">
+      <div id="calendar-card" class="detail-modal-card cal-modal-card"></div>
+    </div>
+
+    <!-- Modal de Clima Detalhado -->
+    <div id="weather-modal" class="detail-modal-backdrop hidden" data-test="weather-modal" role="dialog" aria-label="Previsão do tempo">
+      <div id="weather-card" class="detail-modal-card wx-modal-card"></div>
+    </div>
+
     <!-- Pilha de Toasts -->
     <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
   </div>
 
-  <!-- Stage compartilhado do Leaflet (movido entre os slots visíveis sem recarregar tiles) -->
+  <!-- Stage compartilhado do mapa (Leaflet Esri ou Google Maps JS API, movido entre slots) -->
   <div id="leaflet-holding" class="hidden" aria-hidden="true">
-    <div id="leaflet-stage" class="leaflet-stage"></div>
+    <div id="map-stage-wrap" class="map-stage-wrap map-theme-dark">
+      <div id="leaflet-stage" class="leaflet-stage"></div>
+      <div id="gmaps-stage" class="gmaps-stage hidden"></div>
+    </div>
   </div>
 
   <script src="./vendor/leaflet.js"></script>

@@ -136,7 +136,7 @@ class WebBridge(
 
             "ui.mode" -> {
                 val tab = when (args.optString("mode").trim().lowercase()) {
-                    "map" -> MainTab.NAVIGATION
+                    "map", "mapfull" -> MainTab.NAVIGATION
                     "music" -> MainTab.MUSIC
                     "settings" -> MainTab.SETTINGS
                     else -> MainTab.HOME
@@ -276,6 +276,8 @@ class WebBridge(
             "settings.set" -> handleSettingsSet(args)
             "system.downloadOfflineMap" -> runtime.downloadOfflineMap()
             "camera.toggle" -> runtime.toggleManualCameraPreview()
+            "calendar.refresh" -> runtime.refreshCalendar(force = true)
+            "calendar.requestPermission" -> runtime.requestCalendarPermission()
         }
     }
 
@@ -312,6 +314,14 @@ class WebBridge(
                 }
                 runtime.updateConfig { it.copy(introMode = v) }
             }
+            "mapTheme" -> {
+                val v = when (args.optString("value").trim().uppercase()) {
+                    "LIGHT" -> "LIGHT"
+                    "DARK" -> "DARK"
+                    else -> "AUTO"
+                }
+                runtime.updateConfig { it.copy(mapTheme = v) }
+            }
             "spotifyShowPlaylists" -> {
                 val v = args.optBoolean("value", true)
                 runtime.updateConfig { it.copy(spotifyShowPlaylists = v) }
@@ -339,7 +349,8 @@ class WebBridge(
         val extras = WebExtras(
             nowEpochMs = System.currentTimeMillis(),
             wifiConnected = isWifiConnected(),
-            appVersion = BuildConfig.VERSION_NAME
+            appVersion = BuildConfig.VERSION_NAME,
+            mapsJsApiKey = BuildConfig.MAPS_JS_API_KEY
         )
         val stateJson = StateDto.buildStateJson(ui, extras)
         deliverToJs(StateDto.wrapMessage("state", stateJson))
@@ -419,7 +430,9 @@ class WebBridge(
             "fuel.tank",
             "settings.set",
             "system.downloadOfflineMap",
-            "camera.toggle"
+            "camera.toggle",
+            "calendar.refresh",
+            "calendar.requestPermission"
         )
     }
 }

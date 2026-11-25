@@ -345,7 +345,9 @@ class NectarLinkAndMobileAgentTest {
         assertFalse("index.html must not load scripts or styles from http(s)", Regex("""https?://""", RegexOption.IGNORE_CASE).containsMatchIn(indexHtml))
         assertFalse("orbita.css must not load fonts or assets from http(s)", Regex("""https?://""", RegexOption.IGNORE_CASE).containsMatchIn(orbitaCss))
 
-        val bannedCdnRegex = Regex("""(googleapis\.com|gstatic\.com|unpkg\.com|jsdelivr\.net|cdnjs\.cloudflare\.com|cdn\.)""", RegexOption.IGNORE_CASE)
+        // Permite apenas a API oficial Google Maps JS em map.js (carregada sob demanda quando há chave);
+        // mantém proibidos CDNs de fontes/bibliotecas (fonts.googleapis.com, gstatic, unpkg, jsdelivr, cdnjs).
+        val bannedCdnRegex = Regex("""((?<!maps\.)googleapis\.com|gstatic\.com|unpkg\.com|jsdelivr\.net|cdnjs\.cloudflare\.com|cdn\.)""", RegexOption.IGNORE_CASE)
         val webSourceFiles = listOf(
             File(webDir, "index.html"),
             File(webDir, "css/orbita.css")

@@ -21,11 +21,9 @@ class PlaceSearchTest {
         """.trimIndent()
 
         var calls = 0
-        var requestedUrl = ""
         val engine = PlaceSearch(
-            httpFetcher = { url ->
+            httpFetcher = {
                 calls++
-                requestedUrl = url
                 sampleJson
             },
             minIntervalMs = 0L
@@ -36,12 +34,74 @@ class PlaceSearchTest {
         assertEquals("Posto Perto", first[0].name)
         assertEquals("Posto Longe", first[1].name)
         assertTrue(first[0].distanceKm < first[1].distanceKm)
-        assertTrue(requestedUrl.contains("countrycodes=br"))
-        assertTrue(requestedUrl.contains("bounded=0"))
 
         // Segunda busca igual usa cache em memória sem nova chamada HTTP
         val cached = engine.search("posto", -16.3281, -48.9534)
         assertEquals(1, calls)
         assertEquals(first[0].name, cached[0].name)
+    }
+
+    @Test
+    fun `busca inteligente usa Photon com vies na posicao, mescla favoritos e complementa com Nominatim`() = runBlocking {
+        val photonGeoJson = """
+            {
+              "type": "FeatureCollection",
+              "features": [
+                {
+                  "type": "Feature",
+                  "geometry": {"type": "Point", "coordinates": [-48.9522, -16.3194]},
+                  "properties": {
+                    "name": "Brasil Park Shopping",
+                    "street": "Avenida Brasil Norte",
+                    "housenumber": "505",
+                    "district": "Centro",
+                    "city": "Anápolis",
+                    "state": "Goiás"
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val nominatimJson = """
+            [
+              {
+                "name": "Brasil Park Estacionamento",
+                "display_name": "Brasil Park Estacionamento, Centro, Anápolis, GO",
+                "lat": "-16.3200",
+                "lon": "-48.9518"
+              }
+            ]
+        """.trimIndent()
+
+        val requestedUrls = mutableListOf<String>()
+        val engine = PlaceSearch(
+            httpFetcher = { url ->
+                requestedUrls += url
+                if (url.contains("photon.komoot.io")) photonGeoJson else nominatimJson
+            },
+            minIntervalMs = 0L
+        )
+
+        val hints = listOf(
+            LocalPlaceHint(
+                name = "Casa Brasilia",
+                address = "Bairro Jundiaí, Anápolis - GO",
+                lat = -16.3338,
+                lon = -48.9435,
+                isFavorite = true
+            )
+        )
+
+        // Query incompleta e com pequeno erro ("brasi" -> casa favorito + Photon + complemento Nominatim)
+        val results = engine.search("brasi", -16.3281, -48.9534, localHints = hints)
+
+        assertTrue(requestedUrls.any { it.contains("photon.komoot.io") && it.contains("lat=-16.32810") && it.contains("lon=-48.95340") })
+        assertTrue(requestedUrls.any { it.contains("nominatim.openstreetmap.org") && it.contains("countrycodes=br") })
+        assertEquals("Casa Brasilia", results[0].name)
+        val shopping = results.first { it.name == "Brasil Park Shopping" }
+        assertTrue(shopping.address.contains("Centro"))
+        assertTrue(shopping.address.contains("Anápolis - GO"))
+        assertTrue(results.any { it.name == "Brasil Park Estacionamento" })
     }
 }

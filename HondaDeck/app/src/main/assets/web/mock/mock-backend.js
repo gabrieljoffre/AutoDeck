@@ -97,12 +97,73 @@ export function installMockBackend() {
     weather: {
       available: true,
       tempC: 26,
+      feelsLikeC: 28,
       maxC: 29,
       minC: 18,
       kind: 'PARTLY_CLOUDY',
       summary: 'Parcialmente nublado',
-      city: 'Anápolis'
+      city: 'Anápolis',
+      isDay: true,
+      humidityPct: 62,
+      windKmh: 14,
+      windDirDeg: 45,
+      windDirLabel: 'NE',
+      rainChancePct: 25,
+      precipMm: 0.0,
+      uvIndex: 6.8,
+      sunrise: '05:42',
+      sunset: '18:24',
+      hourly: Array.from({ length: 24 }, (_, idx) => {
+        const h = (new Date().getHours() + idx + 1) % 24;
+        const kinds = ['PARTLY_CLOUDY', 'CLEAR', 'PARTLY_CLOUDY', 'SHOWERS', 'CLOUDY'];
+        return {
+          hour: `${String(h).padStart(2, '0')}:00`,
+          tempC: Math.round(22 + Math.sin((h - 6) / 24 * Math.PI * 2) * 5),
+          kind: kinds[idx % kinds.length],
+          rainChancePct: idx % 4 === 3 ? 45 : 15,
+          precipMm: idx % 4 === 3 ? 1.2 : 0.0
+        };
+      }),
+      daily: [
+        { day: 'Hoje', dateIso: new Date().toISOString().slice(0, 10), minC: 18, maxC: 29, kind: 'PARTLY_CLOUDY', rainChancePct: 25, precipMm: 0.4, uvMax: 7.2, sunrise: '05:42', sunset: '18:24' },
+        { day: 'Qua', dateIso: new Date(Date.now() + 86400000).toISOString().slice(0, 10), minC: 17, maxC: 28, kind: 'SHOWERS', rainChancePct: 60, precipMm: 5.2, uvMax: 6.4, sunrise: '05:42', sunset: '18:24' },
+        { day: 'Qui', dateIso: new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10), minC: 18, maxC: 30, kind: 'CLEAR', rainChancePct: 10, precipMm: 0.0, uvMax: 8.5, sunrise: '05:42', sunset: '18:25' },
+        { day: 'Sex', dateIso: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10), minC: 19, maxC: 31, kind: 'CLEAR', rainChancePct: 5, precipMm: 0.0, uvMax: 8.8, sunrise: '05:43', sunset: '18:25' },
+        { day: 'Sáb', dateIso: new Date(Date.now() + 4 * 86400000).toISOString().slice(0, 10), minC: 18, maxC: 27, kind: 'RAIN', rainChancePct: 75, precipMm: 12.4, uvMax: 5.0, sunrise: '05:43', sunset: '18:25' },
+        { day: 'Dom', dateIso: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10), minC: 17, maxC: 26, kind: 'CLOUDY', rainChancePct: 35, precipMm: 1.8, uvMax: 5.9, sunrise: '05:43', sunset: '18:26' },
+        { day: 'Seg', dateIso: new Date(Date.now() + 6 * 86400000).toISOString().slice(0, 10), minC: 18, maxC: 29, kind: 'PARTLY_CLOUDY', rainChancePct: 20, precipMm: 0.0, uvMax: 7.5, sunrise: '05:44', sunset: '18:26' }
+      ]
     },
+    calendar: (() => {
+      const base = new Date();
+      const isoOffset = (days) => {
+        const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + days);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      };
+      const msAt = (days, h, m) => new Date(base.getFullYear(), base.getMonth(), base.getDate() + days, h, m).getTime();
+      return {
+        permissionGranted: true,
+        updatedAtMs: Date.now(),
+        statusText: '4 eventos',
+        events: [
+          { id: 'ev1', title: 'Café com a equipe', startMs: msAt(0, 9, 0), endMs: msAt(0, 10, 0), allDay: false, location: 'Praça Bom Jesus, Anápolis - GO', color: '#22D3EE', dateIso: isoOffset(0), endDateIso: isoOffset(0) },
+          { id: 'ev2', title: 'Revisão Civic 40 mil km', startMs: msAt(0, 14, 30), endMs: msAt(0, 16, 0), allDay: false, location: 'Av. Brasil Norte, 505, Anápolis - GO', color: '#A3E635', dateIso: isoOffset(0), endDateIso: isoOffset(0) },
+          { id: 'ev3', title: 'Treino no Parque Ipiranga', startMs: msAt(1, 7, 30), endMs: msAt(1, 8, 30), allDay: false, location: 'Parque Ipiranga, Anápolis - GO', color: '#FB923C', dateIso: isoOffset(1), endDateIso: isoOffset(1) },
+          { id: 'ev4', title: 'Aniversário da Ana', startMs: msAt(2, 0, 0), endMs: msAt(2, 23, 59), allDay: true, location: '', color: '#F472B6', dateIso: isoOffset(2), endDateIso: isoOffset(2) }
+        ],
+        holidays: [
+          { dateIso: `${base.getFullYear()}-01-01`, name: 'Confraternização Universal', movable: false },
+          { dateIso: `${base.getFullYear()}-04-21`, name: 'Tiradentes', movable: false },
+          { dateIso: `${base.getFullYear()}-05-01`, name: 'Dia do Trabalho', movable: false },
+          { dateIso: `${base.getFullYear()}-09-07`, name: 'Independência do Brasil', movable: false },
+          { dateIso: `${base.getFullYear()}-10-12`, name: 'Nossa Senhora Aparecida', movable: false },
+          { dateIso: `${base.getFullYear()}-11-02`, name: 'Finados', movable: false },
+          { dateIso: `${base.getFullYear()}-11-15`, name: 'Proclamação da República', movable: false },
+          { dateIso: `${base.getFullYear()}-11-20`, name: 'Dia da Consciência Negra', movable: false },
+          { dateIso: `${base.getFullYear()}-12-25`, name: 'Natal', movable: false }
+        ]
+      };
+    })(),
     status: {
       wifi: true,
       bluetooth: true,
@@ -220,6 +281,8 @@ export function installMockBackend() {
       }
     },
     map: {
+      provider: 'esri',
+      jsKey: '',
       lat: -16.3281,
       lon: -48.9534,
       bearing: 14,
@@ -329,6 +392,7 @@ export function installMockBackend() {
     settings: {
       accentOptions: ['#22D3EE', '#A3E635', '#FB923C', '#A78BFA', '#F472B6'],
       introMode: 'ANIMATION',
+      mapTheme: 'AUTO',
       spotifyShowPlaylists: true,
       spotifyShowRecent: true,
       geminiKeySet: true,
@@ -480,6 +544,18 @@ export function installMockBackend() {
         emitEvent('openMode', { mode: 'music' });
       } else if (low.includes('temperatura') || low.includes('motor')) {
         reply = `Temperatura do motor em ${state.telemetry.coolantC}°C (normal), bateria em ${state.telemetry.voltage.toFixed(1)}V e uso do motor em ${state.telemetry.loadPct}%.`;
+      } else if (low.includes('mapa claro') || (low.includes('mapa') && low.includes('claro'))) {
+        state.settings.mapTheme = 'LIGHT';
+        reply = 'Mapa alterado para o modo claro.';
+      } else if (low.includes('mapa escuro') || (low.includes('mapa') && (low.includes('escuro') || low.includes('noturno')))) {
+        state.settings.mapTheme = 'DARK';
+        reply = 'Mapa alterado para o modo escuro.';
+      } else if (low.includes('mapa') && (low.includes('automático') || low.includes('automatico'))) {
+        state.settings.mapTheme = 'AUTO';
+        reply = 'Mapa alterado para o modo automático.';
+      } else if (low.includes('aumentar o mapa') || low.includes('tela cheia')) {
+        reply = 'Abrindo o mapa em tela cheia.';
+        emitEvent('openMode', { mode: 'mapFull' });
       } else if (low.includes('tempo') || low.includes('clima')) {
         reply = `Em Anápolis faz ${state.weather.tempC}°C (${state.weather.summary}), com máxima de ${state.weather.maxC}° e mínima de ${state.weather.minC}°.`;
       }
@@ -652,9 +728,10 @@ export function installMockBackend() {
             emitState();
             break;
           }
-          const ql = q.toLowerCase();
+          const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+          const ql = norm(q);
           const hits = ANAPOLIS_PLACES.filter(
-            (p) => p.name.toLowerCase().includes(ql) || p.address.toLowerCase().includes(ql) || (ql.includes('posto') && p.name.toLowerCase().includes('posto'))
+            (p) => norm(p.name).includes(ql) || norm(p.address).includes(ql) || (ql.includes('posto') && norm(p.name).includes('posto'))
           );
           state.map.search.loading = false;
           state.map.search.results = hits.length
@@ -851,6 +928,15 @@ export function installMockBackend() {
           break;
         case 'camera.toggle':
           emitEvent('toast', { text: 'Alternando câmera de ré (overlay nativo)' });
+          break;
+        case 'calendar.refresh':
+          state.calendar.updatedAtMs = Date.now();
+          emitState();
+          break;
+        case 'calendar.requestPermission':
+          state.calendar.permissionGranted = true;
+          emitState();
+          emitEvent('toast', { text: 'Acesso à agenda liberado (simulado)' });
           break;
       }
     }

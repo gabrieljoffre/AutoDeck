@@ -1,5 +1,6 @@
 package com.autodeck.headunit.web
 
+import com.autodeck.headunit.calendar.BrazilHolidays
 import com.autodeck.headunit.data.FavoritePlace
 import com.autodeck.headunit.data.RecentPlace
 import com.autodeck.headunit.media.SpotifyItem
@@ -26,7 +27,8 @@ data class WebExtras(
     val accentOverride: String? = null,
     val favoritePlacesOverride: List<FavoritePlace>? = null,
     val recentPlacesOverride: List<RecentPlace>? = null,
-    val recentSearchesOverride: List<String>? = null
+    val recentSearchesOverride: List<String>? = null,
+    val mapsJsApiKey: String = ""
 )
 
 /**
@@ -65,11 +67,49 @@ object StateDto {
         val weatherObj = JSONObject().apply {
             put("available", weatherNow != null)
             put("tempC", weatherNow?.tempC ?: 0)
+            put("feelsLikeC", weatherNow?.feelsLikeC ?: 0)
             put("maxC", ui.weather.todayMaxC ?: weatherNow?.tempC ?: 0)
             put("minC", ui.weather.todayMinC ?: weatherNow?.tempC ?: 0)
             put("kind", (weatherNow?.kind ?: WeatherKind.PARTLY_CLOUDY).name)
             put("summary", weatherNow?.kind?.labelPt ?: ui.weather.statusText)
             put("city", extras.city)
+            put("isDay", weatherNow?.isDay ?: true)
+            put("humidityPct", weatherNow?.humidityPct ?: 0)
+            put("windKmh", weatherNow?.windKmh ?: 0)
+            put("windDirDeg", weatherNow?.windDirDeg ?: 0)
+            put("windDirLabel", weatherNow?.windDirLabel.orEmpty())
+            put("rainChancePct", weatherNow?.rainChancePct ?: 0)
+            put("precipMm", round1(safeNum(weatherNow?.precipMm)))
+            put("uvIndex", round1(safeNum(weatherNow?.uvIndex)))
+            put("sunrise", weatherNow?.sunrise.orEmpty())
+            put("sunset", weatherNow?.sunset.orEmpty())
+            put("hourly", JSONArray().apply {
+                ui.weather.nextHours.forEach { h ->
+                    put(JSONObject().apply {
+                        put("hour", h.hourLabel)
+                        put("tempC", h.tempC)
+                        put("kind", h.kind.name)
+                        put("rainChancePct", h.rainChancePct)
+                        put("precipMm", round1(safeNum(h.precipMm)))
+                    })
+                }
+            })
+            put("daily", JSONArray().apply {
+                ui.weather.nextDays.forEach { d ->
+                    put(JSONObject().apply {
+                        put("day", d.dayLabel)
+                        put("dateIso", d.dateIso)
+                        put("minC", d.minC)
+                        put("maxC", d.maxC)
+                        put("kind", d.kind.name)
+                        put("rainChancePct", d.rainChancePct)
+                        put("precipMm", round1(safeNum(d.precipMm)))
+                        put("uvMax", round1(safeNum(d.uvMax)))
+                        put("sunrise", d.sunrise)
+                        put("sunset", d.sunset)
+                    })
+                }
+            })
         }
 
         val statusObj = JSONObject().apply {
@@ -144,7 +184,10 @@ object StateDto {
             0L
         }
 
+        val mapsKey = extras.mapsJsApiKey.trim()
         val mapObj = JSONObject().apply {
+            put("provider", if (mapsKey.isNotEmpty()) "google" else "esri")
+            put("jsKey", mapsKey)
             put("lat", safeNum(ui.gpsState.latitude, -16.3281))
             put("lon", safeNum(ui.gpsState.longitude, -48.9534))
             put("bearing", round1(safeNum(ui.gpsState.bearingDeg.toDouble())))
@@ -283,6 +326,7 @@ object StateDto {
         val settingsObj = JSONObject().apply {
             put("accentOptions", JSONArray(ACCENT_OPTIONS))
             put("introMode", ui.config.introMode)
+            put("mapTheme", ui.config.mapTheme)
             put("spotifyShowPlaylists", ui.config.spotifyShowPlaylists)
             put("spotifyShowRecent", ui.config.spotifyShowRecent)
             put("geminiKeySet", ui.config.geminiApiKey.isNotBlank())
@@ -302,12 +346,44 @@ object StateDto {
             put("version", extras.appVersion)
         }
 
+        val currentYear = Instant.ofEpochMilli(extras.nowEpochMs).atZone(ZoneId.systemDefault()).year
+        val calendarObj = JSONObject().apply {
+            put("permissionGranted", ui.calendar.permissionGranted)
+            put("updatedAtMs", ui.calendar.updatedAtMs)
+            put("statusText", ui.calendar.statusText)
+            put("events", JSONArray().apply {
+                ui.calendar.events.forEach { ev ->
+                    put(JSONObject().apply {
+                        put("id", ev.id)
+                        put("title", ev.title)
+                        put("startMs", ev.startMs)
+                        put("endMs", ev.endMs)
+                        put("allDay", ev.allDay)
+                        put("location", ev.location)
+                        put("color", ev.colorHex)
+                        put("dateIso", ev.dateIso)
+                        put("endDateIso", ev.endDateIso)
+                    })
+                }
+            })
+            put("holidays", JSONArray().apply {
+                BrazilHolidays.holidaysForYears((currentYear - 1)..(currentYear + 1)).forEach { h ->
+                    put(JSONObject().apply {
+                        put("dateIso", h.dateIso)
+                        put("name", h.name)
+                        put("movable", h.movable)
+                    })
+                }
+            })
+        }
+
         return JSONObject().apply {
             put("v", 1)
             put("accent", accent)
             put("brand", "HONDA")
             put("clock", JSONObject().put("epochMs", extras.nowEpochMs))
             put("weather", weatherObj)
+            put("calendar", calendarObj)
             put("status", statusObj)
             put("telemetry", telemetryObj)
             put("media", mediaObj)

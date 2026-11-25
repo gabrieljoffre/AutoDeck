@@ -16,8 +16,11 @@ import { initMusic, updateMusic, focusFullMusicSearch } from './music.js';
 import { initDock, updateDock, updateNotification, setDockActiveMode, showToast } from './dock.js';
 import { initCopilot, updateCopilot, onAgentReply } from './copilot.js';
 import { initSettings, updateSettings, setSettingsVisible, showSettingsTab } from './settings.js';
+import { initCalendarCard, updateCalendarCard, openCalendarCard, closeCalendarCard } from './calendar-card.js';
+import { initWeatherCard, updateWeatherCard, openWeatherCard, closeWeatherCard } from './weather-card.js';
 
-const MODES = ['home', 'map', 'music', 'settings'];
+const MODES = ['home', 'map', 'mapFull', 'music', 'settings'];
+const VIEW_IDS = ['home', 'map', 'music', 'settings'];
 
 let state = null;
 let mode = 'home';
@@ -37,11 +40,14 @@ function switchMode(next, { silent = false } = {}) {
   const changed = next !== mode;
   mode = next;
 
-  for (const m of MODES) setHidden($(`view-${m}`), m !== mode);
+  const activeView = mode === 'mapFull' ? 'map' : mode;
+  for (const m of VIEW_IDS) setHidden($(`view-${m}`), m !== activeView);
   $('app-shell').classList.toggle('mode-settings-active', mode === 'settings');
-  setDockActiveMode(mode);
+  $('app-shell').classList.toggle('mode-map-full', mode === 'mapFull');
+  $('view-map')?.classList.toggle('map-full-active', mode === 'mapFull');
+  setDockActiveMode(activeView);
   setMapMode(mode);
-  setBackgroundMode(mode);
+  setBackgroundMode(activeView);
   setSettingsVisible(mode === 'settings');
 
   if (changed && !silent) sendCommand('ui.mode', { mode });
@@ -162,12 +168,16 @@ function onState(next) {
   setBackgroundSpeed(next.telemetry.speedKmh);
   surfaceAlerts(next.telemetry.alerts);
 
-  updateMapState(next.map, nowMs());
+  updateMapState(next.map, nowMs(), {
+    mapTheme: next.settings?.mapTheme || 'AUTO'
+  });
   updateMusic(next);
   updateDock(next);
   updateCopilot(next);
   updateNotification(next.notification);
   updateSettings(next);
+  updateCalendarCard(next, nowMs());
+  updateWeatherCard(next.weather);
 
   if (firstState) document.documentElement.dataset.ready = '1';
 }
@@ -221,6 +231,17 @@ async function boot() {
   initDock({ switchMode: (m) => switchMode(m) });
   initCopilot();
   initSettings({ onBack: () => switchMode('home'), onAccentPick: pickAccent });
+  initCalendarCard();
+  initWeatherCard();
+
+  $('clock-date')?.addEventListener('click', () => {
+    closeWeatherCard();
+    openCalendarCard();
+  });
+  $('weather-box')?.addEventListener('click', () => {
+    closeCalendarCard();
+    openWeatherCard();
+  });
 
   switchMode('home', { silent: true });
   renderClock();
@@ -228,7 +249,11 @@ async function boot() {
 
   // Foco no campo ao abrir o modo correspondente via teclado/ação direta
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && mode !== 'home') switchMode('home');
+    if (e.key === 'Escape') {
+      closeCalendarCard();
+      closeWeatherCard();
+      if (mode !== 'home') switchMode('home');
+    }
   });
 
   signalReady();

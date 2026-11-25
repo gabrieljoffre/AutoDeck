@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel.setSpotifyAuthRequester { launchSpotifyAuth() }
+        viewModel.setCalendarPermissionRequester { requestCalendarPermission() }
         enableEdgeToEdge()
         runCatching { HeadUnitForegroundService.start(this) }
         applyImmersiveFullscreen()
@@ -198,6 +199,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         viewModel.setSpotifyAuthRequester(null)
+        viewModel.setCalendarPermissionRequester(null)
         super.onDestroy()
     }
 
@@ -256,11 +258,22 @@ class MainActivity : ComponentActivity() {
         if (!hasPermission(Manifest.permission.RECORD_AUDIO)) {
             missing += Manifest.permission.RECORD_AUDIO
         }
+        if (!hasPermission(Manifest.permission.READ_CALENDAR)) {
+            missing += Manifest.permission.READ_CALENDAR
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
             missing += Manifest.permission.POST_NOTIFICATIONS
         }
         if (missing.isNotEmpty()) {
             permissionLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    private fun requestCalendarPermission() {
+        if (!hasPermission(Manifest.permission.READ_CALENDAR)) {
+            runCatching { permissionLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR)) }
+        } else {
+            viewModel.onPermissionsUpdated()
         }
     }
 

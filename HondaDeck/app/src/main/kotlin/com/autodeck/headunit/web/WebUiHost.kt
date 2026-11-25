@@ -47,6 +47,7 @@ fun WebUiHost(
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(context))
             .addPathHandler("/cover/", runtime.tileRouter.coverHandler)
+            .addPathHandler("/tiles/light/", runtime.tileRouter.lightTilesHandler)
             .addPathHandler("/tiles/", runtime.tileRouter.tilesHandler)
             .addPathHandler("/labels/", runtime.tileRouter.labelsHandler)
             .build()

@@ -36,6 +36,8 @@ android {
         // Chave padrão do Copilot embutida no APK: o tablet já sai configurado.
         // Uma chave digitada nas Configurações do app tem prioridade.
         buildConfigField("String", "GEMINI_API_KEY", "\"${localKey("GEMINI_API_KEY")}\"")
+        // Chave opcional do Google Maps JavaScript API (quando vazia, usa Esri + Photon sem chave).
+        buildConfigField("String", "MAPS_JS_API_KEY", "\"${localKey("MAPS_JS_API_KEY")}\"")
 
         manifestPlaceholders["redirectSchemeName"] = "hondadeck"
         manifestPlaceholders["redirectHostName"] = "spotify-callback"

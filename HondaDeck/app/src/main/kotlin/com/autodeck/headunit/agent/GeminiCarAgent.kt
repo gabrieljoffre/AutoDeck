@@ -94,6 +94,10 @@ interface CarAgentHostBridge {
     /** Resumo do clima atual e previsão (null enquanto não houver GPS/internet). */
     fun getWeatherSummary(): String? = null
 
+    /** Resumo da agenda do usuário para hoje (dayOffset=0) ou amanhã (dayOffset=1). */
+    fun getCalendarAgendaSummary(dayOffset: Int = 0): String =
+        "Agenda indisponível no momento."
+
     /** Registra um abastecimento e devolve a frase de confirmação para falar. */
     fun logRefuelFromAgent(liters: Double, pricePerLiter: Double?, odometerKm: Double?, fullTank: Boolean): String =
         "Diário de abastecimento indisponível."
@@ -116,6 +120,12 @@ interface CarAgentHostBridge {
 
     /** Busca lugares para retornar ao tool-calling do Gemini. */
     suspend fun searchPlacesForTool(query: String): String = searchPlacesOnMap(query)
+
+    /** Altera o tema visual do mapa ("AUTO", "LIGHT" ou "DARK"). */
+    fun setMapTheme(theme: String): String = "Tema do mapa: $theme"
+
+    /** Abre o mapa em modo tela cheia (`mapFull`). */
+    fun openMapFullScreen(): String = navigateTo(null, null, false)
 
     /** Busca música na Spotify Web API e toca pelo App Remote (ou fallback). */
     suspend fun searchAndPlayMusic(query: String): String = controlMusic("SEARCH", query)
@@ -686,6 +696,11 @@ class GeminiCarAgent(
                 host.searchPlacesForTool(q)
             }
             "dados_do_carro" -> host.buildCarReport()
+            "minha_agenda" -> {
+                val dia = args?.optStrictString("dia")?.trim()?.lowercase().orEmpty()
+                val offset = if (dia.contains("amanh")) 1 else 0
+                host.getCalendarAgendaSummary(offset)
+            }
             else -> "Ferramenta desconhecida: $name"
         }
     }
@@ -977,6 +992,21 @@ class GeminiCarAgent(
                 AgentReplyResult("Abrindo o mapa.", badge, isOffline = true)
             }
 
+            CopilotIntent.ExpandMapFull -> {
+                val badge = host.openMapFullScreen()
+                AgentReplyResult("Abrindo o mapa em tela cheia.", badge, isOffline = true)
+            }
+
+            is CopilotIntent.SetMapTheme -> {
+                val badge = host.setMapTheme(intent.theme)
+                val label = when (intent.theme) {
+                    "LIGHT" -> "claro"
+                    "DARK" -> "escuro"
+                    else -> "automático"
+                }
+                AgentReplyResult("Mapa alterado para o modo $label.", badge, isOffline = true)
+            }
+
             CopilotIntent.OpenSpotify -> {
                 val badge = host.controlMusic("OPEN_SPOTIFY")
                 AgentReplyResult("Abrindo o Spotify no painel.", badge, isOffline = true)
@@ -1038,6 +1068,14 @@ class GeminiCarAgent(
                 AgentReplyResult(
                     summary ?: "Ainda não tenho o clima. Preciso de GPS e internet do celular.",
                     "Clima",
+                    isOffline = true
+                )
+            }
+
+            is CopilotIntent.CalendarAgenda -> {
+                AgentReplyResult(
+                    host.getCalendarAgendaSummary(intent.dayOffset),
+                    "Agenda",
                     isOffline = true
                 )
             }

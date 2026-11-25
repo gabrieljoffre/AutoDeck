@@ -57,9 +57,12 @@ sealed interface CopilotIntent {
     data object MusicPlay : CopilotIntent
     data object OpenSpotify : CopilotIntent
     data object OpenMap : CopilotIntent
+    data object ExpandMapFull : CopilotIntent
+    data class SetMapTheme(val theme: String) : CopilotIntent
     data class ReplyWhatsApp(val text: String) : CopilotIntent
     data object ReadWhatsApp : CopilotIntent
     data object Weather : CopilotIntent
+    data class CalendarAgenda(val dayOffset: Int = 0) : CopilotIntent
     data object Report : CopilotIntent
     data class LogFuel(val raw: String) : CopilotIntent
     data object FuelSummary : CopilotIntent
@@ -136,6 +139,18 @@ object CopilotIntentParser {
     )
 
     // Mapa e navegação
+    private val MAP_FULL_REGEX = Regex(
+        """\b(?:aumentar|aumenta|aumente|expandir|expande|maximizar|maximiza|ampliar|amplia)\s+(?:o\s+)?mapa\b|\bmapa\s+(?:em\s+)?tela\s+cheia\b|\btela\s+cheia\s+(?:no\s+|do\s+)?mapa\b"""
+    )
+    private val MAP_THEME_LIGHT_REGEX = Regex(
+        """\b(?:mapa|tema\s+do\s+mapa|modo\s+do\s+mapa)\s+(?:no\s+|em\s+|para\s+)?(?:modo\s+|tema\s+)?(?:claro|dia|diurno)\b|\b(?:colocar|coloca|coloque|mudar|muda|mude|deixar|deixa|deixe|ativar|ativa|ative|trocar|troca)\s+(?:o\s+)?(?:mapa|tema\s+do\s+mapa)\s+(?:para\s+|pro\s+|no\s+|em\s+)?(?:modo\s+|tema\s+)?(?:claro|dia|diurno)\b|\b(?:modo|tema)\s+claro\s+(?:no|do)\s+mapa\b"""
+    )
+    private val MAP_THEME_DARK_REGEX = Regex(
+        """\b(?:mapa|tema\s+do\s+mapa|modo\s+do\s+mapa)\s+(?:no\s+|em\s+|para\s+)?(?:modo\s+|tema\s+)?(?:escuro|noite|noturno)\b|\b(?:colocar|coloca|coloque|mudar|muda|mude|deixar|deixa|deixe|ativar|ativa|ative|trocar|troca)\s+(?:o\s+)?(?:mapa|tema\s+do\s+mapa)\s+(?:para\s+|pro\s+|no\s+|em\s+)?(?:modo\s+|tema\s+)?(?:escuro|noite|noturno)\b|\b(?:modo|tema)\s+(?:escuro|noturno)\s+(?:no|do)\s+mapa\b"""
+    )
+    private val MAP_THEME_AUTO_REGEX = Regex(
+        """\b(?:mapa|tema\s+do\s+mapa|modo\s+do\s+mapa)\s+(?:no\s+|em\s+|para\s+)?(?:modo\s+|tema\s+)?automatico\b|\b(?:colocar|coloca|coloque|mudar|muda|mude|deixar|deixa|deixe|ativar|ativa|ative|trocar|troca)\s+(?:o\s+)?(?:mapa|tema\s+do\s+mapa)\s+(?:para\s+|pro\s+|no\s+|em\s+)?(?:modo\s+|tema\s+)?automatico\b|\b(?:modo|tema)\s+automatico\s+(?:no|do)\s+mapa\b"""
+    )
     private val OPEN_MAP_EXACT = Regex(
         """^(?:(?:abrir|abre|abra|mostrar|mostra|mostre|ver|ir\s+para\s+o)\s+(?:o\s+)?)?(?:mapa|maps|google\s+maps|tela\s+de\s+mapa|navegacao)$"""
     )
@@ -225,6 +240,11 @@ object CopilotIntentParser {
         """\b(?:clima|chuva|chover|chovendo|garoa|tempestade|nublado|ensolarado|previsao\s+do\s+tempo)\b|\b(?:como\s+esta\s+o\s+tempo|qual\s+o\s+tempo(?:\s+hoje|\s+agora|\s+la\s+fora)?|tempo\s+(?:la\s+fora|hoje|agora|em\s+\w+))\b|\btemperatura\s+(?:la\s+fora|externa|ambiente|hoje|agora|na\s+rua|em\s+\w+)\b|\bla\s+fora\b"""
     )
 
+    private val CALENDAR_AGENDA_REGEX = Regex(
+        """\b(?:minha\s+agenda|agenda(?:\s+de\s+(?:hoje|amanha))?|meus\s+compromissos|compromissos(?:\s+(?:de\s+)?(?:hoje|amanha))?|o\s+que\s+(?:eu\s+)?tenho\s+(?:na\s+agenda\s+)?(?:hoje|amanha)|eventos\s+(?:de\s+)?(?:hoje|amanha)|tenho\s+(?:algum\s+)?(?:compromisso|reuniao|evento)\s*(?:hoje|amanha)?)\b"""
+    )
+    private val CALENDAR_TOMORROW_REGEX = Regex("""\bamanha\b""")
+
     private val COOLANT_REGEX = Regex("""\b(?:temperatura|esquentando|superaquecendo|arrefecimento|radiador|agua\s+do\s+motor)\b""")
     private val VOLTAGE_REGEX = Regex("""\b(?:voltagem|bateria|alternador|tensao)\b""")
     private val CONSUMPTION_REGEX = Regex("""\b(?:consumo|combustivel|autonomia|tanque|km\s+por\s+litro|quilometros\s+por\s+litro)\b""")
@@ -296,9 +316,21 @@ object CopilotIntentParser {
             return CopilotIntent.Navigate(dest = normalize(fav.name).ifEmpty { q }, favorite = fav)
         }
 
-        // 6. Abrir Spotify ou Mapa (sem destino) antes do genérico "ir para ..."
+        // 6. Abrir Spotify, tema do mapa, mapa em tela cheia ou Mapa (sem destino)
         if (OPEN_SPOTIFY_REGEX.containsMatchIn(q)) {
             return CopilotIntent.OpenSpotify
+        }
+        if (MAP_THEME_LIGHT_REGEX.containsMatchIn(q)) {
+            return CopilotIntent.SetMapTheme("LIGHT")
+        }
+        if (MAP_THEME_DARK_REGEX.containsMatchIn(q)) {
+            return CopilotIntent.SetMapTheme("DARK")
+        }
+        if (MAP_THEME_AUTO_REGEX.containsMatchIn(q)) {
+            return CopilotIntent.SetMapTheme("AUTO")
+        }
+        if (MAP_FULL_REGEX.containsMatchIn(q)) {
+            return CopilotIntent.ExpandMapFull
         }
         if (OPEN_MAP_EXACT.matches(q)) {
             return CopilotIntent.OpenMap
@@ -393,6 +425,12 @@ object CopilotIntentParser {
         // 13. Clima (antes de temperatura do motor!)
         if (WEATHER_REGEX.containsMatchIn(q)) {
             return CopilotIntent.Weather
+        }
+
+        // 13b. Agenda / compromissos de hoje ou amanhã
+        if (CALENDAR_AGENDA_REGEX.containsMatchIn(q)) {
+            val offset = if (CALENDAR_TOMORROW_REGEX.containsMatchIn(q)) 1 else 0
+            return CopilotIntent.CalendarAgenda(offset)
         }
 
         // 14. Telemetria específica

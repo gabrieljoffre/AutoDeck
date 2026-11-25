@@ -104,6 +104,8 @@ export const DEFAULT_STATE = {
     }
   },
   map: {
+    provider: 'esri',
+    jsKey: '',
     lat: -16.3281,
     lon: -48.9534,
     bearing: 0,
@@ -159,6 +161,7 @@ export const DEFAULT_STATE = {
   settings: {
     accentOptions: ['#22D3EE', '#A3E635', '#FB923C', '#A78BFA', '#F472B6'],
     introMode: 'ANIMATION',
+    mapTheme: 'AUTO',
     spotifyShowPlaylists: true,
     spotifyShowRecent: true,
     geminiKeySet: false,

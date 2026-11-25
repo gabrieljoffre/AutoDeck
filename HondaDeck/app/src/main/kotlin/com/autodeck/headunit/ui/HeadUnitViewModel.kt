@@ -33,6 +33,7 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
     fun connectSpotify(activityContext: Context) = runtime.connectSpotify(activityContext)
     fun onSpotifyToken(token: String, expiresInSec: Int) = runtime.onSpotifyToken(token, expiresInSec)
     fun setSpotifyAuthRequester(requester: (() -> Unit)?) = runtime.setSpotifyAuthRequester(requester)
+    fun setCalendarPermissionRequester(requester: (() -> Unit)?) = runtime.setCalendarPermissionRequester(requester)
     fun onSpotifyAuthorized(activityContext: Context) = runtime.onSpotifyAuthorized(activityContext)
     fun onSpotifyAuthFailed(reason: String) = runtime.onSpotifyAuthFailed(reason)
 

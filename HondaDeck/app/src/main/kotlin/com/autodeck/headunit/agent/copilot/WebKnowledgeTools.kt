@@ -334,6 +334,19 @@ class WebKnowledgeTools(
                   "type": "OBJECT",
                   "properties": {}
                 }
+              },
+              {
+                "name": "minha_agenda",
+                "description": "Consulta os compromissos e eventos da agenda do usuário para hoje ou amanhã, incluindo feriados.",
+                "parameters": {
+                  "type": "OBJECT",
+                  "properties": {
+                    "dia": {
+                      "type": "STRING",
+                      "description": "Dia desejado: 'hoje' (padrão) ou 'amanha'."
+                    }
+                  }
+                }
               }
             ]
         """.trimIndent()

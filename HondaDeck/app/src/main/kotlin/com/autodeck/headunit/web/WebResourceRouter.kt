@@ -31,6 +31,7 @@ import kotlin.math.tan
  * - `/cover/current.jpg`: capa atual da música em JPEG (404 se não houver).
  * - `/tiles/{z}/{y}/{x}.png`: mapa base Esri Dark Gray com cache em disco (`filesDir/tiles`, LRU ~300 MB).
  * - `/labels/{z}/{y}/{x}.png`: camada de nomes Esri Dark Gray com cache em disco.
+ * - `/tiles/light/{z}/{y}/{x}.png`: mapa claro Esri World Street Map (visual próximo ao Google Maps) com cache em disco.
  */
 class WebResourceRouter(
     context: Context,
@@ -51,6 +52,10 @@ class WebResourceRouter(
 
     val tilesHandler = WebViewAssetLoader.PathHandler { path ->
         handleTile(layer = LAYER_BASE, path = path)
+    }
+
+    val lightTilesHandler = WebViewAssetLoader.PathHandler { path ->
+        handleTile(layer = LAYER_LIGHT, path = path)
     }
 
     val labelsHandler = WebViewAssetLoader.PathHandler { path ->
@@ -127,8 +132,7 @@ class WebResourceRouter(
         File(File(File(File(tilesRootDir, layer), z.toString()), y.toString()), "$x.png")
 
     private fun fetchAndCacheTile(layer: String, z: Int, y: Int, x: Int): ByteArray? {
-        val baseUrl = if (layer == LAYER_LABELS) ESRI_LABELS_URL else ESRI_BASE_URL
-        val urlStr = "$baseUrl$z/$y/$x"
+        val urlStr = tileUrlForLayer(layer, z, y, x)
         val bytes = runCatching {
             val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 6_000
@@ -180,6 +184,7 @@ class WebResourceRouter(
                 for (x in range.minX..range.maxX) {
                     tasks += TileTask(LAYER_BASE, z, y, x)
                     tasks += TileTask(LAYER_LABELS, z, y, x)
+                    tasks += TileTask(LAYER_LIGHT, z, y, x)
                 }
             }
         }
@@ -269,12 +274,24 @@ class WebResourceRouter(
     companion object {
         private const val TAG = "WebResourceRouter"
         private const val USER_AGENT = "HondaDeck/3.0 (Android)"
-        private const val LAYER_BASE = "base"
-        private const val LAYER_LABELS = "labels"
+        const val LAYER_BASE = "base"
+        const val LAYER_LABELS = "labels"
+        const val LAYER_LIGHT = "light"
         private const val ESRI_BASE_URL =
             "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/"
         private const val ESRI_LABELS_URL =
             "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/"
+        private const val ESRI_LIGHT_URL =
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/"
+
+        fun tileUrlForLayer(layer: String, z: Int, y: Int, x: Int): String {
+            val baseUrl = when (layer) {
+                LAYER_LABELS -> ESRI_LABELS_URL
+                LAYER_LIGHT -> ESRI_LIGHT_URL
+                else -> ESRI_BASE_URL
+            }
+            return "$baseUrl$z/$y/$x"
+        }
 
         private const val MAX_CACHE_BYTES = 300L * 1024L * 1024L
         private const val TRIM_TARGET_BYTES = 260L * 1024L * 1024L

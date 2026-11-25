@@ -84,6 +84,7 @@ data class HeadUnitConfig(
     // Interface Web (Órbita)
     val accentColor: String = "#22D3EE",
     val introMode: String = "ANIMATION",
+    val mapTheme: String = "AUTO",
     val spotifyShowPlaylists: Boolean = true,
     val spotifyShowRecent: Boolean = true
 )
@@ -179,6 +180,11 @@ class HeadUnitPreferences(context: Context) {
                 "VIDEO" -> "VIDEO"
                 else -> "ANIMATION"
             },
+            mapTheme = when ((prefs.getString(KEY_MAP_THEME, "AUTO") ?: "AUTO").uppercase()) {
+                "LIGHT" -> "LIGHT"
+                "DARK" -> "DARK"
+                else -> "AUTO"
+            },
             spotifyShowPlaylists = prefs.getBoolean(KEY_SPOTIFY_SHOW_PLAYLISTS, true),
             spotifyShowRecent = prefs.getBoolean(KEY_SPOTIFY_SHOW_RECENT, true)
         )
@@ -270,6 +276,7 @@ class HeadUnitPreferences(context: Context) {
             putFloat(KEY_TRIP_FUEL_L, config.tripFuelLiters.toFloat())
             putString(KEY_ACCENT_COLOR, config.accentColor)
             putString(KEY_INTRO_MODE, config.introMode)
+            putString(KEY_MAP_THEME, config.mapTheme)
             putBoolean(KEY_SPOTIFY_SHOW_PLAYLISTS, config.spotifyShowPlaylists)
             putBoolean(KEY_SPOTIFY_SHOW_RECENT, config.spotifyShowRecent)
         }
@@ -351,6 +358,7 @@ class HeadUnitPreferences(context: Context) {
         const val KEY_VIRTUAL_TANK_REM_L = "virtual_tank_rem_l"
         const val KEY_ACCENT_COLOR = "accent_color"
         const val KEY_INTRO_MODE = "intro_mode"
+        const val KEY_MAP_THEME = "map_theme"
         const val KEY_SPOTIFY_SHOW_PLAYLISTS = "spotify_show_playlists"
         const val KEY_SPOTIFY_SHOW_RECENT = "spotify_show_recent"
     }

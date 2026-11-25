@@ -165,9 +165,20 @@ function buildAppearance(root) {
   const introAnim = el('button', { className: 'btn-outline', type: 'button', onClick: () => sendCommand('settings.set', { key: 'introMode', value: 'ANIMATION' }) }, 'Animação');
   const introVideo = el('button', { className: 'btn-outline', type: 'button', onClick: () => sendCommand('settings.set', { key: 'introMode', value: 'VIDEO' }) }, 'Vídeo');
 
+  const mapThemeAuto = el('button', { className: 'btn-outline', type: 'button', 'data-test': 'map-theme-auto', onClick: () => sendCommand('settings.set', { key: 'mapTheme', value: 'AUTO' }) }, 'Automático');
+  const mapThemeLight = el('button', { className: 'btn-outline', type: 'button', 'data-test': 'map-theme-light', onClick: () => sendCommand('settings.set', { key: 'mapTheme', value: 'LIGHT' }) }, 'Claro');
+  const mapThemeDark = el('button', { className: 'btn-outline', type: 'button', 'data-test': 'map-theme-dark', onClick: () => sendCommand('settings.set', { key: 'mapTheme', value: 'DARK' }) }, 'Escuro');
+
   root.append(
-    header('Aparência', 'Cor de destaque e abertura do painel. A troca de cor vale na hora para todo o painel.'),
+    header('Aparência', 'Cor de destaque, tema do mapa e abertura do painel. As alterações valem na hora.'),
     el('div', { className: 'settings-card-block' }, kicker('COR DE DESTAQUE'), swatches),
+    el(
+      'div',
+      { className: 'settings-card-block' },
+      kicker('TEMA DO MAPA'),
+      el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, mapThemeAuto, mapThemeLight, mapThemeDark),
+      el('span', { className: 'settings-sub' }, 'No modo automático o mapa fica claro de dia (6h–18h) e escuro à noite.')
+    ),
     el(
       'div',
       { className: 'settings-card-block' },
@@ -198,6 +209,12 @@ function buildAppearance(root) {
     const video = String(s.settings.introMode).toUpperCase() === 'VIDEO';
     introAnim.classList.toggle('active', !video);
     introVideo.classList.toggle('active', video);
+  });
+  reg(tabUpdaters, (s) => String(s.settings.mapTheme || 'AUTO').toUpperCase(), (s) => {
+    const t = String(s.settings.mapTheme || 'AUTO').toUpperCase();
+    mapThemeAuto.classList.toggle('active', t !== 'LIGHT' && t !== 'DARK');
+    mapThemeLight.classList.toggle('active', t === 'LIGHT');
+    mapThemeDark.classList.toggle('active', t === 'DARK');
   });
 }
 

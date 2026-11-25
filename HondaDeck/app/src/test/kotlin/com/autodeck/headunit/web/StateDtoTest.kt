@@ -47,7 +47,7 @@ class StateDtoTest {
         assertEquals("HONDA", json.getString("brand"))
 
         val expectedTopLevelKeys = listOf(
-            "v", "accent", "brand", "clock", "weather", "status", "telemetry",
+            "v", "accent", "brand", "clock", "weather", "calendar", "status", "telemetry",
             "media", "spotify", "map", "copilot", "audio", "notification",
             "vehicle", "settings"
         )
@@ -220,5 +220,19 @@ class StateDtoTest {
         assertEquals(63.5, fastTel.getDouble("speedKmh"), 0.01)
         assertEquals("3", fastTel.getString("gear"))
         assertFalse(fastTel.has("voltage"))
+    }
+
+    @Test
+    fun `map provider e jsKey alternam entre esri e google e exporta mapTheme`() {
+        val ui = HeadUnitUiState(config = HeadUnitConfig(mapTheme = "LIGHT"))
+
+        val esriJson = StateDto.buildStateJson(ui, WebExtras(mapsJsApiKey = ""))
+        assertEquals("esri", esriJson.getJSONObject("map").getString("provider"))
+        assertEquals("", esriJson.getJSONObject("map").getString("jsKey"))
+        assertEquals("LIGHT", esriJson.getJSONObject("settings").getString("mapTheme"))
+
+        val googleJson = StateDto.buildStateJson(ui, WebExtras(mapsJsApiKey = "AIzaTestKey123"))
+        assertEquals("google", googleJson.getJSONObject("map").getString("provider"))
+        assertEquals("AIzaTestKey123", googleJson.getJSONObject("map").getString("jsKey"))
     }
 }
