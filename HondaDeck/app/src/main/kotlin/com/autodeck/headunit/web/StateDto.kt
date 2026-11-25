@@ -149,6 +149,7 @@ object StateDto {
             put("repeat", media.repeatMode)
             put("coverUrl", if (media.hasCover) "/cover/current.jpg?t=${media.coverVersion}" else "")
             put("liked", media.liked)
+            put("remoteDevice", media.remoteDevice)
         }
 
         val playlistsSource = ui.spotifyAllPlaylists.ifEmpty { ui.spotifyHondaPlaylists }

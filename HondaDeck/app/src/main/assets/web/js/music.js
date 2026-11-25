@@ -131,7 +131,7 @@ function gateInfo(status) {
     case 'CONNECTING':
       return { title: 'Conectando ao Spotify…', sub: 'Aguarde um instante.', btn: null, cmd: null };
     case 'FAILED':
-      return { title: 'Spotify indisponível', sub: 'Não foi possível conectar. Abra o aplicativo Spotify e tente de novo.', btn: 'Abrir Spotify', cmd: 'music.openApp' };
+      return { title: 'Spotify desconectado', sub: 'Não consegui falar com o Spotify do tablet. Tentando de novo sozinho; se preferir, toque para reconectar (abra o app Spotify e confira o login).', btn: 'Reconectar Spotify', cmd: 'music.reconnect' };
     case 'NOT_CONFIGURED':
       return { title: 'Spotify não configurado', sub: 'As chaves do Spotify ainda não foram configuradas neste aparelho.', btn: null, cmd: null };
     default:
@@ -660,6 +660,7 @@ export function initMusic({ switchMode }) {
       sendCommand('music.search', { query: fullInput.value.trim() });
     }
   });
+  $('music-transfer-btn')?.addEventListener('click', () => sendCommand('music.transferHere'));
   $('full-music-clear').addEventListener('click', () => {
     clearFullSearch();
     debouncedMusicSearch.cancel();
@@ -720,6 +721,12 @@ export function updateMusic(state) {
   const liked = Boolean(media.liked);
   $('home-like-btn')?.classList.toggle('active', liked);
   $('full-like-btn').classList.toggle('active', liked);
+  const remoteBtn = $('music-transfer-btn');
+  if (remoteBtn) {
+    const remote = String(media.remoteDevice || '').trim();
+    setHidden(remoteBtn, !remote || !hasTrack);
+    setText(remoteBtn, remote ? `Tocando em ${remote} · Tocar no tablet` : '');
+  }
   for (const heartId of ['home-like-svg', 'full-like-svg']) {
     const heart = $(heartId);
     if (heart) heart.setAttribute('fill', liked ? 'currentColor' : 'none');

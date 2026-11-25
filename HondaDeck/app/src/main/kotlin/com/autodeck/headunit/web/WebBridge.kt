@@ -177,6 +177,8 @@ class WebBridge(
                 runtime.openPreferredMusicApp()
                 runtime.connectSpotify(activityContext)
             }
+            "music.reconnect" -> runtime.reconnectSpotify(activityContext)
+            "music.transferHere" -> runtime.spotifyTransferHere()
 
             "map.search" -> {
                 runtime.searchPlaces(args.optString("query"))
@@ -470,6 +472,8 @@ class WebBridge(
             "music.search",
             "music.authorize",
             "music.openApp",
+            "music.reconnect",
+            "music.transferHere",
             "map.search",
             "map.route",
             "map.stopRoute",

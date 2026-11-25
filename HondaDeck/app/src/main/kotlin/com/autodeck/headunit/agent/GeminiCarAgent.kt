@@ -355,6 +355,9 @@ class GeminiCarAgent(
     private var activeCommandMode = false
     private var continuousSession = false
     private var fallbackOneShotAsk = false
+    private var askFollowUpsLeft = 0
+    private var askFollowUpListening = false
+    private var followUpTimeoutJob: Job? = null
     private var restartWakeJob: Job? = null
     private var liveSession: GeminiLiveSession? = null
     @Volatile
@@ -419,6 +422,21 @@ class GeminiCarAgent(
                         scope.launch(mainDispatcher) {
                             val wasAskOneShot = fallbackOneShotAsk
                             fallbackOneShotAsk = false
+                            if (wasAskOneShot &&
+                                askFollowUpsLeft > 0 &&
+                                isForeground &&
+                                !isLiveBusy() &&
+                                _state.value.copilotMode == "ask"
+                            ) {
+                                // Conversa natural no fallback: após responder, escuta ~6 s por uma pergunta de seguimento.
+                                askFollowUpsLeft--
+                                _state.update { it.copy(isSpeaking = false, audioLevel = 0f, livePhase = "listening") }
+                                delay(350L)
+                                if (_state.value.copilotMode == "ask" && !isLiveBusy()) {
+                                    beginAskFollowUpListening()
+                                    return@launch
+                                }
+                            }
                             _state.update { cur ->
                                 cur.copy(
                                     isSpeaking = false,
@@ -441,6 +459,7 @@ class GeminiCarAgent(
                     override fun onError(utteranceId: String?) {
                         val wasAskOneShot = fallbackOneShotAsk
                         fallbackOneShotAsk = false
+                        askFollowUpsLeft = 0
                         _state.update { cur ->
                             cur.copy(
                                 isSpeaking = false,
@@ -498,7 +517,8 @@ class GeminiCarAgent(
 
     /** Inicia modo Live contínuo ("Conversar") via Gemini Live API, com fallback automático. */
     fun startLiveConversation(initialPrompt: String? = null) {
-        startLiveOrFallback(LiveSessionMode.LIVE, initialPrompt)
+        // Interface única: o antigo "Conversar" foi unificado no "Peça ao Gemini" (sessão one-shot com seguimento).
+        startLiveOrFallback(LiveSessionMode.ASK, initialPrompt)
     }
 
     /** Inicia modo rápido one-shot ("Peça ao Gemini"), com fallback automático. */
@@ -565,7 +585,12 @@ class GeminiCarAgent(
                 stopRecognizerNow()
                 runCatching { tts?.stop() }
             }
-            startFallbackVoice(mode, "Usando modo local/texto…")
+            val directPrompt = initialPrompt?.trim().orEmpty()
+            if (directPrompt.isNotEmpty()) {
+                runPromptFallback(mode, directPrompt)
+            } else {
+                startFallbackVoice(mode, "Usando modo local/texto…")
+            }
             return
         }
 
@@ -639,9 +664,15 @@ class GeminiCarAgent(
 
                 override fun onFallbackRequired(reason: String, mode: LiveSessionMode) {
                     Log.w("GeminiCarAgent", "Gemini Live indisponível ($reason); alternando para fluxo texto/offline.")
+                    // Se a Live já transcreveu a pergunta (ou veio por texto), responde por Gemini texto sem pedir de novo.
+                    val pending = liveSession?.pendingUserTranscript().orEmpty().ifBlank { initialPrompt?.trim().orEmpty() }
                     liveSession = null
                     liveSessionActive = false
-                    startFallbackVoice(mode, "Gemini Live indisponível · usando fallback")
+                    if (pending.isNotBlank()) {
+                        runPromptFallback(mode, pending)
+                    } else {
+                        startFallbackVoice(mode, "Gemini Live indisponível · usando fallback")
+                    }
                 }
 
                 override fun onSessionEnded(
@@ -719,8 +750,63 @@ class GeminiCarAgent(
         }
     }
 
+    /** Fallback sem Live com a frase já conhecida: executa pelo Gemini texto/local com as mesmas ferramentas e fala a resposta. */
+    private fun runPromptFallback(mode: LiveSessionMode, prompt: String) {
+        fallbackOneShotAsk = (mode == LiveSessionMode.ASK)
+        askFollowUpsLeft = if (mode == LiveSessionMode.ASK) ASK_FALLBACK_FOLLOWUPS else 0
+        _state.update {
+            it.copy(
+                copilotMode = mode.wireValue,
+                livePhase = "thinking",
+                isListening = false,
+                isThinking = true,
+                audioLevel = 0f,
+                userText = prompt,
+                replyText = "",
+                statusText = "Gemini Live indisponível · usando texto"
+            )
+        }
+        sendUserPrompt(prompt, speakReply = true)
+    }
+
+    /** Abre uma janela curta de escuta (~6 s) para a pergunta de seguimento do Peça ao Gemini no fallback por voz. */
+    private fun beginAskFollowUpListening() {
+        askFollowUpListening = true
+        fallbackOneShotAsk = true
+        followUpTimeoutJob?.cancel()
+        startDirectVoiceCommand(fromContinuous = true, overrideContinuous = false, copilotModeTag = "ask")
+        followUpTimeoutJob = scope.launch(mainDispatcher) {
+            delay(ASK_FALLBACK_FOLLOWUP_WINDOW_MS)
+            if (askFollowUpListening && _state.value.partialTranscript.isBlank()) {
+                closeAskFollowUpSilently()
+            }
+        }
+    }
+
+    private fun closeAskFollowUpSilently() {
+        askFollowUpListening = false
+        fallbackOneShotAsk = false
+        askFollowUpsLeft = 0
+        followUpTimeoutJob?.cancel()
+        activeCommandMode = false
+        stopRecognizerNow()
+        _state.update {
+            it.copy(
+                isListening = false,
+                copilotMode = "idle",
+                livePhase = "idle",
+                audioLevel = 0f,
+                partialTranscript = "",
+                statusText = "Pronto."
+            )
+        }
+        val cfg = host.getConfig()
+        if (cfg.wakeWordEnabled && isForeground && !isLiveBusy()) scheduleWakeWordRestart(600L)
+    }
+
     private fun startFallbackVoice(mode: LiveSessionMode, statusHint: String) {
         fallbackOneShotAsk = (mode == LiveSessionMode.ASK)
+        askFollowUpsLeft = if (mode == LiveSessionMode.ASK) ASK_FALLBACK_FOLLOWUPS else 0
         _state.update {
             it.copy(
                 copilotMode = mode.wireValue,
@@ -764,6 +850,9 @@ class GeminiCarAgent(
         liveSessionActive = false
         continuousSession = false
         fallbackOneShotAsk = false
+        askFollowUpListening = false
+        askFollowUpsLeft = 0
+        followUpTimeoutJob?.cancel()
         activeCommandMode = false
         wakeLoopActive = false
         restartWakeJob?.cancel()
@@ -950,12 +1039,12 @@ class GeminiCarAgent(
                     if (containsWakeWord(spoken, cfg.wakeWordPhrase)) {
                         val afterWake = stripWakeWord(spoken, cfg.wakeWordPhrase)
                         wakeLoopActive = false
+                        // "ok honda" abre o mesmo fluxo do botão Peça ao Gemini (Live one-shot, com fallback automático)
+                        activeCommandMode = false
                         if (afterWake.length >= 3) {
-                            activeCommandMode = false
-                            continuousSession = cfg.continuousConversationEnabled
-                            sendUserPrompt(afterWake, speakReply = true)
+                            startLiveOrFallback(LiveSessionMode.ASK, afterWake)
                         } else {
-                            startDirectVoiceCommand(fromContinuous = false)
+                            startLiveOrFallback(LiveSessionMode.ASK)
                         }
                     } else if (cfg.wakeWordEnabled && isForeground && !activeCommandMode && !isLiveBusy()) {
                         scheduleWakeWordRestart(450L)
@@ -964,8 +1053,15 @@ class GeminiCarAgent(
                 }
 
                 activeCommandMode = false
+                val wasFollowUp = askFollowUpListening
+                askFollowUpListening = false
+                followUpTimeoutJob?.cancel()
                 _state.update { it.copy(isListening = false, audioLevel = 0f, partialTranscript = "") }
                 if (spoken.isBlank()) {
+                    if (wasFollowUp) {
+                        askFollowUpsLeft = 0
+                        _state.update { it.copy(statusText = "Pronto.") }
+                    }
                     continuousSession = false
                     fallbackOneShotAsk = false
                     _state.update { it.copy(copilotMode = "idle", livePhase = "idle") }
@@ -1003,6 +1099,10 @@ class GeminiCarAgent(
                 activeCommandMode = false
                 continuousSession = false
                 fallbackOneShotAsk = false
+                val wasFollowUpErr = askFollowUpListening
+                askFollowUpListening = false
+                askFollowUpsLeft = 0
+                followUpTimeoutJob?.cancel()
                 _state.update {
                     it.copy(
                         isListening = false,
@@ -1010,7 +1110,9 @@ class GeminiCarAgent(
                         livePhase = "idle",
                         audioLevel = 0f,
                         partialTranscript = "",
-                        statusText = if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+                        statusText = if (wasFollowUpErr && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                            "Pronto."
+                        } else if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                             "Não ouvi nenhuma frase."
                         } else {
                             "Erro no microfone ($error)."
@@ -2255,6 +2357,8 @@ class GeminiCarAgent(
     }
 
     private companion object {
+        const val ASK_FALLBACK_FOLLOWUPS = 3
+        const val ASK_FALLBACK_FOLLOWUP_WINDOW_MS = 7_000L
         val AFFIRMATIVE_ANSWERS = setOf(
             "sim", "s", "pode", "pode mandar", "pode enviar", "manda", "mande",
             "envia", "envie", "enviar", "confirma", "confirmo", "ok", "beleza",

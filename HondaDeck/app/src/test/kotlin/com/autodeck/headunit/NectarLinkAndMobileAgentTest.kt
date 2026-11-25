@@ -332,7 +332,7 @@ class NectarLinkAndMobileAgentTest {
 
         val ariaLabelCount = Regex("""<button\b[^>]*\baria-label="[^"]+"""").findAll(indexHtml).count()
         assertTrue("Web index.html must define aria-label on interactive buttons (found $ariaLabelCount)", ariaLabelCount >= 25)
-        assertTrue(indexHtml.contains("aria-label=\"Falar com o copiloto\""))
+        assertTrue(indexHtml.contains("aria-label=\"Peça ao Gemini\""))
         assertTrue(indexHtml.contains("aria-label=\"Tocar ou pausar\""))
         assertTrue(indexHtml.contains("aria-label=\"Silenciar ou reativar o som\""))
 

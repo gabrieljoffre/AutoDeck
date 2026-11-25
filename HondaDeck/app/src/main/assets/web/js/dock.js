@@ -81,16 +81,9 @@ export function initDock({ switchMode }) {
     btn.addEventListener('click', () => switchModeFn(btn.dataset.modeTab));
   });
 
-  document.getElementById('dock-copilot-btn').addEventListener('click', () => {
-    if (copilotMode === 'live' || copilotPhase === 'listening' || copilotPhase === 'thinking') {
-      sendCommand('copilot.live.stop');
-    } else {
-      sendCommand('copilot.live.start');
-    }
-  });
-
+  // Botão único do copiloto: toca -> já escuta; tocar de novo enquanto ativo encerra.
   document.getElementById('dock-ask-gemini-btn')?.addEventListener('click', () => {
-    if (copilotMode === 'ask') {
+    if (copilotMode !== 'idle' || copilotPhase === 'listening' || copilotPhase === 'thinking') {
       sendCommand('copilot.live.stop');
     } else {
       sendCommand('copilot.ask.voice');
@@ -178,39 +171,23 @@ export function updateDock(state) {
   }
 }
 
-/** Reflete o estado do copiloto nos botões "Conversar" e "Peça ao Gemini" do dock. */
+/** Reflete o estado do copiloto no botão único "Peça ao Gemini" do dock. */
 export function setDockCopilotPhase(phase, mode = 'idle') {
   copilotPhase = phase;
   copilotMode = mode;
-  const liveBtn = document.getElementById('dock-copilot-btn');
-  const liveLbl = document.getElementById('dock-copilot-label');
   const askBtn = document.getElementById('dock-ask-gemini-btn');
   const askLbl = document.getElementById('dock-ask-label');
 
-  const isLive = mode === 'live';
-  const isAsk = mode === 'ask';
+  // 'live' (legado) é tratado como 'ask': só existe um fluxo de voz.
+  const isAsk = mode === 'ask' || mode === 'live';
   const legacyBusy = mode === 'idle' && (phase === 'listening' || phase === 'thinking');
 
-  if (liveBtn && liveLbl) {
-    liveBtn.classList.toggle('active', isLive || legacyBusy);
-    liveBtn.classList.toggle('live-on', isLive);
-    setText(
-      liveLbl,
-      isLive
-        ? (phase === 'speaking' ? 'FALANDO' : phase === 'connecting' ? 'CONECTANDO' : 'AO VIVO')
-        : phase === 'listening'
-          ? 'OUVINDO…'
-          : phase === 'thinking'
-            ? 'PENSANDO…'
-            : 'CONVERSAR'
-    );
-  }
   if (askBtn && askLbl) {
-    askBtn.classList.toggle('active', isAsk);
+    askBtn.classList.toggle('active', isAsk || legacyBusy);
     setText(
       askLbl,
-      isAsk
-        ? (phase === 'speaking' ? 'GEMINI…' : phase === 'thinking' ? 'AÇÕES…' : 'OUVINDO…')
+      isAsk || legacyBusy
+        ? (phase === 'speaking' ? 'GEMINI…' : phase === 'thinking' ? 'AÇÕES…' : phase === 'connecting' ? 'CONECTANDO…' : 'OUVINDO…')
         : 'PEÇA AO GEMINI'
     );
   }

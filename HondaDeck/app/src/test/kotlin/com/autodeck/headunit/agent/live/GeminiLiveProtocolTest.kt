@@ -301,7 +301,7 @@ class GeminiLiveProtocolTest {
         assertTrue(instruction.contains("Anápolis-GO"))
         assertTrue(instruction.contains("Honda Civic"))
         assertTrue(instruction.contains("Motorista perguntou do consumo"))
-        assertTrue(instruction.contains("MODO RÁPIDO"))
+        assertTrue(instruction.contains("PEÇA AO GEMINI"))
         assertTrue(instruction.contains("Indo para Brasil Park Shopping"))
     }
 

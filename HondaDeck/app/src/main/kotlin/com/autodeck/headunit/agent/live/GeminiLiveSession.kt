@@ -102,6 +102,12 @@ class GeminiLiveSession(
     private val sawAnyUserSpeech = AtomicBoolean(false)
     private val sawAnyModelOutput = AtomicBoolean(false)
 
+    /** Verdadeiro quando o modelo já respondeu à última fala do usuário (zera a cada nova transcrição de entrada). */
+    private val modelRepliedToLatestUser = AtomicBoolean(false)
+
+    /** Token da janela de seguimento do "Peça ao Gemini": qualquer nova fala do usuário invalida o fechamento agendado. */
+    private val followUpToken = AtomicInteger(0)
+
     private val startedAtMs = System.currentTimeMillis()
     private val lastActivityMs = AtomicLong(startedAtMs)
     private val lastLevelEmitMs = AtomicLong(0L)
@@ -170,7 +176,11 @@ class GeminiLiveSession(
                     updateSnapshot(
                         phase = LiveSessionPhase.LISTENING,
                         level = 0f,
-                        status = if (mode == LiveSessionMode.ASK) "Ouvindo…" else "Ao vivo · pode falar.",
+                        status = if (mode == LiveSessionMode.ASK) {
+                            if (sawAnyModelOutput.get()) "Pode perguntar mais… (ouvindo)" else "Ouvindo…"
+                        } else {
+                            "Ao vivo · pode falar."
+                        },
                         force = true
                     )
                 }
@@ -178,10 +188,18 @@ class GeminiLiveSession(
 
             override fun onTurnFinished(wasInterrupted: Boolean) {
                 if (!wasInterrupted && mode == LiveSessionMode.ASK && turnDonePendingDrain.get() && !stopped.get()) {
+                    val token = followUpToken.incrementAndGet()
                     scope.launch(Dispatchers.IO) {
-                        // Pequena folga para o motorista terminar de ler o texto e o BT A2DP assentar
-                        delay(ASK_POST_REPLY_GRACE_MS)
-                        if (!stopped.get() && turnDonePendingDrain.get() && !playbackController.isModelSpeaking) {
+                        // Janela de seguimento: após a resposta o microfone continua aberto por ~6 s para uma
+                        // pergunta de continuação (conversa natural); sem fala, fecha sozinho em silêncio.
+                        delay(ASK_POST_REPLY_GRACE_MS + ASK_FOLLOWUP_WINDOW_MS)
+                        if (!stopped.get() &&
+                            followUpToken.get() == token &&
+                            turnDonePendingDrain.get() &&
+                            !toolBusy.get() &&
+                            !playbackController.isModelSpeaking
+                        ) {
+                            Log.i(TAG, "Janela de seguimento sem fala; fechando o Peça ao Gemini.")
                             stop("Pronto.")
                         }
                     }
@@ -191,6 +209,9 @@ class GeminiLiveSession(
     )
 
     fun isActive(): Boolean = running.get() && !stopped.get()
+
+    /** Última fala do usuário transcrita pela Live (usada para o fallback texto quando a Live falha sem responder). */
+    fun pendingUserTranscript(): String = synchronized(transcriptLock) { currentUserBuf.toString().trim() }
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -400,6 +421,10 @@ class GeminiLiveSession(
 
         if (!sc.inputTranscription.isNullOrBlank()) {
             sawAnyUserSpeech.set(true)
+            modelRepliedToLatestUser.set(false)
+            // nova fala do usuário (inclusive de seguimento): cancela o fechamento agendado
+            followUpToken.incrementAndGet()
+            turnDonePendingDrain.set(false)
             lastActivityMs.set(now)
             synchronized(transcriptLock) {
                 if (currentModelBuf.isNotEmpty() && !playbackController.isModelSpeaking) {
@@ -416,6 +441,7 @@ class GeminiLiveSession(
 
         if (sc.audioChunks.isNotEmpty()) {
             sawAnyModelOutput.set(true)
+            modelRepliedToLatestUser.set(true)
             lastActivityMs.set(now)
             for (chunk in sc.audioChunks) {
                 playbackController.enqueueChunk(chunk)
@@ -425,6 +451,7 @@ class GeminiLiveSession(
         val outText = sc.outputTranscription ?: sc.textParts.joinToString("").takeIf { it.isNotBlank() }
         if (!outText.isNullOrBlank()) {
             sawAnyModelOutput.set(true)
+            modelRepliedToLatestUser.set(true)
             lastActivityMs.set(now)
             synchronized(transcriptLock) {
                 appendTranscriptChunk(currentModelBuf, outText)
@@ -910,6 +937,15 @@ class GeminiLiveSession(
                         stop("Conversa encerrada após 20 s de silêncio.")
                         return@launch
                     }
+                    if (mode == LiveSessionMode.ASK &&
+                        !modelRepliedToLatestUser.get() &&
+                        pendingUserTranscript().isNotBlank() &&
+                        idleMs >= ASK_NO_REPLY_TIMEOUT_MS
+                    ) {
+                        // O usuário falou mas a Live não respondeu: cai para o fluxo texto com a frase transcrita.
+                        triggerFallback("Gemini Live sem resposta à pergunta.")
+                        return@launch
+                    }
                     if (mode == LiveSessionMode.ASK && !sawAnyUserSpeech.get() && idleMs >= ASK_NO_SPEECH_TIMEOUT_MS) {
                         stop("Não ouvi nenhuma pergunta.")
                         return@launch
@@ -1058,10 +1094,12 @@ class GeminiLiveSession(
         private const val SETUP_TIMEOUT_MS = 10_000L
         const val LIVE_SILENCE_TIMEOUT_MS = 20_000L
         private const val ASK_NO_SPEECH_TIMEOUT_MS = 12_000L
-        private const val ASK_IDLE_AFTER_SPEECH_MS = 15_000L
+        private const val ASK_IDLE_AFTER_SPEECH_MS = 10_000L
+        private const val ASK_NO_REPLY_TIMEOUT_MS = 9_000L
+        const val ASK_FOLLOWUP_WINDOW_MS = 6_000L
         private const val ASK_POST_REPLY_GRACE_MS = 700L
         private const val MAX_LIVE_SESSION_DURATION_MS = 14 * 60_000L
-        private const val MAX_ONESHOT_DURATION_MS = 60_000L
+        private const val MAX_ONESHOT_DURATION_MS = 120_000L
         private const val MAX_RECONNECT_ATTEMPTS = 2
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()

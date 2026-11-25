@@ -64,6 +64,8 @@ data class MediaPlaybackState(
     val hasNotificationAccess: Boolean = false,
     val hasActiveTrack: Boolean = false,
     val canSeek: Boolean = false,
+    /** Nome do aparelho (ex.: "Celular") quando a música toca em OUTRO aparelho via Spotify Connect; vazio se for o tablet. */
+    val remoteDevice: String = "",
     val lastUpdatedAtElapsedMs: Long = 0L
 )
 
@@ -116,6 +118,33 @@ class MediaAndNotificationController private constructor(private val appContext:
 
     /** SDK oficial do Spotify: quando conectado, tem prioridade sobre MediaSession e broadcast. */
     val spotify = SpotifyRemoteBridge { transform -> _mediaState.update(transform) }
+
+    /** Token/Web API compartilhado com o runtime (busca, playlists e Spotify Connect). */
+    val spotifyWeb: SpotifyWebApi = SpotifyWebApi.get(appContext)
+
+    /** Mensagens curtas para o usuário (toast na interface). */
+    @Volatile
+    var onUserMessage: ((String) -> Unit)? = null
+
+    /**
+     * Spotify Connect via Web API: mostra/controla a música que toca em outro aparelho (ex.: celular) e serve de
+     * fallback quando o App Remote do tablet está desconectado.
+     */
+    val connect = SpotifyConnectController(
+        web = spotifyWeb,
+        scope = scope,
+        remoteConnected = { spotify.isConnected },
+        onState = { transform -> _mediaState.update(transform) },
+        onMessage = { msg -> onUserMessage?.invoke(msg) },
+        onNoDevice = {
+            onUserMessage?.invoke("Abra o Spotify no tablet ou no celular para tocar")
+            launchPreferredMusicApp()
+        }
+    )
+
+    /** Controles pela Web API: música em outro aparelho, ou sem App Remote/sessão local mas com token válido. */
+    private fun viaConnect(): Boolean =
+        connect.takesOver() || (!spotify.isConnected && activeController == null && spotifyWeb.hasValidToken)
 
     private val controllerCallback = object : MediaController.Callback() {
         override fun onPlaybackStateChanged(state: PlaybackState?) {
@@ -205,6 +234,7 @@ class MediaAndNotificationController private constructor(private val appContext:
         registerSpotifyBroadcasts()
         startProgressTicker()
         refreshAccessAndSessions()
+        connect.start()
     }
 
     fun setPreferredMusicApp(packageName: String, label: String) {
@@ -252,6 +282,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun togglePlayPause() {
+        if (viaConnect()) {
+            connect.toggle(_mediaState.value.isPlaying)
+            return
+        }
         if (spotify.isConnected) {
             when {
                 // Spotify sem nada carregado: abre o app para o usuário escolher o que ouvir
@@ -288,6 +322,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun play() {
+        if (viaConnect()) {
+            connect.resume()
+            return
+        }
         if (spotify.isConnected) {
             spotify.resume()
             return
@@ -310,6 +348,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun pause() {
+        if (viaConnect()) {
+            connect.pause()
+            return
+        }
         if (spotify.isConnected) {
             spotify.pause()
             return
@@ -324,6 +366,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun skipToNext() {
+        if (viaConnect()) {
+            connect.next()
+            return
+        }
         if (spotify.isConnected) {
             spotify.next()
             return
@@ -337,6 +383,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun skipToPrevious() {
+        if (viaConnect()) {
+            connect.previous()
+            return
+        }
         if (spotify.isConnected) {
             spotify.previous()
             return
@@ -350,6 +400,10 @@ class MediaAndNotificationController private constructor(private val appContext:
     }
 
     fun seekTo(positionMs: Long) {
+        if (viaConnect()) {
+            connect.seekTo(positionMs)
+            return
+        }
         if (spotify.isConnected) {
             spotify.seekTo(positionMs)
             return
@@ -375,6 +429,29 @@ class MediaAndNotificationController private constructor(private val appContext:
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         appContext.startActivity(launchIntent)
         return true
+    }
+
+    fun toggleShuffle() {
+        if (viaConnect()) connect.toggleShuffle() else spotify.toggleShuffle()
+    }
+
+    fun toggleRepeat() {
+        if (viaConnect()) connect.toggleRepeat() else spotify.toggleRepeat()
+    }
+
+    /**
+     * Toca uma playlist/álbum/faixa do Spotify: App Remote do tablet quando conectado; senão Web API
+     * (transferindo a reprodução para o tablet); sem token, apenas abre o app do Spotify.
+     */
+    fun playSpotifyUri(uri: String) {
+        when {
+            spotify.isConnected -> spotify.play(uri)
+            spotifyWeb.hasValidToken -> connect.playUri(uri)
+            else -> {
+                onUserMessage?.invoke("Conecte o Spotify para tocar")
+                launchPreferredMusicApp()
+            }
+        }
     }
 
     fun searchAndPlayInSpotify(query: String): Boolean {
@@ -675,7 +752,14 @@ class MediaAndNotificationController private constructor(private val appContext:
             while (isActive) {
                 delay(1_000L)
                 val ctrl = activeController
-                if (ctrl != null) {
+                if (connect.takesOver()) {
+                    if (_mediaState.value.isPlaying) {
+                        _mediaState.update { cur ->
+                            val next = cur.positionMs + 1_000L
+                            cur.copy(positionMs = if (cur.durationMs > 0L) next.coerceAtMost(cur.durationMs) else next)
+                        }
+                    }
+                } else if (ctrl != null) {
                     val pb = ctrl.playbackState
                     if (pb?.state == PlaybackState.STATE_PLAYING) {
                         val dur = _mediaState.value.durationMs

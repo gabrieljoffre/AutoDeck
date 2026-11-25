@@ -419,7 +419,7 @@ export function installMockBackend() {
       level: 0,
       userText: '',
       replyText: '',
-      status: 'Pronto. Toque em Conversar ou Peça ao Gemini.',
+      status: 'Pronto. Toque em Peça ao Gemini.',
       lastUser: '',
       lastReply: '',
       lastAction: ''
@@ -864,6 +864,9 @@ export function installMockBackend() {
           emitState();
           break;
         }
+        case 'music.reconnect':
+        case 'music.transferHere':
+          break;
         case 'music.authorize':
           state.media.status = 'CONNECTED';
           emitState();
@@ -966,31 +969,7 @@ export function installMockBackend() {
             }
           }, 4200);
           break;
-        case 'copilot.live.start':
-          clearTimeout(listenTimer);
-          state.copilot.mode = 'live';
-          state.copilot.phase = 'listening';
-          state.copilot.listening = true;
-          state.copilot.thinking = false;
-          state.copilot.speaking = false;
-          state.copilot.level = 0.35;
-          state.copilot.userText = '';
-          state.copilot.replyText = '';
-          state.copilot.status = 'Ao vivo · pode falar.';
-          emitState();
-          listenTimer = setTimeout(() => {
-            if (state.copilot.mode === 'live') {
-              state.copilot.userText = 'Como está o motor do Civic hoje?';
-              state.copilot.phase = 'speaking';
-              state.copilot.speaking = true;
-              state.copilot.listening = false;
-              state.copilot.level = 0.72;
-              state.copilot.replyText = `Motor a ${state.telemetry.coolantC}°C, bateria em ${state.telemetry.voltage.toFixed(1)}V e tudo normal no Civic.`;
-              state.copilot.status = 'Gemini respondendo…';
-              emitState();
-            }
-          }, 1800);
-          break;
+        case 'copilot.live.start': // legado: unificado no Peça ao Gemini
         case 'copilot.ask.voice':
           clearTimeout(listenTimer);
           state.copilot.mode = 'ask';

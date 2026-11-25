@@ -52,6 +52,7 @@ import com.autodeck.headunit.media.MediaAndNotificationController
 import com.autodeck.headunit.media.MediaPlaybackState
 import com.autodeck.headunit.media.SpotifyItem
 import com.autodeck.headunit.media.SpotifyLinkStatus
+import com.autodeck.headunit.media.SpotifyRemoteBridge
 import com.autodeck.headunit.media.SpotifySearchResults
 import com.autodeck.headunit.media.SpotifyTokenMissingException
 import com.autodeck.headunit.media.SpotifyWebApi
@@ -109,6 +110,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -210,7 +213,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     private val gpsTracker = GpsNavigationTracker(appContext)
     private val routeNavigator = InAppRouteNavigator(scope)
     private val placeSearch = PlaceSearch()
-    private val spotifyWeb = SpotifyWebApi(appContext)
+    private val spotifyWeb = mediaController.spotifyWeb
     private var spotifyWebAuthAskedAtMs = 0L
     private var spotifySearchJob: Job? = null
     private var placeSearchJob: Job? = null
@@ -740,8 +743,23 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     }
     fun onSpotifyAuthorized(activityContext: Context) = mediaController.spotify.onAuthorized(activityContext)
     fun onSpotifyAuthFailed(reason: String) = mediaController.spotify.onAuthFailed(reason)
-    fun spotifyToggleShuffle() { mediaController.spotify.toggleShuffle() }
-    fun spotifyToggleRepeat() { mediaController.spotify.toggleRepeat() }
+    fun spotifyToggleShuffle() { mediaController.toggleShuffle() }
+    fun spotifyToggleRepeat() { mediaController.toggleRepeat() }
+
+    /** Traz para o tablet a música que está tocando em outro aparelho (Spotify Connect). */
+    fun spotifyTransferHere() { mediaController.connect.transferHere() }
+
+    /** Reconecta o Spotify na hora (botão "Reconectar"); se continuar falhando, abre o app para acordar a sessão. */
+    fun reconnectSpotify(activityContext: Context) {
+        mediaController.spotify.connect(activityContext)
+        mediaController.connect.refreshNow()
+        scope.launch {
+            delay(5_000L)
+            if (_uiState.value.spotifyStatus == SpotifyLinkStatus.FAILED) {
+                withContext(Dispatchers.Main) { openPreferredMusicApp() }
+            }
+        }
+    }
     fun spotifyToggleLike() {
         val ms = _uiState.value.mediaState
         mediaController.spotify.toggleLike(ms.trackUri, ms.liked)
@@ -750,6 +768,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     // --- Spotify Web API: busca, playlists "Honda" e tocadas recentemente ---
     fun onSpotifyToken(token: String, expiresInSec: Int) {
         spotifyWeb.setToken(token, expiresInSec)
+        mediaController.connect.refreshNow()
         refreshSpotifyPlaylists()
         val q = _uiState.value.spotifySearchQuery
         if (q.isNotBlank() && _uiState.value.spotifySearchError != null) searchSpotify(q)
@@ -789,6 +808,30 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
             if (missingToken && now - spotifyWebAuthAskedAtMs > 10 * 60_000L) {
                 spotifyWebAuthAskedAtMs = now
                 withContext(Dispatchers.Main) { requestSpotifyWebAuth() }
+            }
+        }
+    }
+
+    /**
+     * Manutenção periódica do Spotify: renova o token da Web API (dura ~1 h) pela autorização silenciosa do
+     * Spotify quando o usuário já autorizou antes, e força a reconexão do App Remote se tiver caído.
+     */
+    private suspend fun spotifyMaintenanceLoop() {
+        while (true) {
+            delay(45_000L)
+            if (!SpotifyRemoteBridge.isConfigured) continue
+            val now = System.currentTimeMillis()
+            val foreground = _uiState.value.isAppInForeground
+            if (foreground &&
+                spotifyWeb.wasAuthorizedBefore &&
+                spotifyWeb.msUntilExpiry < 3 * 60_000L &&
+                now - spotifyWebAuthAskedAtMs > 5 * 60_000L
+            ) {
+                spotifyWebAuthAskedAtMs = now
+                withContext(Dispatchers.Main) { requestSpotifyWebAuth() }
+            }
+            if (!mediaController.spotify.isConnected) {
+                withContext(Dispatchers.Main) { mediaController.spotify.reconnectNow() }
             }
         }
     }
@@ -843,11 +886,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     }
 
     fun playSpotifyUri(uri: String) {
-        if (mediaController.spotify.isConnected) {
-            mediaController.spotify.play(uri)
-        } else {
-            mediaController.launchPreferredMusicApp()
-        }
+        mediaController.playSpotifyUri(uri)
     }
 
     fun downloadOfflineMap(radiusKm: Double = 12.0) {
@@ -1084,7 +1123,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         val q = query.trim()
         if (q.isEmpty()) return controlMusic("MUSIC_PLAY", null)
 
-        if (mediaController.spotify.isConnected) {
+        if (spotifyWeb.hasValidToken) {
             val res = withContext(Dispatchers.IO) {
                 runCatching { spotifyWeb.search(q) }.getOrNull()
             }
@@ -1093,7 +1132,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                 ?: res?.albums?.firstOrNull()?.uri
                 ?: res?.artists?.firstOrNull()?.uri
             if (!targetUri.isNullOrBlank()) {
-                mediaController.spotify.play(targetUri)
+                // App Remote quando conectado; senão Web API (transfere a reprodução para o tablet)
+                mediaController.playSpotifyUri(targetUri)
                 selectTab(MainTab.MUSIC)
                 emitWebEvent("openMode", mode = "music")
                 return "Spotify: $q"
@@ -1981,12 +2021,25 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                 }
             }
         }
+        mediaController.onUserMessage = { msg -> emitWebEvent("toast", msg) }
         scope.launch {
-            mediaController.spotify.status.collect { st ->
+            // Estado exibido: com token válido e player da conta acessível, o Spotify conta como conectado
+            // (controle via Web API), mesmo que o App Remote do tablet esteja reconectando.
+            combine(
+                mediaController.spotify.status,
+                mediaController.connect.active
+            ) { st, webActive ->
+                if (webActive && (st == SpotifyLinkStatus.NEEDS_AUTH || st == SpotifyLinkStatus.FAILED || st == SpotifyLinkStatus.CONNECTING)) {
+                    SpotifyLinkStatus.CONNECTED
+                } else {
+                    st
+                }
+            }.distinctUntilChanged().collect { st ->
                 _uiState.update { it.copy(spotifyStatus = st) }
                 if (st == SpotifyLinkStatus.CONNECTED) refreshSpotifyPlaylists()
             }
         }
+        scope.launch { spotifyMaintenanceLoop() }
         scope.launch { weatherLoop() }
         scope.launch {
             while (isActive) {

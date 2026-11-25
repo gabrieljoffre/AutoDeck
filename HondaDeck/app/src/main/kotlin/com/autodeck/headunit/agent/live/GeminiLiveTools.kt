@@ -391,7 +391,7 @@ object GeminiLiveTools {
         }
 
         val oneShotRule = if (oneShot) {
-            "MODO RÁPIDO (Peça ao Gemini): responda de forma direta e concisa em uma única resposta curta, executando a ferramenta necessária e confirmando o que foi feito."
+            "PEÇA AO GEMINI (único modo de voz): o motorista tocou no botão e já está falando. Execute a ferramenta necessária e responda de forma direta, concisa e natural (1 a 2 frases) confirmando o que foi feito. Depois de responder o microfone continua aberto por alguns segundos para uma pergunta de seguimento; responda a ela normalmente e, se o motorista ficar em silêncio, não diga nada mais."
         } else {
             "MODO CONVERSA AO VIVO: mantenha um diálogo natural, amigável e objetivo para quem está dirigindo."
         }

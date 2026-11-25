@@ -18,6 +18,8 @@ const VALID_COMMANDS = new Set([
   'music.search',
   'music.authorize',
   'music.openApp',
+  'music.reconnect',
+  'music.transferHere',
   'map.search',
   'map.route',
   'map.stopRoute',
@@ -166,7 +168,7 @@ export const DEFAULT_STATE = {
     level: 0,
     userText: '',
     replyText: '',
-    status: 'Pronto. Toque em Conversar ou Peça ao Gemini.',
+    status: 'Pronto. Toque em Peça ao Gemini.',
     lastUser: '',
     lastReply: '',
     lastAction: ''
