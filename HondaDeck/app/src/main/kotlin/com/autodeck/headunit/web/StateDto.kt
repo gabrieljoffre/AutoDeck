@@ -319,6 +319,10 @@ object StateDto {
             put("lastError", phone.lastError ?: JSONObject.NULL)
             put("recordingVoiceNote", phone.recordingVoiceNote)
             put("voiceNoteStatus", phone.voiceNoteStatus)
+            put("contactsCount", phone.contactsCount)
+            put("contactsSyncedAtMs", phone.contactsSyncedAtMs)
+            put("contactsSyncing", phone.contactsSyncing)
+            put("contactsSyncError", phone.contactsSyncError ?: JSONObject.NULL)
             put("discovered", JSONArray().apply {
                 phone.discoveredPhones.forEach { d ->
                     put(JSONObject().apply {
@@ -419,6 +423,8 @@ object StateDto {
         val currentYear = Instant.ofEpochMilli(extras.nowEpochMs).atZone(ZoneId.systemDefault()).year
         val calendarObj = JSONObject().apply {
             put("permissionGranted", ui.calendar.permissionGranted)
+            put("phoneEventsCount", ui.calendar.phoneEventsCount)
+            put("phoneCalendarAvailable", ui.calendar.phoneCalendarAvailable)
             put("updatedAtMs", ui.calendar.updatedAtMs)
             put("statusText", ui.calendar.statusText)
             put("events", JSONArray().apply {
@@ -433,6 +439,7 @@ object StateDto {
                         put("color", ev.colorHex)
                         put("dateIso", ev.dateIso)
                         put("endDateIso", ev.endDateIso)
+                        put("source", ev.source)
                     })
                 }
             })

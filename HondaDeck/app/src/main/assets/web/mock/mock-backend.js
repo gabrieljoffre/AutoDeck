@@ -143,13 +143,14 @@ export function installMockBackend() {
       const msAt = (days, h, m) => new Date(base.getFullYear(), base.getMonth(), base.getDate() + days, h, m).getTime();
       return {
         permissionGranted: true,
+        phoneEventsCount: 1,
         updatedAtMs: Date.now(),
         statusText: '4 eventos',
         events: [
-          { id: 'ev1', title: 'Café com a equipe', startMs: msAt(0, 9, 0), endMs: msAt(0, 10, 0), allDay: false, location: 'Praça Bom Jesus, Anápolis - GO', color: '#22D3EE', dateIso: isoOffset(0), endDateIso: isoOffset(0) },
-          { id: 'ev2', title: 'Revisão Civic 40 mil km', startMs: msAt(0, 14, 30), endMs: msAt(0, 16, 0), allDay: false, location: 'Av. Brasil Norte, 505, Anápolis - GO', color: '#A3E635', dateIso: isoOffset(0), endDateIso: isoOffset(0) },
-          { id: 'ev3', title: 'Treino no Parque Ipiranga', startMs: msAt(1, 7, 30), endMs: msAt(1, 8, 30), allDay: false, location: 'Parque Ipiranga, Anápolis - GO', color: '#FB923C', dateIso: isoOffset(1), endDateIso: isoOffset(1) },
-          { id: 'ev4', title: 'Aniversário da Ana', startMs: msAt(2, 0, 0), endMs: msAt(2, 23, 59), allDay: true, location: '', color: '#F472B6', dateIso: isoOffset(2), endDateIso: isoOffset(2) }
+          { id: 'ev1', title: 'Café com a equipe', startMs: msAt(0, 9, 0), endMs: msAt(0, 10, 0), allDay: false, location: 'Praça Bom Jesus, Anápolis - GO', color: '#22D3EE', dateIso: isoOffset(0), endDateIso: isoOffset(0), source: 'tablet' },
+          { id: 'ev2', title: 'Revisão Civic 40 mil km', startMs: msAt(0, 14, 30), endMs: msAt(0, 16, 0), allDay: false, location: 'Av. Brasil Norte, 505, Anápolis - GO', color: '#A3E635', dateIso: isoOffset(0), endDateIso: isoOffset(0), source: 'phone' },
+          { id: 'ev3', title: 'Treino no Parque Ipiranga', startMs: msAt(1, 7, 30), endMs: msAt(1, 8, 30), allDay: false, location: 'Parque Ipiranga, Anápolis - GO', color: '#FB923C', dateIso: isoOffset(1), endDateIso: isoOffset(1), source: 'tablet' },
+          { id: 'ev4', title: 'Aniversário da Ana', startMs: msAt(2, 0, 0), endMs: msAt(2, 23, 59), allDay: true, location: '', color: '#F472B6', dateIso: isoOffset(2), endDateIso: isoOffset(2), source: 'tablet' }
         ],
         holidays: [
           { dateIso: `${base.getFullYear()}-01-01`, name: 'Confraternização Universal', movable: false },
@@ -378,6 +379,10 @@ export function installMockBackend() {
       lastError: null,
       recordingVoiceNote: false,
       voiceNoteStatus: '',
+      contactsCount: 142,
+      contactsSyncedAtMs: Date.now() - 120000,
+      contactsSyncing: false,
+      contactsSyncError: null,
       discovered: [{ name: 'Samsung Galaxy', host: '192.168.43.1', port: 5290 }],
       call: { status: 'IDLE', number: '', displayName: '', isWhatsApp: false, startedAtMs: 0 },
       messages: []
@@ -959,6 +964,17 @@ export function installMockBackend() {
           state.status.phone = true;
           state.status.phoneState = 'CONNECTED';
           emitState();
+          break;
+        case 'phone.syncContacts':
+          state.phone.contactsSyncing = true;
+          emitState();
+          setTimeout(() => {
+            state.phone.contactsSyncing = false;
+            state.phone.contactsCount = 148;
+            state.phone.contactsSyncedAtMs = Date.now();
+            emitState();
+            emitEvent('toast', { text: '148 contatos sincronizados do celular' });
+          }, 300);
           break;
         case 'phone.call.answer':
           state.phone.call.status = 'ACTIVE';

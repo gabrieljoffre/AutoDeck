@@ -530,6 +530,23 @@ function buildCopilot(root) {
 // Aba: Celular (HondaDeck Ponte)
 // ---------------------------------------------------------------------------
 
+function fmtSyncTime(epochMs) {
+  const ms = Number(epochMs || 0);
+  if (!(ms > 1_000_000_000_000)) return 'Nunca sincronizado';
+  const d = new Date(ms);
+  const now = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) return `Hoje às ${hh}:${mm}`;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mo} às ${hh}:${mm}`;
+}
+
 function buildPhone(root) {
   const statusDot = el('span', { className: 'phone-status-dot' });
   const statusText = el('span', { style: 'font-size:16px;font-weight:600' }, 'Desconectado');
@@ -539,6 +556,21 @@ function buildPhone(root) {
   const discoverBtn = el('button', { className: 'btn-outline', type: 'button', 'data-test': 'phone-discover', onClick: () => sendCommand('phone.discover') }, 'Buscar celular');
   const reconnectBtn = el('button', { className: 'btn-outline', type: 'button', 'data-test': 'phone-reconnect', onClick: () => sendCommand('phone.reconnect') }, 'Reconectar');
   const unpairBtn = confirmButton('Desparear', 'Confirmar despareamento?', 'btn-danger', () => sendCommand('phone.unpair'), { idle: 'phone-unpair', confirm: 'phone-unpair-confirm' });
+
+  // Bloco de Contatos sincronizados
+  const contactsCountEl = el('span', { style: 'font-size:16px;font-weight:600', 'data-test': 'phone-contacts-count' }, '0 contatos sincronizados');
+  const contactsSubEl = el('span', { className: 'settings-sub', 'data-test': 'phone-contacts-sync-time' }, 'Última sincronização: Nunca sincronizado');
+  const syncContactsBtn = el(
+    'button',
+    {
+      className: 'btn-accent-sm',
+      type: 'button',
+      'data-test': 'phone-sync-contacts',
+      style: 'padding:0 20px',
+      onClick: () => sendCommand('phone.syncContacts')
+    },
+    'Sincronizar contatos'
+  );
 
   const discoveredList = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
   const hostIn = textInput({ placeholder: 'IP do celular (automático se vazio, ex.: 192.168.43.1)', 'data-test': 'phone-host-input' });
@@ -576,6 +608,18 @@ function buildPhone(root) {
       statusSub,
       flagsRow,
       el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, discoverBtn, reconnectBtn, unpairBtn)
+    ),
+    el(
+      'div',
+      { className: 'settings-card-block', 'data-test': 'phone-contacts-card' },
+      kicker('CONTATOS SINCRONIZADOS'),
+      el(
+        'div',
+        { style: 'display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap' },
+        el('div', { style: 'display:flex;flex-direction:column;gap:4px' }, contactsCountEl, contactsSubEl),
+        syncContactsBtn
+      ),
+      el('span', { className: 'settings-sub' }, 'Os contatos do celular ficam salvos em cache no painel para o copiloto ligar ou mandar WhatsApp por nome ou apelido.')
     ),
     el(
       'div',
@@ -628,6 +672,28 @@ function buildPhone(root) {
         chip('Notificações', Boolean(p.notificationsEnabled))
       );
     }
+  });
+
+  reg(tabUpdaters, (s) => jsonSig({
+    c: s.phone?.connected,
+    cnt: s.phone?.contactsCount,
+    ts: s.phone?.contactsSyncedAtMs,
+    ing: s.phone?.contactsSyncing,
+    err: s.phone?.contactsSyncError
+  }), (s) => {
+    const p = s.phone || {};
+    const count = Number(p.contactsCount || 0);
+    const syncing = Boolean(p.contactsSyncing);
+    const connected = Boolean(p.connected);
+    contactsCountEl.textContent = count === 1
+      ? '1 contato sincronizado'
+      : `${count} contatos sincronizados`;
+    const errPart = p.contactsSyncError ? ` · Erro: ${p.contactsSyncError}` : '';
+    contactsSubEl.textContent = syncing
+      ? 'Sincronizando contatos do celular…'
+      : `Última sincronização: ${fmtSyncTime(p.contactsSyncedAtMs)}${errPart}`;
+    syncContactsBtn.disabled = syncing || !connected;
+    syncContactsBtn.textContent = syncing ? 'Sincronizando…' : 'Sincronizar agora';
   });
 
   reg(tabUpdaters, (s) => jsonSig(s.phone?.discovered || []), (s) => {

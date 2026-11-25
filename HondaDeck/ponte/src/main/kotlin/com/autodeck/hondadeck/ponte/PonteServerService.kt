@@ -7,10 +7,15 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.database.ContentObserver
+import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.provider.ContactsContract
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.autodeck.protocol.phone.PhoneLinkCodec
@@ -51,6 +56,8 @@ class PonteServerService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var storage: PonteStorage
     private lateinit var contactsManager: PonteContactsManager
+    private lateinit var calendarManager: PonteCalendarManager
+    private lateinit var appsManager: PonteAppsManager
     private lateinit var callManager: PonteCallManager
     private lateinit var whatsAppManager: PonteWhatsAppManager
 
@@ -58,6 +65,8 @@ class PonteServerService : Service() {
     private var udpSocket: DatagramSocket? = null
     private var nsdManager: NsdManager? = null
     private var nsdRegListener: NsdManager.RegistrationListener? = null
+    private var contactsObserver: ContentObserver? = null
+    private var contactsDebounceJob: Job? = null
 
     private val clients = CopyOnWriteArrayList<ClientSession>()
     private val running = AtomicBoolean(false)
@@ -67,6 +76,8 @@ class PonteServerService : Service() {
         super.onCreate()
         storage = PonteStorage(applicationContext)
         contactsManager = PonteContactsManager(applicationContext)
+        calendarManager = PonteCalendarManager(applicationContext)
+        appsManager = PonteAppsManager(applicationContext)
         callManager = PonteCallManager(applicationContext, contactsManager)
         whatsAppManager = PonteWhatsAppManager(applicationContext, contactsManager)
         ensureChannel()
@@ -103,6 +114,10 @@ class PonteServerService : Service() {
         if (running.compareAndSet(false, true)) {
             startServerLoops()
         } else {
+            if (contactsObserver == null && contactsManager.hasPermission()) {
+                registerContactsObserver()
+                scheduleContactsBroadcast()
+            }
             refreshPublishedState()
         }
         return START_STICKY
@@ -111,6 +126,8 @@ class PonteServerService : Service() {
     override fun onDestroy() {
         running.set(false)
         monitorJob?.cancel()
+        contactsDebounceJob?.cancel()
+        unregisterContactsObserver()
         unregisterNsd()
         runCatching { serverSocket?.close() }
         runCatching { udpSocket?.close() }
@@ -132,6 +149,7 @@ class PonteServerService : Service() {
 
     private fun startServerLoops() {
         callManager.startMonitoring()
+        registerContactsObserver()
         refreshPublishedState()
         registerNsd()
 
@@ -267,8 +285,12 @@ class PonteServerService : Service() {
                 val line = reader.readLine() ?: break
                 val msg = PhoneLinkCodec.decode(line)
                 if (msg is PhoneLinkMessage.Request) {
+                    val wasAuth = session.authenticated
                     val response = dispatchRequest(session, msg)
                     session.send(response)
+                    if (!wasAuth && session.authenticated && response.ok) {
+                        sendInitialSnapshotTo(session)
+                    }
                 }
             }
         } catch (err: Throwable) {
@@ -310,7 +332,6 @@ class PonteServerService : Service() {
                 )
             }
             syncConnectedTabletUi()
-            sendInitialSnapshotTo(session)
             return PhoneLinkMessage.Response(
                 id = req.id,
                 ok = true,
@@ -340,7 +361,6 @@ class PonteServerService : Service() {
             session.authenticated = true
             session.clientName = clientName
             syncConnectedTabletUi()
-            sendInitialSnapshotTo(session)
             return PhoneLinkMessage.Response(
                 id = req.id,
                 ok = true,
@@ -410,6 +430,141 @@ class PonteServerService : Service() {
                         )
                     )
                 }
+            }
+
+            PhoneLinkProtocol.METHOD_CONTACTS_SYNC -> {
+                if (!contactsManager.hasPermission()) {
+                    PhoneLinkMessage.Response(
+                        id = req.id,
+                        ok = false,
+                        error = "Permissão de contatos não concedida no celular.",
+                        errorCode = PhoneLinkProtocol.ERR_PERMISSION_DENIED
+                    )
+                } else {
+                    val includePhotos = req.params["includePhotos"] as? Boolean ?: true
+                    val contacts = contactsManager.loadAllContacts(includeSmallPhotosForTop = if (includePhotos) 30 else 0)
+                    val syncedAt = System.currentTimeMillis()
+                    PonteStateHub.update {
+                        it.copy(
+                            contactsCount = contacts.size,
+                            lastActivity = "${contacts.size} contatos sincronizados com o tablet"
+                        )
+                    }
+                    PhoneLinkMessage.Response(
+                        id = req.id,
+                        ok = true,
+                        result = linkedMapOf(
+                            "syncedAtMs" to syncedAt,
+                            "count" to contacts.size,
+                            "contacts" to contacts.map { PhoneLinkCodec.contactToMap(it) }
+                        )
+                    )
+                }
+            }
+
+            PhoneLinkProtocol.METHOD_CALENDAR_LIST -> {
+                if (!calendarManager.hasReadPermission()) {
+                    PhoneLinkMessage.Response(
+                        id = req.id,
+                        ok = false,
+                        error = "Permissão de agenda (READ_CALENDAR) não concedida no celular.",
+                        errorCode = PhoneLinkProtocol.ERR_PERMISSION_DENIED
+                    )
+                } else {
+                    val now = System.currentTimeMillis()
+                    val startMs = (req.params["startMs"] as? Number)?.toLong() ?: (now - 7L * 86_400_000L)
+                    val endMs = (req.params["endMs"] as? Number)?.toLong() ?: (now + 45L * 86_400_000L)
+                    calendarManager.listEvents(startMs, endMs).fold(
+                        onSuccess = { evs ->
+                            PonteStateHub.logActivity("Agenda do celular enviada (${evs.size} evento(s))")
+                            PhoneLinkMessage.Response(
+                                id = req.id,
+                                ok = true,
+                                result = linkedMapOf(
+                                    "events" to evs.map { PhoneLinkCodec.calendarEventToMap(it) }
+                                )
+                            )
+                        },
+                        onFailure = { err ->
+                            PhoneLinkMessage.Response(
+                                id = req.id,
+                                ok = false,
+                                error = err.message ?: "Erro ao ler agenda do celular.",
+                                errorCode = if (err is SecurityException) PhoneLinkProtocol.ERR_PERMISSION_DENIED else PhoneLinkProtocol.ERR_INTERNAL
+                            )
+                        }
+                    )
+                }
+            }
+
+            PhoneLinkProtocol.METHOD_CALENDAR_CREATE -> {
+                val title = req.params["title"]?.toString().orEmpty()
+                val startMs = (req.params["startMs"] as? Number)?.toLong() ?: 0L
+                val endMs = (req.params["endMs"] as? Number)?.toLong() ?: (startMs + 60L * 60_000L)
+                val location = req.params["location"]?.toString().orEmpty()
+                val reminderMin = (req.params["reminderMinutes"] as? Number)?.toInt()
+                if (title.isBlank() || startMs <= 0L) {
+                    PhoneLinkMessage.Response(
+                        id = req.id,
+                        ok = false,
+                        error = "Informe título e data/hora válidos para o evento.",
+                        errorCode = PhoneLinkProtocol.ERR_INVALID_PARAMS
+                    )
+                } else {
+                    calendarManager.createEvent(title, startMs, endMs, location, reminderMin).fold(
+                        onSuccess = { created ->
+                            PonteStateHub.logActivity("Evento criado na agenda: ${created.title}")
+                            PhoneLinkMessage.Response(
+                                id = req.id,
+                                ok = true,
+                                result = linkedMapOf(
+                                    "message" to "Evento \"${created.title}\" criado na agenda do celular.",
+                                    "event" to PhoneLinkCodec.calendarEventToMap(created)
+                                )
+                            )
+                        },
+                        onFailure = { err ->
+                            PhoneLinkMessage.Response(
+                                id = req.id,
+                                ok = false,
+                                error = err.message ?: "Erro ao criar evento na agenda do celular.",
+                                errorCode = if (err is SecurityException) PhoneLinkProtocol.ERR_PERMISSION_DENIED else PhoneLinkProtocol.ERR_INTERNAL
+                            )
+                        }
+                    )
+                }
+            }
+
+            PhoneLinkProtocol.METHOD_APPS_LIST -> {
+                val apps = appsManager.listLaunchableApps()
+                PhoneLinkMessage.Response(
+                    id = req.id,
+                    ok = true,
+                    result = linkedMapOf("apps" to apps.map { PhoneLinkCodec.appEntryToMap(it) })
+                )
+            }
+
+            PhoneLinkProtocol.METHOD_APPS_OPEN -> {
+                val appName = req.params["app"]?.toString().orEmpty()
+                appsManager.openApp(appName).fold(
+                    onSuccess = { msg ->
+                        PonteStateHub.logActivity(msg)
+                        val lockedNote = if (whatsAppManager.isDeviceLocked()) " (celular bloqueado — desbloqueie para ver)" else ""
+                        PhoneLinkMessage.Response(
+                            id = req.id,
+                            ok = true,
+                            result = linkedMapOf("message" to "$msg$lockedNote")
+                        )
+                    },
+                    onFailure = { err ->
+                        PhoneLinkMessage.Response(
+                            id = req.id,
+                            ok = false,
+                            error = err.message ?: "Não foi possível abrir o app no celular.",
+                            errorCode = PhoneLinkProtocol.ERR_NOT_FOUND
+                        )
+                    }
+                )
             }
 
             PhoneLinkProtocol.METHOD_CALL_DIAL -> {
@@ -574,6 +729,76 @@ class PonteServerService : Service() {
                     )
                 )
             }
+            if (contactsManager.hasPermission()) {
+                val contacts = contactsManager.loadAllContacts(includeSmallPhotosForTop = 30)
+                val syncedAt = System.currentTimeMillis()
+                PonteStateHub.update { it.copy(contactsCount = contacts.size) }
+                session.send(
+                    PhoneLinkMessage.Event(
+                        PhoneLinkProtocol.EVENT_CONTACTS_UPDATED,
+                        linkedMapOf(
+                            "syncedAtMs" to syncedAt,
+                            "count" to contacts.size,
+                            "contacts" to contacts.map { PhoneLinkCodec.contactToMap(it) }
+                        )
+                    )
+                )
+            }
+        }
+    }
+
+    private fun registerContactsObserver() {
+        unregisterContactsObserver()
+        if (!contactsManager.hasPermission()) return
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                scheduleContactsBroadcast()
+            }
+        }
+        contactsObserver = observer
+        runCatching {
+            contentResolver.registerContentObserver(
+                ContactsContract.Contacts.CONTENT_URI,
+                true,
+                observer
+            )
+        }
+    }
+
+    private fun unregisterContactsObserver() {
+        val obs = contactsObserver ?: return
+        contactsObserver = null
+        runCatching { contentResolver.unregisterContentObserver(obs) }
+    }
+
+    private fun scheduleContactsBroadcast() {
+        contactsDebounceJob?.cancel()
+        contactsDebounceJob = scope.launch(Dispatchers.IO) {
+            delay(2_000L)
+            if (!running.get() || !contactsManager.hasPermission()) return@launch
+            val authenticated = clients.filter { it.authenticated }
+            val contacts = contactsManager.loadAllContacts(includeSmallPhotosForTop = 30)
+            val syncedAt = System.currentTimeMillis()
+            PonteStateHub.update {
+                it.copy(
+                    contactsCount = contacts.size,
+                    lastActivity = if (authenticated.isNotEmpty()) {
+                        "Contatos atualizados (${contacts.size}) enviados ao tablet"
+                    } else {
+                        it.lastActivity
+                    }
+                )
+            }
+            if (authenticated.isNotEmpty()) {
+                broadcastEvent(
+                    PhoneLinkProtocol.EVENT_CONTACTS_UPDATED,
+                    linkedMapOf(
+                        "syncedAtMs" to syncedAt,
+                        "count" to contacts.size,
+                        "contacts" to contacts.map { PhoneLinkCodec.contactToMap(it) }
+                    )
+                )
+            }
         }
     }
 
@@ -605,6 +830,9 @@ class PonteServerService : Service() {
 
     private fun refreshPublishedState() {
         callManager.startMonitoring()
+        if (contactsObserver == null && contactsManager.hasPermission()) {
+            registerContactsObserver()
+        }
         PonteStateHub.update {
             it.copy(
                 serverRunning = running.get(),

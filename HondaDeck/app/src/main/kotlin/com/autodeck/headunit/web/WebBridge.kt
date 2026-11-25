@@ -239,6 +239,7 @@ class WebBridge(
             "phone.unpair" -> runtime.unpairPhone()
             "phone.discover" -> runtime.discoverPhone()
             "phone.reconnect" -> runtime.reconnectPhone()
+            "phone.syncContacts" -> runtime.syncPhoneContactsNow()
             "phone.call.answer" -> runtime.answerPhoneCallFromUi()
             "phone.call.end" -> runtime.endPhoneCallFromUi()
             "phone.voice.cancel" -> runtime.cancelVoiceNoteRecording()
@@ -446,6 +447,7 @@ class WebBridge(
             "phone.unpair",
             "phone.discover",
             "phone.reconnect",
+            "phone.syncContacts",
             "phone.call.answer",
             "phone.call.end",
             "phone.voice.cancel",

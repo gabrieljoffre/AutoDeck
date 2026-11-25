@@ -5,9 +5,12 @@ import com.autodeck.headunit.agent.copilot.CopilotIntentParser
 import com.autodeck.headunit.agent.copilot.CopilotJson
 import com.autodeck.headunit.agent.copilot.FavoriteRef
 import com.autodeck.headunit.agent.copilot.VolumeDirection
+import com.autodeck.headunit.calendar.PortugueseDateTimeParser
 import com.autodeck.protocol.coordinator.MainTab
+import com.autodeck.protocol.phone.PhoneContactMatcher
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.ZonedDateTime
 import java.util.Locale
 
 data class LiveToolExecution(
@@ -142,11 +145,78 @@ object GeminiLiveTools {
         )
         put(
             fnDecl(
-                name = "consultar_agenda",
-                description = "Consulta os compromissos do motorista na agenda para hoje ou amanhã.",
+                name = "buscar_contato",
+                description = "Pesquisa contatos sincronizados do celular por nome, apelido, parte do nome, relação (ex.: mãe, amor) ou número. Retorna números normalizados (+55), apelidos e se tem WhatsApp; em caso de ambiguidade (várias pessoas), pergunte ao motorista qual ele quer.",
                 properties = JSONObject().apply {
-                    put("dia", enumProp("Dia desejado.", listOf("hoje", "amanha")))
+                    put("nome", strProp("Nome, apelido, parte do nome ou número do contato."))
+                },
+                required = listOf("nome")
+            )
+        )
+        put(
+            fnDecl(
+                name = "agenda",
+                description = "Consulta compromissos na agenda do tablet e do celular (Google Agenda) para um dia ou intervalo (ex.: hoje, amanhã, sexta, esta semana, próxima semana, próximos 3 dias, 25/11).",
+                properties = JSONObject().apply {
+                    put("dia", strProp("Dia ou período em português (ex.: 'hoje', 'amanhã', 'sexta', 'esta semana', 'próximos 3 dias', '25/11')."))
+                    put("inicio", strProp("Data inicial opcional no formato AAAA-MM-DD."))
+                    put("fim", strProp("Data final opcional no formato AAAA-MM-DD."))
                 }
+            )
+        )
+        put(
+            fnDecl(
+                name = "consultar_agenda",
+                description = "Alias de agenda: consulta os compromissos do motorista na agenda para hoje, amanhã ou outro período.",
+                properties = JSONObject().apply {
+                    put("dia", strProp("Dia ou intervalo desejado (ex.: 'hoje', 'amanha', 'sexta', 'esta semana')."))
+                }
+            )
+        )
+        put(
+            fnDecl(
+                name = "criar_evento",
+                description = "Cria um evento no calendário Google principal (no tablet ou no celular via Ponte). SEMPRE confirme antes com o motorista título, data, hora e duração usando confirmado=false; só chame com confirmado=true após ele confirmar com 'sim'.",
+                properties = JSONObject().apply {
+                    put("titulo", strProp("Título ou assunto do evento."))
+                    put("data_hora", strProp("Data e hora em português ou ISO (ex.: 'amanhã às 3 da tarde', 'sexta 9h', '2026-11-26 15:00')."))
+                    put("duracao_minutos", intProp("Duração em minutos (padrão 60)."))
+                    put("local", strProp("Endereço ou local opcional do evento."))
+                    put("lembrete_minutos", intProp("Minutos de antecedência para o lembrete do evento (ex.: 15, 30)."))
+                    put("confirmado", boolProp("False na primeira chamada para confirmar com o motorista; true somente após o motorista dizer sim."))
+                },
+                required = listOf("titulo", "data_hora")
+            )
+        )
+        put(
+            fnDecl(
+                name = "lembrete",
+                description = "Cria um lembrete local no tablet com alarme/notificação e aviso falado no horário combinado (ex.: 'daqui a 20 minutos', 'amanhã às 8h', 'hoje às 18h30').",
+                properties = JSONObject().apply {
+                    put("texto", strProp("O que deve ser lembrado ao motorista."))
+                    put("quando", strProp("Quando disparar o lembrete (ex.: 'daqui a 15 minutos', 'amanhã às 3 da tarde', 'sexta 9h')."))
+                },
+                required = listOf("texto", "quando")
+            )
+        )
+        put(
+            fnDecl(
+                name = "abrir_app",
+                description = "Abre um aplicativo instalado no tablet pelo nome falado (ex.: 'YouTube Music', 'Câmera', 'Waze', 'Chrome', 'Calculadora').",
+                properties = JSONObject().apply {
+                    put("nome", strProp("Nome falado do aplicativo instalado no tablet."))
+                },
+                required = listOf("nome")
+            )
+        )
+        put(
+            fnDecl(
+                name = "abrir_no_celular",
+                description = "Abre um aplicativo instalado no celular Samsung conectado via HondaDeck Ponte (ex.: 'Instagram', 'WhatsApp', 'Waze', 'Uber').",
+                properties = JSONObject().apply {
+                    put("app", strProp("Nome falado do aplicativo instalado no celular."))
+                },
+                required = listOf("app")
             )
         )
         put(
@@ -308,6 +378,18 @@ object GeminiLiveTools {
             recentSummaries.joinToString("\n") { "- $it" }
         }
 
+        val topContactsBlock = PhoneContactMatcher.formatForSystemPrompt(
+            host.getTopFrequentContacts(limit = 30),
+            limit = 30
+        )
+
+        val tabletApps = host.listTabletAppNames(limit = 25)
+        val tabletAppsLine = if (tabletApps.isEmpty()) {
+            "Use abrir_app(nome) para abrir aplicativos instalados no tablet."
+        } else {
+            tabletApps.joinToString(", ")
+        }
+
         val oneShotRule = if (oneShot) {
             "MODO RÁPIDO (Peça ao Gemini): responda de forma direta e concisa em uma única resposta curta, executando a ferramenta necessária e confirmando o que foi feito."
         } else {
@@ -319,9 +401,12 @@ object GeminiLiveTools {
             REGRAS DE PERSONA:
             - Fale SEMPRE em Português do Brasil (pt-BR), com frases curtas, claras e naturais para quem está dirigindo.
             - $oneShotRule
-            - SEMPRE use as ferramentas disponíveis para agir no carro/painel (Spotify, volume, mapa, rotas, OBD, abastecimento, WhatsApp/ligações via celular Ponte, câmera de ré, tema/cor, limpar memória) e para pesquisar fatos atuais use o Google Search nativo.
+            - SEMPRE use as ferramentas disponíveis para agir no carro/painel (Spotify, volume, mapa, rotas, OBD, abastecimento, contatos/WhatsApp/ligações via Ponte, agenda, criar eventos, lembretes falados, abrir apps no tablet ou no celular, câmera de ré, tema/cor, limpar memória) e para pesquisar fatos atuais use o Google Search nativo.
             - SEMPRE confirme brevemente em voz alta toda ação executada (ex.: "Volume ajustado para 50%", "Rota para Casa iniciada", "Música pausada").
+            - CONTATOS E AMBIGUIDADE: você já conhece os ~30 contatos frequentes/favoritos listados abaixo; para qualquer outro contato (ou para checar apelidos/números), chame `buscar_contato(nome)`. Se houver mais de um resultado parecido (ex.: várias "Ana"), SEMPRE pergunte ao motorista qual deles ele quer antes de ligar ou mandar mensagem.
             - REGRA OBRIGATÓRIA PARA WHATSAPP E MENSAGENS: NUNCA envie WhatsApp de texto, áudio ou resposta sem confirmar antes com o motorista o destinatário e o texto exato (ex.: "Mando para Ana: 'tô chegando'?"). Primeiro chame a ferramenta com confirmado=false para resolver o contato; só chame com confirmado=true depois que o motorista responder "sim". Se o celular retornar "celular bloqueado", avise o motorista para desbloquear ou usar Smart Lock.
+            - REGRA OBRIGATÓRIA PARA CRIAR EVENTO: NUNCA crie evento na agenda sem confirmar antes com o motorista (`criar_evento` com `confirmado=false` primeiro; só `confirmado=true` após ele dizer sim).
+            - SE O MOTORISTA PERGUNTAR "O QUE VOCÊ CONSEGUE FAZER?": responda resumindo suas capacidades — música no Spotify, volume, rotas e busca de lugares no mapa, telemetria/diagnóstico OBD-II do Civic, diário de abastecimento e manutenção, clima, busca de contatos + WhatsApp (texto, áudio e ligação) + ligações pela linha do celular, consultar e criar eventos na agenda, lembretes com aviso falado, abrir aplicativos no tablet ou no celular, câmera de ré e buscas na internet.
             - Nunca invente leituras do carro: consulte `ler_telemetria_carro` quando precisar de dados atualizados.
 
             PERFIL DO MOTORISTA:
@@ -330,6 +415,12 @@ object GeminiLiveTools {
 
             MEMÓRIA DE CONVERSAS RECENTES:
             $memoryBlock
+
+            CONTATOS FAVORITOS E FREQUENTES DO MOTORISTA:
+            $topContactsBlock
+
+            APLICATIVOS INSTALADOS NO TABLET:
+            $tabletAppsLine
 
             ESTADO ATUAL DO CARRO E PAINEL:
             - OBD-II: ${hu.obdStatus.labelPt} | Velocidade: ${derived.correctedSpeedKmh?.toInt() ?: snap.speedKmh?.toInt() ?: 0} km/h | RPM: ${snap.rpm?.toInt() ?: 0} | Marcha: ${derived.estimatedGearLabel}
@@ -477,11 +568,97 @@ object GeminiLiveTools {
                 LiveToolExecution(summary, "Clima")
             }
 
-            "consultar_agenda" -> {
-                val dia = args?.optString("dia")?.trim()?.lowercase(Locale.ROOT).orEmpty()
-                val offset = if (dia.contains("amanh")) 1 else 0
-                val summary = host.getCalendarAgendaSummary(offset)
+            "buscar_contato" -> {
+                val nome = args?.optString("nome")?.trim().orEmpty()
+                if (nome.isBlank()) {
+                    LiveToolExecution("Informe o nome ou apelido do contato para buscar.")
+                } else {
+                    val res = host.searchContactsForAgent(nome)
+                    LiveToolExecution(res, "Contatos")
+                }
+            }
+
+            "agenda", "consultar_agenda" -> {
+                val dia = args?.optString("dia")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: args?.optString("intervalo")?.trim()?.takeIf { it.isNotBlank() }
+                val inicio = args?.optString("inicio")?.trim()?.takeIf { it.isNotBlank() }
+                val fim = args?.optString("fim")?.trim()?.takeIf { it.isNotBlank() }
+                val summary = host.getAgendaForRange(dia, inicio, fim)
                 LiveToolExecution(summary, "Agenda")
+            }
+
+            "criar_evento" -> {
+                val titulo = args?.optString("titulo")?.trim().orEmpty()
+                val rawWhen = args?.optString("data_hora")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: args?.optString("quando")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: args?.optString("data")?.trim().orEmpty()
+                val duracaoMin = (
+                    args?.optDouble("duracao_minutos")?.toInt()
+                        ?: args?.optDouble("duracao")?.toInt()
+                        ?: 60
+                    ).coerceIn(10, 720)
+                val local = args?.optString("local")?.trim().orEmpty()
+                val lembreteMin = (
+                    args?.optDouble("lembrete_minutos")?.toInt()
+                        ?: args?.optDouble("lembrete")?.toInt()
+                    )?.takeIf { it >= 0 }
+                val confirmed = args?.optBoolean("confirmado") == true
+
+                if (titulo.isBlank() || rawWhen.isBlank()) {
+                    LiveToolExecution("Informe o título e a data/hora para criar o evento na agenda.")
+                } else {
+                    val parsed = PortugueseDateTimeParser.parseDateTime(rawWhen, ZonedDateTime.now())
+                    if (parsed == null) {
+                        LiveToolExecution("Não consegui entender a data/hora \"$rawWhen\". Diga, por exemplo, 'amanhã às 3 da tarde' ou 'sexta 9h'.")
+                    } else if (!confirmed) {
+                        val locPart = if (local.isNotBlank()) " em $local" else ""
+                        LiveToolExecution(
+                            "CONFIRMAÇÃO OBRIGATÓRIA: Pergunte ao motorista: \"Crio o evento '$titulo' para ${parsed.labelPt} (${duracaoMin} min$locPart)?\" Só chame criar_evento novamente com confirmado=true depois que ele confirmar com sim."
+                        )
+                    } else {
+                        val startMs = parsed.dateTime.toInstant().toEpochMilli()
+                        val endMs = startMs + duracaoMin * 60_000L
+                        val res = host.createCalendarEvent(titulo, startMs, endMs, local, lembreteMin)
+                        LiveToolExecution(res, "Evento criado")
+                    }
+                }
+            }
+
+            "lembrete" -> {
+                val texto = args?.optString("texto")?.trim().orEmpty()
+                val quando = args?.optString("quando")?.trim().orEmpty()
+                if (texto.isBlank() || quando.isBlank()) {
+                    LiveToolExecution("Informe o texto e quando deseja ser lembrado.")
+                } else {
+                    val parsed = PortugueseDateTimeParser.parseDateTime(quando, ZonedDateTime.now())
+                    if (parsed == null) {
+                        LiveToolExecution("Não consegui entender o horário \"$quando\". Diga, por exemplo, 'daqui a 20 minutos' ou 'amanhã às 9h'.")
+                    } else {
+                        val triggerMs = parsed.dateTime.toInstant().toEpochMilli()
+                        val res = host.scheduleLocalReminder(texto, triggerMs)
+                        LiveToolExecution(res, "Lembrete")
+                    }
+                }
+            }
+
+            "abrir_app" -> {
+                val nome = args?.optString("nome")?.trim().orEmpty()
+                if (nome.isBlank()) {
+                    LiveToolExecution("Informe o nome do aplicativo que deseja abrir no tablet.")
+                } else {
+                    val res = host.openTabletApp(nome)
+                    LiveToolExecution(res, "App: $nome")
+                }
+            }
+
+            "abrir_no_celular" -> {
+                val app = args?.optString("app")?.trim().orEmpty()
+                if (app.isBlank()) {
+                    LiveToolExecution("Informe o nome do aplicativo que deseja abrir no celular.")
+                } else {
+                    val res = host.openPhoneApp(app)
+                    LiveToolExecution(res, "Celular: $app")
+                }
             }
 
             "ler_mensagens", "ler_whatsapp" -> {

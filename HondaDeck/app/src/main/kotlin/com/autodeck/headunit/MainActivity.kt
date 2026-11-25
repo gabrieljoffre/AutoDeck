@@ -261,6 +261,9 @@ class MainActivity : ComponentActivity() {
         if (!hasPermission(Manifest.permission.READ_CALENDAR)) {
             missing += Manifest.permission.READ_CALENDAR
         }
+        if (!hasPermission(Manifest.permission.WRITE_CALENDAR)) {
+            missing += Manifest.permission.WRITE_CALENDAR
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
             missing += Manifest.permission.POST_NOTIFICATIONS
         }
@@ -270,8 +273,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun requestCalendarPermission() {
-        if (!hasPermission(Manifest.permission.READ_CALENDAR)) {
-            runCatching { permissionLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR)) }
+        val missing = mutableListOf<String>()
+        if (!hasPermission(Manifest.permission.READ_CALENDAR)) missing += Manifest.permission.READ_CALENDAR
+        if (!hasPermission(Manifest.permission.WRITE_CALENDAR)) missing += Manifest.permission.WRITE_CALENDAR
+        if (missing.isNotEmpty()) {
+            runCatching { permissionLauncher.launch(missing.toTypedArray()) }
         } else {
             viewModel.onPermissionsUpdated()
         }

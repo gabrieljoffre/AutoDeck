@@ -69,8 +69,19 @@ sealed interface CopilotIntent {
     data class CallWhatsApp(val recipient: String) : CopilotIntent
     data object AnswerCall : CopilotIntent
     data object EndCall : CopilotIntent
+    data class SearchContact(val query: String) : CopilotIntent
     data object Weather : CopilotIntent
-    data class CalendarAgenda(val dayOffset: Int = 0) : CopilotIntent
+    data class CalendarAgenda(val dayOffset: Int = 0, val rangeQuery: String = "") : CopilotIntent
+    data class CreateCalendarEvent(
+        val title: String,
+        val whenText: String,
+        val durationMinutes: Int = 60,
+        val location: String? = null
+    ) : CopilotIntent
+    data class SetReminder(val text: String, val whenText: String) : CopilotIntent
+    data class OpenTabletApp(val appName: String) : CopilotIntent
+    data class OpenPhoneApp(val appName: String) : CopilotIntent
+    data object ListCapabilities : CopilotIntent
     data object Report : CopilotIntent
     data class LogFuel(val raw: String) : CopilotIntent
     data object FuelSummary : CopilotIntent
@@ -288,9 +299,46 @@ object CopilotIntentParser {
     )
 
     private val CALENDAR_AGENDA_REGEX = Regex(
-        """\b(?:minha\s+agenda|agenda(?:\s+de\s+(?:hoje|amanha))?|meus\s+compromissos|compromissos(?:\s+(?:de\s+)?(?:hoje|amanha))?|o\s+que\s+(?:eu\s+)?tenho\s+(?:na\s+agenda\s+)?(?:hoje|amanha)|eventos\s+(?:de\s+)?(?:hoje|amanha)|tenho\s+(?:algum\s+)?(?:compromisso|reuniao|evento)\s*(?:hoje|amanha)?)\b"""
+        """\b(?:minha\s+agenda|agenda(?:\s+(?:de|da|para|pra)\s+[\w\s/]+)?|meus\s+compromissos|compromissos(?:\s+(?:de|da|para|pra)?\s*[\w\s/]+)?|o\s+que\s+(?:eu\s+)?tenho\s+(?:na\s+agenda\s+)?(?:hoje|amanha|essa\s+semana|esta\s+semana|proxima\s+semana|semana\s+que\s+vem|segunda|terca|quarta|quinta|sexta|sabado|domingo)|eventos\s+(?:de|da)\s+[\w\s/]+|tenho\s+(?:algum\s+)?(?:compromisso|reuniao|evento)\s*(?:hoje|amanha|essa\s+semana|esta\s+semana|segunda|terca|quarta|quinta|sexta|sabado|domingo)?)\b"""
     )
     private val CALENDAR_TOMORROW_REGEX = Regex("""\bamanha\b""")
+    private val CALENDAR_EXTENDED_RANGE_REGEX = Regex(
+        """\b(depois\s+de\s+amanha|essa\s+semana|esta\s+semana|proxima\s+semana|semana\s+que\s+vem|fim\s+de\s+semana|final\s+de\s+semana|proximos?\s+\d+\s+dias?|segunda(?:\s+feira)?|terca(?:\s+feira)?|quarta(?:\s+feira)?|quinta(?:\s+feira)?|sexta(?:\s+feira)?|sabado|domingo|\d{1,2}/\d{1,2}(?:/\d{2,4})?|dia\s+\d{1,2})\b"""
+    )
+
+    // Capacidades ("o que você consegue fazer?")
+    private val CAPABILITIES_REGEX = Regex(
+        """\b(?:o\s+que\s+(?:voce|vc)\s+(?:consegue|pode|sabe)\s+fazer|o\s+que\s+(?:voce|vc)\s+faz|quais\s+(?:sao\s+)?(?:suas|as\s+suas)\s+(?:funcoes|capacidades|habilidades)|como\s+(?:voce|vc)\s+pode\s+me\s+ajudar)\b"""
+    )
+
+    // Buscar contato
+    private val SEARCH_CONTACT_PATTERNS = listOf(
+        Regex("""^(?:por\s+favor\s+)?(?:buscar|busca|busque|procurar|procura|procure|encontrar|encontra|achar|acha|ver)\s+(?:o\s+|a\s+)?(?:contato|numero|telefone)\s+(?:de|da|do)\s+(.+)$"""),
+        Regex("""^(?:qual\s+(?:e\s+)?o\s+(?:numero|telefone|contato|whatsapp|zap)\s+(?:de|da|do))\s+(.+)$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:buscar|busca|busque|procurar|procura|procure)\s+contato\s+(.+)$""")
+    )
+
+    // Lembrete local no tablet
+    private val REMINDER_PATTERNS = listOf(
+        Regex("""^(?:por\s+favor\s+)?(?:me\s+)?(?:lembrar|lembra|lembre)(?:\s+de)?\s+(.+?)\s+((?:daqui\s+a?\s*|em\s+\d|em\s+(?:uma|um|duas|dois|meia)|hoje|amanha|depois\s+de\s+amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|as\s+\d|ao\s+meio|a\s+meia|dia\s+\d|\d{1,2}/\d{1,2}).*)$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:criar|cria|crie|definir|define|agendar|agenda|colocar|coloca)\s+(?:um\s+)?lembrete\s+(?:para\s+|pra\s+|de\s+)?(.+?)\s+((?:daqui\s+a?\s*|em\s+\d|em\s+(?:uma|um|duas|dois|meia)|hoje|amanha|depois\s+de\s+amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|as\s+\d|ao\s+meio|a\s+meia|dia\s+\d|\d{1,2}/\d{1,2}).*)$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:lembrete)\s+((?:daqui\s+a?\s*[\w\s]+?|em\s+[\w\s]+?|hoje\s+as\s+[\w:]+|amanha\s+as\s+[\w:]+))\s+(?:de\s+|para\s+|pra\s+)?(.+)$""")
+    )
+
+    // Criar evento na agenda
+    private val CREATE_EVENT_PATTERNS = listOf(
+        Regex("""^(?:por\s+favor\s+)?(?:criar|cria|crie|agendar|agenda|agende|marcar|marca|marque|adicionar|adiciona|colocar|coloca)\s+(?:um\s+|uma\s+)?(?:evento|compromisso|reuniao)\s+(?:chamado\s+|de\s+)?(.+?)\s+(?:para\s+|pra\s+|no\s+dia\s+|na\s+|no\s+)?((?:hoje|amanha|depois\s+de\s+amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|dia\s+\d|\d{1,2}/\d{1,2}).*)$"""),
+        Regex("""^(?:por\s+favor\s+)?(?:agendar|agenda|agende|marcar|marca|marque)\s+(.+?)\s+(?:para\s+|pra\s+)?((?:hoje|amanha|depois\s+de\s+amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|dia\s+\d|\d{1,2}/\d{1,2})\s+.*)$""")
+    )
+
+    // Abrir outros apps (no celular ou no tablet)
+    private val OPEN_PHONE_APP_REGEX = Regex(
+        """^(?:por\s+favor\s+)?(?:abrir|abre|abra)\s+(?:o\s+|a\s+)?(?:app\s+|aplicativo\s+)?(.+?)\s+no\s+(?:celular|telefone|samsung)$"""
+    )
+    private val OPEN_TABLET_APP_REGEX = Regex(
+        """^(?:por\s+favor\s+)?(?:abrir|abre|abra)\s+(?:(o|a)\s+)?(?:(?:app|aplicativo)\s+(?:do\s+|da\s+|de\s+)?)?(.+)$"""
+    )
+    private val CAMERA_REVERSE_HINT = Regex("""\b(?:camera\s+de\s+re|re)\b""")
 
     private val COOLANT_REGEX = Regex("""\b(?:temperatura|esquentando|superaquecendo|arrefecimento|radiador|agua\s+do\s+motor)\b""")
     private val VOLTAGE_REGEX = Regex("""\b(?:voltagem|bateria|alternador|tensao)\b""")
@@ -337,6 +385,53 @@ object CopilotIntentParser {
         // 1b. Limpar memória de conversas ("esqueça as conversas")
         if (FORGET_CONVERSATIONS_REGEX.containsMatchIn(q)) {
             return CopilotIntent.ForgetConversations
+        }
+
+        // 1c. Capacidades ("o que você consegue fazer?")
+        if (CAPABILITIES_REGEX.containsMatchIn(q)) {
+            return CopilotIntent.ListCapabilities
+        }
+
+        // 1d. Lembretes locais no tablet ("me lembra de ...", "criar lembrete ...")
+        for ((idx, pat) in REMINDER_PATTERNS.withIndex()) {
+            val m = pat.find(q)
+            if (m != null) {
+                val (remText, whenTxt) = if (idx == 2) {
+                    m.groupValues[2].trim() to m.groupValues[1].trim()
+                } else {
+                    m.groupValues[1].trim() to m.groupValues[2].trim()
+                }
+                if (remText.isNotEmpty() && whenTxt.isNotEmpty()) {
+                    return CopilotIntent.SetReminder(text = remText, whenText = whenTxt)
+                }
+            }
+        }
+
+        // 1e. Criar evento na agenda ("criar evento ...", "marcar reunião ... amanhã às 3 da tarde")
+        for (pat in CREATE_EVENT_PATTERNS) {
+            val m = pat.find(q)
+            if (m != null) {
+                val title = m.groupValues[1].trim()
+                val whenTxt = m.groupValues[2].trim()
+                if (title.isNotEmpty() && whenTxt.isNotEmpty()) {
+                    return CopilotIntent.CreateCalendarEvent(title = title, whenText = whenTxt)
+                }
+            }
+        }
+
+        // 1f. Buscar contato ("buscar contato Ana", "qual o telefone da mãe")
+        for (pat in SEARCH_CONTACT_PATTERNS) {
+            val m = pat.find(q)
+            if (m != null) {
+                val target = m.groupValues[1].trim()
+                if (target.isNotEmpty()) return CopilotIntent.SearchContact(target)
+            }
+        }
+
+        // 1g. Abrir aplicativo no celular via Ponte ("abre o Instagram no celular")
+        OPEN_PHONE_APP_REGEX.find(q)?.let { m ->
+            val appName = m.groupValues[1].trim()
+            if (appName.isNotEmpty()) return CopilotIntent.OpenPhoneApp(appName)
         }
 
         // 2. Mensagens e chamadas (Ponte celular): enviar áudio/texto > responder > ligar WhatsApp/telefone > atender/desligar > ler
@@ -477,13 +572,20 @@ object CopilotIntentParser {
         // 9. Volume (antes de música para "colocar volume no 50" ou "abaixar o som" não virar busca musical)
         parseVolumeIntent(q)?.let { return it }
 
-        // 10. Câmera de ré (OPEN_CAMERA sempre abre; CLOSE_CAMERA fecha)
+        // 10. Câmera de ré vs abrir app "a câmera"
         if (CAMERA_WORD_REGEX.containsMatchIn(q)) {
-            return if (CAMERA_CLOSE_REGEX.containsMatchIn(q)) {
-                CopilotIntent.CloseCamera
-            } else {
-                CopilotIntent.OpenCamera
+            if (CAMERA_CLOSE_REGEX.containsMatchIn(q)) {
+                return CopilotIntent.CloseCamera
             }
+            // "abre a câmera" (com artigo 'a' e sem 'de ré') abre o app de câmera do tablet;
+            // "abrir câmera" / "abrir câmera de ré" continua abrindo a câmera de ré do painel.
+            if (!CAMERA_REVERSE_HINT.containsMatchIn(q) &&
+                Regex("""^(?:por\s+favor\s+)?(?:abrir|abre|abra)\s+(?:a\s+|o\s+app\s+(?:da\s+)?)?camera$""").matches(q) &&
+                (q.contains(" a camera") || q.contains("app"))
+            ) {
+                return CopilotIntent.OpenTabletApp("camera")
+            }
+            return CopilotIntent.OpenCamera
         }
 
         // 11. Controles de música (próxima/anterior antes de pause para "voltar para a música anterior" não casar "para a música")
@@ -521,10 +623,15 @@ object CopilotIntentParser {
             return CopilotIntent.Weather
         }
 
-        // 13b. Agenda / compromissos de hoje ou amanhã
+        // 13b. Agenda / compromissos (hoje, amanhã ou dia/intervalo)
         if (CALENDAR_AGENDA_REGEX.containsMatchIn(q)) {
-            val offset = if (CALENDAR_TOMORROW_REGEX.containsMatchIn(q)) 1 else 0
-            return CopilotIntent.CalendarAgenda(offset)
+            val extRange = CALENDAR_EXTENDED_RANGE_REGEX.find(q)?.groupValues?.get(1)?.trim().orEmpty()
+            return if (extRange.isNotEmpty()) {
+                CopilotIntent.CalendarAgenda(dayOffset = 0, rangeQuery = extRange)
+            } else {
+                val offset = if (CALENDAR_TOMORROW_REGEX.containsMatchIn(q)) 1 else 0
+                CopilotIntent.CalendarAgenda(dayOffset = offset)
+            }
         }
 
         // 14. Telemetria específica
@@ -543,6 +650,14 @@ object CopilotIntentParser {
             TAB_SCANNER_REGEX.containsMatchIn(q) -> return CopilotIntent.SwitchTab(CopilotTab.OBD_SCANNER)
             TAB_COPILOT_REGEX.containsMatchIn(q) -> return CopilotIntent.SwitchTab(CopilotTab.AGENT_VOICE)
             TAB_HOME_REGEX.containsMatchIn(q) -> return CopilotIntent.SwitchTab(CopilotTab.HOME)
+        }
+
+        // 16. Abrir outros aplicativos instalados no tablet ("abre o YouTube Music", "abre o Waze", etc.)
+        OPEN_TABLET_APP_REGEX.find(q)?.let { m ->
+            val appName = m.groupValues[2].trim()
+            if (appName.isNotEmpty() && appName !in UI_SCREEN_NAMES) {
+                return CopilotIntent.OpenTabletApp(appName)
+            }
         }
 
         return CopilotIntent.Unknown

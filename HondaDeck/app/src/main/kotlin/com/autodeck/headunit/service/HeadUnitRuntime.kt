@@ -11,12 +11,19 @@ import com.autodeck.headunit.agent.AgentUiState
 import com.autodeck.headunit.agent.CarAgentHostBridge
 import com.autodeck.headunit.agent.GeminiCarAgent
 import com.autodeck.headunit.agent.ResolvedPhoneRecipient
+import com.autodeck.headunit.apps.TabletAppsManager
+import com.autodeck.headunit.calendar.ParsedDateRange
+import com.autodeck.headunit.calendar.PortugueseDateTimeParser
+import com.autodeck.headunit.calendar.ReminderManager
 import com.autodeck.headunit.phone.PhoneLinkClient
 import com.autodeck.headunit.phone.PhoneLinkClientEvent
 import com.autodeck.headunit.phone.PhoneLinkUiState
 import com.autodeck.headunit.phone.VoiceNoteRecorder
 import com.autodeck.protocol.phone.BrazilPhoneNumber
+import com.autodeck.protocol.phone.ContactMatchResult
 import com.autodeck.protocol.phone.PhoneCallStatus
+import com.autodeck.protocol.phone.PhoneContact
+import com.autodeck.protocol.phone.PhoneContactMatcher
 import com.autodeck.headunit.agent.copilot.CopilotIntentParser
 import com.autodeck.headunit.agent.copilot.FavoriteRef
 import com.autodeck.headunit.agent.copilot.VolumeDirection
@@ -223,6 +230,10 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
 
     private val phoneLinkClient = PhoneLinkClient(appContext, scope)
     private val voiceNoteRecorder = VoiceNoteRecorder(appContext)
+    private val tabletAppsManager = TabletAppsManager(appContext)
+    private val reminderManager = ReminderManager(appContext)
+    @Volatile
+    private var lastObservedPhoneConnected: Boolean = false
 
     private val usbHubCoordinator: UsbHubCoordinator = UsbHubCoordinator(
         context = appContext,
@@ -641,9 +652,33 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         val stale = System.currentTimeMillis() - current.updatedAtMs > WEATHER_REFRESH_MS
         if (!force && current.updatedAtMs > 0L && !stale) return
         scope.launch {
-            val loaded = CalendarRepository.load(appContext)
-            _uiState.update { it.copy(calendar = loaded) }
+            val nowMs = System.currentTimeMillis()
+            val local = CalendarRepository.load(appContext, nowMs)
+            val combined = if (phoneLinkClient.state.value.isConnected) {
+                val (startMs, endMs) = CalendarRepository.defaultWindowBounds(nowMs)
+                val phoneRes = phoneLinkClient.fetchPhoneCalendarEvents(startMs, endMs)
+                if (phoneRes.isSuccess) {
+                    CalendarRepository.mergeWithPhoneEvents(
+                        tabletState = local,
+                        phoneEvents = phoneRes.getOrDefault(emptyList()),
+                        phoneCalendarAvailable = true
+                    )
+                } else {
+                    local
+                }
+            } else {
+                local
+            }
+            _uiState.update { it.copy(calendar = combined) }
         }
+    }
+
+    fun onReminderTriggered(id: Int, text: String) {
+        val clean = text.trim()
+        if (clean.isBlank()) return
+        ReminderManager.showNotification(appContext, id, clean)
+        emitWebEvent("toast", "Lembrete: $clean")
+        carAgent.announceReminder(clean)
     }
     fun onSpotifyAuthorized(activityContext: Context) = mediaController.spotify.onAuthorized(activityContext)
     fun onSpotifyAuthFailed(reason: String) = mediaController.spotify.onAuthFailed(reason)
@@ -824,6 +859,14 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     fun unpairPhone() = phoneLinkClient.unpair()
     fun discoverPhone() = phoneLinkClient.triggerDiscoveryProbe()
     fun reconnectPhone() = phoneLinkClient.requestReconnect()
+
+    fun syncPhoneContactsNow() {
+        scope.launch {
+            phoneLinkClient.syncContactsNow()
+                .onSuccess { count -> emitWebEvent("toast", "$count contatos sincronizados do celular") }
+                .onFailure { err -> emitWebEvent("error", err.message ?: "Não foi possível sincronizar contatos") }
+        }
+    }
 
     fun answerPhoneCallFromUi() {
         scope.launch {
@@ -1196,36 +1239,233 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                 hasWhatsApp = true
             )
         }
+
+        // 1) Busca prioritária no cache local completo (com apelidos, sem acentos, ambiguidade e todos os números)
+        var cachedContacts = phoneLinkClient.getCachedContacts()
+        if (cachedContacts.isEmpty() && phoneLinkClient.state.value.isConnected) {
+            phoneLinkClient.syncContactsNow(includePhotos = false)
+            cachedContacts = phoneLinkClient.getCachedContacts()
+        }
+
+        if (cachedContacts.isNotEmpty()) {
+            return when (val match = PhoneContactMatcher.resolve(cachedContacts, clean)) {
+                is ContactMatchResult.Exact -> {
+                    val chosen = match.contact
+                    val preferred = chosen.preferredWhatsAppNumber()
+                    ResolvedPhoneRecipient(
+                        ok = true,
+                        displayName = chosen.name,
+                        normalizedNumber = preferred?.normalized ?: chosen.normalizedPhone,
+                        hasWhatsApp = chosen.hasWhatsApp || (preferred?.hasWhatsApp == true),
+                        voipDataId = preferred?.whatsAppVoipDataId ?: chosen.whatsAppVoipDataId
+                    )
+                }
+                is ContactMatchResult.Ambiguous -> {
+                    val options = match.candidates.take(4).joinToString(", ") { it.name }
+                    ResolvedPhoneRecipient(
+                        ok = false,
+                        errorMessage = "Encontrei mais de um contato para \"$clean\": $options. Qual deles você quer?",
+                        multipleCandidates = match.candidates.take(4)
+                    )
+                }
+                ContactMatchResult.NotFound -> {
+                    if (!phoneLinkClient.state.value.isConnected) {
+                        ResolvedPhoneRecipient(
+                            ok = false,
+                            errorMessage = "Não encontrei \"$clean\" nos contatos salvos (celular desconectado no momento)."
+                        )
+                    } else {
+                        fallbackRemoteContactLookup(clean)
+                    }
+                }
+            }
+        }
+
         if (!phoneLinkClient.state.value.isConnected) {
             return ResolvedPhoneRecipient(
                 ok = false,
                 errorMessage = "Celular não está conectado ao HondaDeck Ponte. Conecte em Ajustes › Celular."
             )
         }
+        return fallbackRemoteContactLookup(clean)
+    }
+
+    private suspend fun fallbackRemoteContactLookup(clean: String): ResolvedPhoneRecipient {
         val contacts = phoneLinkClient.searchContacts(clean).getOrElse { err ->
             return ResolvedPhoneRecipient(ok = false, errorMessage = err.message ?: "Erro ao buscar contatos no celular.")
         }
         if (contacts.isEmpty()) {
             return ResolvedPhoneRecipient(ok = false, errorMessage = "Não encontrei \"$clean\" nos contatos do celular.")
         }
-        val normClean = CopilotIntentParser.normalize(clean)
-        val exact = contacts.firstOrNull { CopilotIntentParser.normalize(it.name) == normClean }
-        val distinctNames = contacts.map { it.name }.distinct()
-        if (exact != null || distinctNames.size == 1) {
-            val chosen = exact ?: contacts.first()
-            return ResolvedPhoneRecipient(
-                ok = true,
-                displayName = chosen.name,
-                normalizedNumber = chosen.normalizedPhone,
-                hasWhatsApp = chosen.hasWhatsApp,
-                voipDataId = chosen.whatsAppVoipDataId
-            )
+        return when (val match = PhoneContactMatcher.resolve(contacts, clean)) {
+            is ContactMatchResult.Exact -> {
+                val chosen = match.contact
+                val preferred = chosen.preferredWhatsAppNumber()
+                ResolvedPhoneRecipient(
+                    ok = true,
+                    displayName = chosen.name,
+                    normalizedNumber = preferred?.normalized ?: chosen.normalizedPhone,
+                    hasWhatsApp = chosen.hasWhatsApp || (preferred?.hasWhatsApp == true),
+                    voipDataId = preferred?.whatsAppVoipDataId ?: chosen.whatsAppVoipDataId
+                )
+            }
+            is ContactMatchResult.Ambiguous -> {
+                val options = match.candidates.take(4).joinToString(", ") { it.name }
+                ResolvedPhoneRecipient(
+                    ok = false,
+                    errorMessage = "Encontrei mais de um contato parecido: $options. Qual deles você quer?",
+                    multipleCandidates = match.candidates.take(4)
+                )
+            }
+            ContactMatchResult.NotFound ->
+                ResolvedPhoneRecipient(ok = false, errorMessage = "Não encontrei \"$clean\" nos contatos do celular.")
         }
-        val options = distinctNames.take(4).joinToString(", ")
-        return ResolvedPhoneRecipient(
-            ok = false,
-            errorMessage = "Encontrei mais de um contato parecido: $options. Qual deles você quer?",
-            multipleCandidates = contacts.take(4)
+    }
+
+    override fun getTopFrequentContacts(limit: Int): List<PhoneContact> =
+        phoneLinkClient.getTopFrequentContacts(limit)
+
+    override suspend fun searchContactsForAgent(query: String): String {
+        val clean = query.trim()
+        if (clean.isEmpty()) return "Informe o nome ou apelido do contato."
+        var list = phoneLinkClient.getCachedContacts()
+        if (list.isEmpty() && phoneLinkClient.state.value.isConnected) {
+            phoneLinkClient.syncContactsNow(includePhotos = false)
+            list = phoneLinkClient.getCachedContacts()
+        }
+        if (list.isEmpty() && phoneLinkClient.state.value.isConnected) {
+            list = phoneLinkClient.searchContacts(clean).getOrDefault(emptyList())
+        }
+        if (list.isEmpty()) {
+            return if (phoneLinkClient.state.value.isConnected) {
+                "Nenhum contato sincronizado do celular. Verifique a permissão de Contatos no app HondaDeck Ponte."
+            } else {
+                "Ainda não há contatos sincronizados e o celular está desconectado. Conecte em Ajustes › Celular."
+            }
+        }
+        return PhoneContactMatcher.formatToolSearchResult(clean, list)
+    }
+
+    override suspend fun getAgendaForRange(
+        rangeQuery: String?,
+        startDateIso: String?,
+        endDateIso: String?
+    ): String {
+        val now = java.time.ZonedDateTime.now()
+        val zone = now.zone
+        val range = if (!startDateIso.isNullOrBlank()) {
+            val s = runCatching { java.time.LocalDate.parse(startDateIso.trim()) }.getOrNull() ?: now.toLocalDate()
+            val e = endDateIso?.trim()?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() } ?: s
+            val label = if (s == e) s.toString() else "$s a $e"
+            ParsedDateRange(s, if (e.isBefore(s)) s else e, label)
+        } else {
+            PortugueseDateTimeParser.parseDateRange(rangeQuery, now)
+        }
+
+        var calState = _uiState.value.calendar
+        val startMs = range.startDate.atStartOfDay(zone).toInstant().toEpochMilli()
+        val endMs = range.endDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val (defStart, defEnd) = CalendarRepository.defaultWindowBounds(System.currentTimeMillis(), zone)
+        val outsideWindow = startMs < defStart || endMs > defEnd
+
+        if (outsideWindow || calState.updatedAtMs == 0L) {
+            calState = CalendarRepository.loadRange(appContext, startMs, endMs)
+        }
+
+        if (phoneLinkClient.state.value.isConnected && (!calState.permissionGranted || !calState.phoneCalendarAvailable || outsideWindow)) {
+            val phoneRes = phoneLinkClient.fetchPhoneCalendarEvents(startMs, endMs)
+            if (phoneRes.isSuccess) {
+                calState = CalendarRepository.mergeWithPhoneEvents(
+                    tabletState = calState,
+                    phoneEvents = phoneRes.getOrDefault(emptyList()),
+                    zone = zone,
+                    phoneCalendarAvailable = true
+                )
+            }
+        }
+        return CalendarRepository.formatAgendaRangeSummary(calState, range, zone)
+    }
+
+    override suspend fun createCalendarEvent(
+        title: String,
+        startMs: Long,
+        endMs: Long,
+        location: String,
+        reminderMinutes: Int?
+    ): String {
+        val localResult = CalendarRepository.createEvent(
+            context = appContext,
+            title = title,
+            startMs = startMs,
+            endMs = endMs,
+            location = location,
+            reminderMinutes = reminderMinutes
+        )
+        if (localResult.isSuccess) {
+            refreshCalendar(force = true)
+            val whenStr = ReminderManager.formatTriggerTime(startMs)
+            val msg = "Evento \"$title\" criado na agenda para $whenStr."
+            emitWebEvent("toast", msg)
+            return msg
+        }
+
+        // Fallback: se o tablet não tiver conta Google ou WRITE_CALENDAR, cria no celular via Ponte
+        if (phoneLinkClient.state.value.isConnected) {
+            val phoneRes = phoneLinkClient.createPhoneCalendarEvent(
+                title = title,
+                startMs = startMs,
+                endMs = endMs,
+                location = location,
+                reminderMinutes = reminderMinutes
+            )
+            if (phoneRes.isSuccess) {
+                refreshCalendar(force = true)
+                val msg = phoneRes.getOrThrow()
+                emitWebEvent("toast", msg)
+                return msg
+            }
+            return phoneRes.exceptionOrNull()?.message
+                ?: localResult.exceptionOrNull()?.message
+                ?: "Não foi possível criar o evento na agenda."
+        }
+        return localResult.exceptionOrNull()?.message
+            ?: "Permita acesso à agenda no tablet ou conecte o celular na Ponte para criar eventos."
+    }
+
+    override fun scheduleLocalReminder(text: String, triggerAtMs: Long): String {
+        return reminderManager.scheduleReminder(text, triggerAtMs).fold(
+            onSuccess = { rem ->
+                val whenStr = ReminderManager.formatTriggerTime(rem.triggerAtMs)
+                val msg = "Lembrete criado para $whenStr: ${rem.text}."
+                emitWebEvent("toast", msg)
+                msg
+            },
+            onFailure = { err -> err.message ?: "Não foi possível criar o lembrete." }
+        )
+    }
+
+    override fun openTabletApp(appName: String): String =
+        tabletAppsManager.openApp(appName).fold(
+            onSuccess = { msg ->
+                emitWebEvent("toast", msg)
+                msg
+            },
+            onFailure = { err -> err.message ?: "Não encontrei o aplicativo \"$appName\" no tablet." }
+        )
+
+    override fun listTabletAppNames(limit: Int): List<String> =
+        tabletAppsManager.listInstalledApps().map { it.label }.take(limit)
+
+    override suspend fun openPhoneApp(appName: String): String {
+        if (!phoneLinkClient.state.value.isConnected) {
+            return "Celular não está conectado ao HondaDeck Ponte. Conecte em Ajustes › Celular."
+        }
+        return phoneLinkClient.openAppOnPhone(appName).fold(
+            onSuccess = { msg ->
+                emitWebEvent("toast", msg)
+                msg
+            },
+            onFailure = { err -> err.message ?: "Não foi possível abrir \"$appName\" no celular." }
         )
     }
 
@@ -1684,7 +1924,21 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
         scope.launch {
             phoneLinkClient.state.collect { phone ->
+                val justConnected = phone.isConnected && !lastObservedPhoneConnected
+                lastObservedPhoneConnected = phone.isConnected
                 _uiState.update { it.copy(phoneLink = phone) }
+                if (justConnected) {
+                    refreshCalendar(force = true)
+                }
+            }
+        }
+        scope.launch {
+            while (isActive) {
+                delay(5_000L)
+                val due = reminderManager.popDueReminders(System.currentTimeMillis())
+                for (rem in due) {
+                    onReminderTriggered(rem.id, rem.text)
+                }
             }
         }
         scope.launch {
@@ -1695,6 +1949,9 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                     }
                     is PhoneLinkClientEvent.MessageReceived -> {
                         emitWebEvent("toast", "${ev.message.appLabel} · ${ev.message.sender}: ${ev.message.text.take(60)}")
+                    }
+                    is PhoneLinkClientEvent.ContactsSynced -> {
+                        emitWebEvent("toast", "${ev.count} contatos sincronizados do celular")
                     }
                     is PhoneLinkClientEvent.CallStateChanged -> Unit
                 }

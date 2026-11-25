@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.update
 
 data class PontePermissionStatus(
     val contacts: Boolean = false,
+    val calendar: Boolean = false,
     val phone: Boolean = false,
     val postNotifications: Boolean = true,
     val notificationListener: Boolean = false,
@@ -25,6 +26,7 @@ data class PonteUiState(
     val port: Int = PhoneLinkProtocol.TCP_PORT,
     val pin: String = "------",
     val pairedCount: Int = 0,
+    val contactsCount: Int = 0,
     val connectedTabletName: String? = null,
     val connectedTabletAddress: String? = null,
     val callState: PhoneCallInfo = PhoneCallInfo(),

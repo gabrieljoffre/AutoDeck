@@ -195,6 +195,9 @@ function renderEventItem(ev, showDatePrefix = false) {
     const d = parseIsoDate(ev.dateIso);
     metaParts.unshift(`${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`);
   }
+  if (ev.source === 'phone') {
+    metaParts.push('Celular');
+  }
 
   const hasLocation = Boolean(ev.location && ev.location.trim());
   const routeBtn = hasLocation
@@ -261,10 +264,11 @@ function renderAgendaPane() {
     );
   }
 
-  if (!latestCalendar.permissionGranted) {
+  const hasPhoneCalendar = Boolean(latestCalendar.phoneCalendarAvailable) || Number(latestCalendar.phoneEventsCount || 0) > 0 || (latestCalendar.events || []).some((e) => e.source === 'phone');
+  if (!latestCalendar.permissionGranted && !hasPhoneCalendar) {
     content.push(
       el('div', { className: 'cal-perm-box' },
-        el('p', { className: 'cal-perm-text' }, 'Permita o acesso à agenda do tablet para ver seus compromissos do Google Agenda.'),
+        el('p', { className: 'cal-perm-text' }, 'Permita o acesso à agenda do tablet ou conecte o celular na Ponte para ver seus compromissos do Google Agenda.'),
         el('button', {
           type: 'button',
           className: 'btn-accent cal-perm-btn',

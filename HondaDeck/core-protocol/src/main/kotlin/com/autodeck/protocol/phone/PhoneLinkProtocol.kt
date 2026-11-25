@@ -23,6 +23,7 @@ object PhoneLinkProtocol {
     const val METHOD_PING = "ping"
     const val METHOD_STATUS_GET = "status.get"
     const val METHOD_CONTACTS_SEARCH = "contacts.search"
+    const val METHOD_CONTACTS_SYNC = "contacts.sync"
     const val METHOD_CALL_DIAL = "call.dial"
     const val METHOD_CALL_ANSWER = "call.answer"
     const val METHOD_CALL_END = "call.end"
@@ -32,12 +33,17 @@ object PhoneLinkProtocol {
     const val METHOD_MESSAGES_LIST = "messages.list"
     const val METHOD_MESSAGES_REPLY = "messages.reply"
     const val METHOD_MESSAGES_DISMISS = "messages.dismiss"
+    const val METHOD_CALENDAR_LIST = "calendar.list"
+    const val METHOD_CALENDAR_CREATE = "calendar.create"
+    const val METHOD_APPS_LIST = "apps.list"
+    const val METHOD_APPS_OPEN = "apps.open"
 
     // Eventos assíncronos (celular -> tablet)
     const val EVENT_CALL_STATE = "call.state"
     const val EVENT_MESSAGE_RECEIVED = "message.received"
     const val EVENT_MESSAGE_REMOVED = "message.removed"
     const val EVENT_PHONE_STATUS = "phone.status"
+    const val EVENT_CONTACTS_UPDATED = "contacts.updated"
 
     // Códigos de erro padronizados
     const val ERR_UNAUTHORIZED = "UNAUTHORIZED"
@@ -77,13 +83,66 @@ data class PhoneCallInfo(
             status == PhoneCallStatus.ACTIVE
 }
 
+data class PhoneContactNumber(
+    val raw: String,
+    val normalized: String,
+    val label: String = "",
+    val hasWhatsApp: Boolean = false,
+    val whatsAppVoipDataId: Long? = null
+)
+
 data class PhoneContact(
     val id: String,
     val name: String,
     val phone: String,
     val normalizedPhone: String,
     val hasWhatsApp: Boolean = false,
-    val whatsAppVoipDataId: Long? = null
+    val whatsAppVoipDataId: Long? = null,
+    val nicknames: List<String> = emptyList(),
+    val phones: List<PhoneContactNumber> = emptyList(),
+    val starred: Boolean = false,
+    val timesContacted: Int = 0,
+    val lastTimeContactedMs: Long = 0L,
+    val photoBase64: String? = null
+) {
+    /** Todos os números do contato (garantindo que o principal sempre esteja presente). */
+    fun allNumbers(): List<PhoneContactNumber> {
+        if (phones.isNotEmpty()) return phones
+        if (normalizedPhone.isBlank() && phone.isBlank()) return emptyList()
+        return listOf(
+            PhoneContactNumber(
+                raw = phone.ifBlank { normalizedPhone },
+                normalized = normalizedPhone.ifBlank { phone },
+                hasWhatsApp = hasWhatsApp,
+                whatsAppVoipDataId = whatsAppVoipDataId
+            )
+        )
+    }
+
+    /** Melhor número para WhatsApp (prioriza número com flag/VoIP WhatsApp). */
+    fun preferredWhatsAppNumber(): PhoneContactNumber? {
+        val all = allNumbers()
+        return all.firstOrNull { it.whatsAppVoipDataId != null }
+            ?: all.firstOrNull { it.hasWhatsApp }
+            ?: all.firstOrNull()
+    }
+}
+
+data class PhoneCalendarEvent(
+    val id: String,
+    val title: String,
+    val startMs: Long,
+    val endMs: Long,
+    val allDay: Boolean = false,
+    val location: String = "",
+    val colorHex: String = "#22D3EE",
+    val dateIso: String = "",
+    val endDateIso: String = ""
+)
+
+data class PhoneAppEntry(
+    val packageName: String,
+    val label: String
 )
 
 data class PhoneMessageNotification(
@@ -240,29 +299,117 @@ object PhoneLinkCodec {
         return UdpDiscoveryAnnouncement(name = name, port = port, deviceId = deviceId, protocolVersion = version)
     }
 
-    fun contactToMap(c: PhoneContact): Map<String, Any?> = linkedMapOf(
+    fun contactNumberToMap(n: PhoneContactNumber): Map<String, Any?> = linkedMapOf<String, Any?>(
+        "raw" to n.raw,
+        "normalized" to n.normalized,
+        "label" to n.label,
+        "hasWhatsApp" to n.hasWhatsApp
+    ).apply {
+        if (n.whatsAppVoipDataId != null) put("whatsAppVoipDataId", n.whatsAppVoipDataId)
+    }
+
+    fun mapToContactNumber(raw: Any?): PhoneContactNumber? {
+        val m = raw as? Map<*, *> ?: return null
+        val r = m["raw"]?.toString().orEmpty()
+        val norm = m["normalized"]?.toString().orEmpty().ifBlank { r }
+        if (r.isBlank() && norm.isBlank()) return null
+        return PhoneContactNumber(
+            raw = r.ifBlank { norm },
+            normalized = norm,
+            label = m["label"]?.toString().orEmpty(),
+            hasWhatsApp = m["hasWhatsApp"] as? Boolean ?: false,
+            whatsAppVoipDataId = (m["whatsAppVoipDataId"] as? Number)?.toLong()
+        )
+    }
+
+    fun contactToMap(c: PhoneContact): Map<String, Any?> = linkedMapOf<String, Any?>(
         "id" to c.id,
         "name" to c.name,
         "phone" to c.phone,
         "normalizedPhone" to c.normalizedPhone,
         "hasWhatsApp" to c.hasWhatsApp,
         "whatsAppVoipDataId" to c.whatsAppVoipDataId
-    )
+    ).apply {
+        if (c.nicknames.isNotEmpty()) put("nicknames", c.nicknames)
+        if (c.phones.isNotEmpty()) put("phones", c.phones.map { contactNumberToMap(it) })
+        if (c.starred) put("starred", true)
+        if (c.timesContacted > 0) put("timesContacted", c.timesContacted)
+        if (c.lastTimeContactedMs > 0L) put("lastTimeContactedMs", c.lastTimeContactedMs)
+        if (!c.photoBase64.isNullOrBlank()) put("photoBase64", c.photoBase64)
+    }
 
     fun mapToContact(raw: Any?): PhoneContact? {
         val m = raw as? Map<*, *> ?: return null
         val name = m["name"]?.toString().orEmpty()
         val phone = m["phone"]?.toString().orEmpty()
         val norm = m["normalizedPhone"]?.toString().orEmpty().ifBlank { phone }
-        if (name.isBlank() && norm.isBlank()) return null
+        val phonesRaw = m["phones"] as? List<*>
+        val phones = phonesRaw?.mapNotNull { mapToContactNumber(it) }.orEmpty()
+        val resolvedPhone = phone.ifBlank { phones.firstOrNull()?.raw.orEmpty() }
+        val resolvedNorm = norm.ifBlank { phones.firstOrNull()?.normalized.orEmpty() }
+        if (name.isBlank() && resolvedNorm.isBlank()) return null
+        val nicknames = (m["nicknames"] as? List<*>)
+            ?.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+            .orEmpty()
         return PhoneContact(
             id = m["id"]?.toString().orEmpty(),
             name = name,
-            phone = phone,
-            normalizedPhone = norm,
-            hasWhatsApp = m["hasWhatsApp"] as? Boolean ?: false,
+            phone = resolvedPhone,
+            normalizedPhone = resolvedNorm,
+            hasWhatsApp = m["hasWhatsApp"] as? Boolean ?: phones.any { it.hasWhatsApp },
             whatsAppVoipDataId = (m["whatsAppVoipDataId"] as? Number)?.toLong()
+                ?: phones.firstOrNull { it.whatsAppVoipDataId != null }?.whatsAppVoipDataId,
+            nicknames = nicknames,
+            phones = phones,
+            starred = m["starred"] as? Boolean ?: false,
+            timesContacted = (m["timesContacted"] as? Number)?.toInt() ?: 0,
+            lastTimeContactedMs = (m["lastTimeContactedMs"] as? Number)?.toLong() ?: 0L,
+            photoBase64 = m["photoBase64"]?.toString()?.takeIf { it.isNotBlank() }
         )
+    }
+
+    fun calendarEventToMap(ev: PhoneCalendarEvent): Map<String, Any?> = linkedMapOf(
+        "id" to ev.id,
+        "title" to ev.title,
+        "startMs" to ev.startMs,
+        "endMs" to ev.endMs,
+        "allDay" to ev.allDay,
+        "location" to ev.location,
+        "colorHex" to ev.colorHex,
+        "dateIso" to ev.dateIso,
+        "endDateIso" to ev.endDateIso
+    )
+
+    fun mapToCalendarEvent(raw: Any?): PhoneCalendarEvent? {
+        val m = raw as? Map<*, *> ?: return null
+        val title = m["title"]?.toString()?.trim().orEmpty()
+        if (title.isBlank()) return null
+        val startMs = (m["startMs"] as? Number)?.toLong() ?: return null
+        val endMs = (m["endMs"] as? Number)?.toLong() ?: startMs
+        return PhoneCalendarEvent(
+            id = m["id"]?.toString().orEmpty().ifBlank { "ph_${startMs}_${title.hashCode()}" },
+            title = title,
+            startMs = startMs,
+            endMs = endMs,
+            allDay = m["allDay"] as? Boolean ?: false,
+            location = m["location"]?.toString().orEmpty(),
+            colorHex = m["colorHex"]?.toString().orEmpty().ifBlank { "#22D3EE" },
+            dateIso = m["dateIso"]?.toString().orEmpty(),
+            endDateIso = m["endDateIso"]?.toString().orEmpty()
+        )
+    }
+
+    fun appEntryToMap(app: PhoneAppEntry): Map<String, Any?> = linkedMapOf(
+        "packageName" to app.packageName,
+        "label" to app.label
+    )
+
+    fun mapToAppEntry(raw: Any?): PhoneAppEntry? {
+        val m = raw as? Map<*, *> ?: return null
+        val pkg = m["packageName"]?.toString()?.trim().orEmpty()
+        val label = m["label"]?.toString()?.trim().orEmpty()
+        if (pkg.isBlank() || label.isBlank()) return null
+        return PhoneAppEntry(packageName = pkg, label = label)
     }
 
     fun callInfoToMap(info: PhoneCallInfo): Map<String, Any?> = linkedMapOf(
@@ -382,7 +529,7 @@ object PhoneLinkCodec {
         return out
     }
 
-    internal fun parseJsonValue(src: String): Any? = runCatching {
+    fun parseJsonValue(src: String): Any? = runCatching {
         val p = MiniJsonParser(src)
         val v = p.parseValue()
         p.skipWhitespace()

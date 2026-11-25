@@ -124,6 +124,14 @@ class MainActivity : ComponentActivity() {
                         onRequestContacts = {
                             permissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS))
                         },
+                        onRequestCalendar = {
+                            permissionLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.READ_CALENDAR,
+                                    Manifest.permission.WRITE_CALENDAR
+                                )
+                            )
+                        },
                         onRequestPhone = {
                             permissionLauncher.launch(
                                 arrayOf(
@@ -164,6 +172,7 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshPermissions() {
         val contacts = hasPerm(Manifest.permission.READ_CONTACTS)
+        val calendar = hasPerm(Manifest.permission.READ_CALENDAR) && hasPerm(Manifest.permission.WRITE_CALENDAR)
         val phone = hasPerm(Manifest.permission.CALL_PHONE) &&
             hasPerm(Manifest.permission.READ_PHONE_STATE) &&
             hasPerm(Manifest.permission.ANSWER_PHONE_CALLS)
@@ -183,6 +192,7 @@ class MainActivity : ComponentActivity() {
                 pairedCount = storage.pairedCount(),
                 permissions = PontePermissionStatus(
                     contacts = contacts,
+                    calendar = calendar,
                     phone = phone,
                     postNotifications = postNotif,
                     notificationListener = notifListener,
@@ -214,6 +224,7 @@ private fun PonteScreen(
     onRegeneratePin: () -> Unit,
     onUnpairAll: () -> Unit,
     onRequestContacts: () -> Unit,
+    onRequestCalendar: () -> Unit,
     onRequestPhone: () -> Unit,
     onRequestPostNotifications: () -> Unit,
     onOpenNotificationAccess: () -> Unit,
@@ -360,10 +371,21 @@ private fun PonteScreen(
             Spacer(modifier = Modifier.height(10.dp))
             ChecklistRow(
                 title = "Contatos (agenda e WhatsApp)",
-                subtitle = "Permite buscar nomes e números pelo copiloto.",
+                subtitle = if (state.contactsCount > 0) {
+                    "${state.contactsCount} contatos sincronizados com o copiloto."
+                } else {
+                    "Sincroniza nomes, apelidos e números com o copiloto."
+                },
                 granted = state.permissions.contacts,
                 actionLabel = "Permitir",
                 onAction = onRequestContacts
+            )
+            ChecklistRow(
+                title = "Agenda / Calendário Google",
+                subtitle = "Mostra e cria compromissos do celular no painel do carro.",
+                granted = state.permissions.calendar,
+                actionLabel = "Permitir",
+                onAction = onRequestCalendar
             )
             ChecklistRow(
                 title = "Telefone e chamadas",

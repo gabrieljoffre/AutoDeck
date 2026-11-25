@@ -9,6 +9,9 @@ import android.util.Base64
 import android.util.Log
 import androidx.core.content.edit
 import com.autodeck.protocol.phone.BrazilPhoneNumber
+import com.autodeck.protocol.phone.ContactMatchResult
+import com.autodeck.protocol.phone.PhoneAppEntry
+import com.autodeck.protocol.phone.PhoneCalendarEvent
 import com.autodeck.protocol.phone.PhoneCallInfo
 import com.autodeck.protocol.phone.PhoneContact
 import com.autodeck.protocol.phone.PhoneLinkCodec
@@ -74,6 +77,10 @@ data class PhoneLinkUiState(
     val messages: List<PhoneMessageNotification> = emptyList(),
     val recordingVoiceNote: Boolean = false,
     val voiceNoteStatus: String = "",
+    val contactsCount: Int = 0,
+    val contactsSyncedAtMs: Long = 0L,
+    val contactsSyncing: Boolean = false,
+    val contactsSyncError: String? = null,
     val statusMessage: String = "Celular desconectado",
     val lastError: String? = null
 ) {
@@ -83,6 +90,7 @@ data class PhoneLinkUiState(
 sealed interface PhoneLinkClientEvent {
     data class MessageReceived(val message: PhoneMessageNotification) : PhoneLinkClientEvent
     data class CallStateChanged(val call: PhoneCallInfo) : PhoneLinkClientEvent
+    data class ContactsSynced(val count: Int, val syncedAtMs: Long) : PhoneLinkClientEvent
     data class Toast(val text: String, val isError: Boolean = false) : PhoneLinkClientEvent
 }
 
@@ -99,6 +107,9 @@ class PhoneLinkClient(
     private val scope: CoroutineScope
 ) {
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val contactsCache = PhoneContactsCache(
+        runCatching { appContext.filesDir?.let { File(it, "phone_contacts_cache.json") } }.getOrNull()
+    )
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     private val nsdManager = appContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
@@ -282,6 +293,7 @@ class PhoneLinkClient(
             remove(KEY_PHONE_NAME)
         }
         closeActiveSocket()
+        contactsCache.clear()
         _state.update {
             it.copy(
                 connectionState = PhoneConnectionState.DISCONNECTED,
@@ -291,6 +303,10 @@ class PhoneLinkClient(
                 phoneLocked = false,
                 callState = PhoneCallInfo(),
                 messages = emptyList(),
+                contactsCount = 0,
+                contactsSyncedAtMs = 0L,
+                contactsSyncing = false,
+                contactsSyncError = null,
                 statusMessage = "Celular despareado",
                 lastError = null
             )
@@ -329,8 +345,97 @@ class PhoneLinkClient(
     }
 
     // -------------------------------------------------------------------------
-    // RPCs usados pelo Copiloto e pela UI
+    // Cache local de contatos + RPCs usados pelo Copiloto e pela UI
     // -------------------------------------------------------------------------
+
+    fun getCachedContacts(): List<PhoneContact> = contactsCache.contacts()
+
+    fun getTopFrequentContacts(limit: Int = 30): List<PhoneContact> = contactsCache.topFrequent(limit)
+
+    fun searchCachedContacts(query: String, limit: Int = 10): List<PhoneContact> =
+        contactsCache.search(query, limit)
+
+    fun resolveCachedContact(query: String, maxAmbiguous: Int = 5): ContactMatchResult =
+        contactsCache.resolve(query, maxAmbiguous)
+
+    suspend fun syncContactsNow(includePhotos: Boolean = true): Result<Int> {
+        _state.update { it.copy(contactsSyncing = true, contactsSyncError = null) }
+        val res = sendRpc(
+            PhoneLinkProtocol.METHOD_CONTACTS_SYNC,
+            linkedMapOf("includePhotos" to includePhotos),
+            timeoutMs = 20_000L
+        )
+        return res.fold(
+            onSuccess = { r ->
+                val raw = r.result["contacts"] as? List<*> ?: emptyList<Any?>()
+                val parsed = raw.mapNotNull { PhoneLinkCodec.mapToContact(it) }
+                val syncedAt = (r.result["syncedAtMs"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                contactsCache.save(parsed, syncedAt)
+                _state.update {
+                    it.copy(
+                        contactsCount = parsed.size,
+                        contactsSyncedAtMs = syncedAt,
+                        contactsSyncing = false,
+                        contactsSyncError = null
+                    )
+                }
+                _events.tryEmit(PhoneLinkClientEvent.ContactsSynced(parsed.size, syncedAt))
+                Result.success(parsed.size)
+            },
+            onFailure = { err ->
+                val msg = err.message ?: "Não foi possível sincronizar os contatos."
+                _state.update { it.copy(contactsSyncing = false, contactsSyncError = msg) }
+                Result.failure(err)
+            }
+        )
+    }
+
+    suspend fun fetchPhoneCalendarEvents(startMs: Long, endMs: Long): Result<List<PhoneCalendarEvent>> {
+        val res = sendRpc(
+            PhoneLinkProtocol.METHOD_CALENDAR_LIST,
+            linkedMapOf("startMs" to startMs, "endMs" to endMs),
+            timeoutMs = 10_000L
+        )
+        return res.map { r ->
+            val raw = r.result["events"] as? List<*> ?: emptyList<Any?>()
+            raw.mapNotNull { PhoneLinkCodec.mapToCalendarEvent(it) }
+        }
+    }
+
+    suspend fun createPhoneCalendarEvent(
+        title: String,
+        startMs: Long,
+        endMs: Long,
+        location: String = "",
+        reminderMinutes: Int? = null
+    ): Result<String> {
+        val params = linkedMapOf<String, Any?>(
+            "title" to title,
+            "startMs" to startMs,
+            "endMs" to endMs,
+            "location" to location
+        )
+        if (reminderMinutes != null) params["reminderMinutes"] = reminderMinutes
+        val res = sendRpc(PhoneLinkProtocol.METHOD_CALENDAR_CREATE, params, timeoutMs = 10_000L)
+        return res.map { it.result["message"]?.toString().orEmpty().ifBlank { "Evento criado na agenda do celular." } }
+    }
+
+    suspend fun listPhoneApps(): Result<List<PhoneAppEntry>> {
+        val res = sendRpc(PhoneLinkProtocol.METHOD_APPS_LIST, emptyMap(), timeoutMs = 8_000L)
+        return res.map { r ->
+            val raw = r.result["apps"] as? List<*> ?: emptyList<Any?>()
+            raw.mapNotNull { PhoneLinkCodec.mapToAppEntry(it) }
+        }
+    }
+
+    suspend fun openAppOnPhone(appName: String): Result<String> {
+        val res = sendRpc(
+            PhoneLinkProtocol.METHOD_APPS_OPEN,
+            linkedMapOf("app" to appName.trim()),
+            timeoutMs = 10_000L
+        )
+        return res.map { it.result["message"]?.toString().orEmpty().ifBlank { "Abrindo $appName no celular." } }
+    }
 
     suspend fun searchContacts(query: String): Result<List<PhoneContact>> {
         val res = sendRpc(
@@ -720,6 +825,22 @@ class PhoneLinkClient(
                     )
                 }
             }
+
+            PhoneLinkProtocol.EVENT_CONTACTS_UPDATED -> {
+                val raw = ev.data["contacts"] as? List<*> ?: return
+                val parsed = raw.mapNotNull { PhoneLinkCodec.mapToContact(it) }
+                val syncedAt = (ev.data["syncedAtMs"] as? Number)?.toLong() ?: System.currentTimeMillis()
+                contactsCache.save(parsed, syncedAt)
+                _state.update {
+                    it.copy(
+                        contactsCount = parsed.size,
+                        contactsSyncedAtMs = syncedAt,
+                        contactsSyncing = false,
+                        contactsSyncError = null
+                    )
+                }
+                _events.tryEmit(PhoneLinkClientEvent.ContactsSynced(parsed.size, syncedAt))
+            }
         }
     }
 
@@ -930,11 +1051,14 @@ class PhoneLinkClient(
         val host = prefs.getString(KEY_HOST, null).orEmpty()
         val port = prefs.getInt(KEY_PORT, PhoneLinkProtocol.TCP_PORT)
         val name = prefs.getString(KEY_PHONE_NAME, null).orEmpty()
+        val snap = contactsCache.current()
         return PhoneLinkUiState(
             paired = token.isNotBlank(),
             phoneName = name,
             host = host,
             port = port,
+            contactsCount = snap.count,
+            contactsSyncedAtMs = snap.syncedAtMs,
             statusMessage = if (token.isNotBlank()) "Aguardando ${name.ifBlank { "celular" }}…" else "Celular não pareado"
         )
     }

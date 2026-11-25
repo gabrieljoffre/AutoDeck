@@ -36,6 +36,7 @@ import com.autodeck.headunit.agent.live.LiveSessionMode
 import com.autodeck.headunit.agent.live.LiveSessionPhase
 import com.autodeck.headunit.agent.live.LiveSessionSnapshot
 import com.autodeck.headunit.agent.live.LiveToolExecution
+import com.autodeck.headunit.calendar.PortugueseDateTimeParser
 import com.autodeck.headunit.data.DEFAULT_GEMINI_MODEL
 import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.VoiceAssistantMode
@@ -46,6 +47,7 @@ import com.autodeck.protocol.coordinator.MainTab
 import com.autodeck.protocol.obd2.FuelLogCalculator
 import com.autodeck.protocol.phone.BrazilPhoneNumber
 import com.autodeck.protocol.phone.PhoneContact
+import com.autodeck.protocol.phone.PhoneContactMatcher
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -256,6 +258,44 @@ interface CarAgentHostBridge {
     suspend fun replyPhoneMessage(messageId: String?, text: String): String =
         replyLatestWhatsApp(text)
 
+    // --- Contatos sincronizados, Agenda/Eventos/Lembretes e Outros Apps (Fase 13) ---
+    fun getTopFrequentContacts(limit: Int = 30): List<PhoneContact> = emptyList()
+
+    suspend fun searchContactsForAgent(query: String): String =
+        PhoneContactMatcher.formatToolSearchResult(query, getTopFrequentContacts(500))
+
+    suspend fun getAgendaForRange(
+        rangeQuery: String? = null,
+        startDateIso: String? = null,
+        endDateIso: String? = null
+    ): String {
+        val norm = CopilotIntentParser.normalize(rangeQuery.orEmpty())
+        val offset = if (norm.contains("amanha")) 1 else 0
+        return getCalendarAgendaSummary(offset)
+    }
+
+    suspend fun createCalendarEvent(
+        title: String,
+        startMs: Long,
+        endMs: Long,
+        location: String = "",
+        reminderMinutes: Int? = null
+    ): String = "Criação de eventos indisponível no momento."
+
+    fun scheduleLocalReminder(text: String, triggerAtMs: Long): String =
+        "Lembrete agendado: $text."
+
+    fun openTabletApp(appName: String): String =
+        "Não foi possível abrir o aplicativo \"$appName\" no tablet."
+
+    fun listTabletAppNames(limit: Int = 30): List<String> = emptyList()
+
+    suspend fun openPhoneApp(appName: String): String =
+        "Celular não conectado ao HondaDeck Ponte."
+
+    fun getCapabilitiesSummary(): String =
+        "Posso controlar o Spotify e o volume, traçar rotas e buscar lugares no mapa, ler dados do motor OBD-II, consumo, manutenção e abastecimento, informar o clima, buscar contatos e mandar WhatsApp (texto, áudio ou ligação) e fazer/atender ligações pelo seu celular, consultar e criar eventos na agenda, criar lembretes com aviso falado, abrir aplicativos no tablet ou no celular, abrir a câmera de ré e pesquisar na internet."
+
     /** Relatório completo do veículo (motor, consumo, diário, manutenção e clima). */
     fun buildCarReport(): String {
         val hu = getHeadUnitState()
@@ -339,6 +379,15 @@ class GeminiCarAgent(
             val messageId: String?,
             val sender: String,
             val text: String,
+            override val createdAtMs: Long = System.currentTimeMillis()
+        ) : PendingPhoneAction
+
+        data class CreateCalendarEvent(
+            val title: String,
+            val startMs: Long,
+            val endMs: Long,
+            val location: String = "",
+            val reminderMinutes: Int? = null,
             override val createdAtMs: Long = System.currentTimeMillis()
         ) : PendingPhoneAction
     }
@@ -741,6 +790,23 @@ class GeminiCarAgent(
         if (clean.isBlank()) return
         appendMessage(AgentChatMessage(isUser = true, text = clean))
         processQuery(clean, speakReply = speakReply)
+    }
+
+    /** Anuncia em voz alta um lembrete disparado no tablet. */
+    fun announceReminder(text: String) {
+        val clean = text.trim()
+        if (clean.isBlank()) return
+        val spoken = "Lembrete: $clean"
+        appendMessage(
+            AgentChatMessage(
+                isUser = false,
+                text = spoken,
+                actionBadge = "Lembrete",
+                isOfflineEngine = true
+            )
+        )
+        _state.update { it.copy(replyText = spoken, statusText = "Lembrete disparado") }
+        speak(spoken)
     }
 
     fun readLatestWhatsAppAloud() {
@@ -1220,10 +1286,15 @@ class GeminiCarAgent(
             }
             "dados_do_carro" -> host.buildCarReport()
             "minha_agenda" -> {
-                val dia = args?.optStrictString("dia")?.trim()?.lowercase().orEmpty()
-                val offset = if (dia.contains("amanh")) 1 else 0
-                host.getCalendarAgendaSummary(offset)
+                val dia = args?.optStrictString("dia")?.trim()?.takeIf { it.isNotBlank() }
+                host.getAgendaForRange(dia, null, null)
             }
+            "buscar_contato",
+            "agenda",
+            "criar_evento",
+            "lembrete",
+            "abrir_app",
+            "abrir_no_celular",
             "enviar_whatsapp",
             "enviar_audio_whatsapp",
             "ligar",
@@ -1234,7 +1305,25 @@ class GeminiCarAgent(
             "responder_mensagem" -> {
                 val liveCall = LiveFunctionCall(id = "txt-tool", name = name, argsJson = argsJson)
                 // Se for pedido sem confirmação, também arma pendingPhoneAction para o fluxo texto aceitar "sim"
-                if (name == "enviar_whatsapp" && args?.optBoolean("confirmado") != true) {
+                if (name == "criar_evento" && args?.optBoolean("confirmado") != true) {
+                    val titulo = args?.optStrictString("titulo")?.trim().orEmpty()
+                    val rawWhen = args?.optStrictString("data_hora")?.trim()?.takeIf { it.isNotBlank() }
+                        ?: args?.optStrictString("quando")?.trim().orEmpty()
+                    val duracaoMin = (args?.optDouble("duracao_minutos")?.toInt() ?: 60).coerceIn(10, 720)
+                    val local = args?.optStrictString("local")?.trim().orEmpty()
+                    val lembreteMin = args?.optDouble("lembrete_minutos")?.toInt()?.takeIf { it >= 0 }
+                    val parsedDt = PortugueseDateTimeParser.parseDateTime(rawWhen)
+                    if (titulo.isNotBlank() && parsedDt != null) {
+                        val startMs = parsedDt.dateTime.toInstant().toEpochMilli()
+                        pendingPhoneAction = PendingPhoneAction.CreateCalendarEvent(
+                            title = titulo,
+                            startMs = startMs,
+                            endMs = startMs + duracaoMin * 60_000L,
+                            location = local,
+                            reminderMinutes = lembreteMin
+                        )
+                    }
+                } else if (name == "enviar_whatsapp" && args?.optBoolean("confirmado") != true) {
                     val target = args?.optStrictString("contato")?.trim()?.takeIf { it.isNotBlank() }
                         ?: args?.optStrictString("numero")?.trim().orEmpty()
                     val texto = args?.optStrictString("texto")?.trim().orEmpty()
@@ -1285,7 +1374,13 @@ class GeminiCarAgent(
     private fun buildCombinedFunctionTools(): JSONArray {
         val baseDecls = JSONArray(WebKnowledgeTools.FUNCTION_DECLARATIONS_ARRAY_JSON)
         val liveDecls = GeminiLiveTools.buildFunctionDeclarations()
-        val phoneNames = setOf(
+        val extraToolNames = setOf(
+            "buscar_contato",
+            "agenda",
+            "criar_evento",
+            "lembrete",
+            "abrir_app",
+            "abrir_no_celular",
             "enviar_whatsapp",
             "enviar_audio_whatsapp",
             "ligar",
@@ -1297,7 +1392,7 @@ class GeminiCarAgent(
         )
         for (i in 0 until liveDecls.length()) {
             val fn = liveDecls.optJSONObject(i) ?: continue
-            if (fn.optString("name") in phoneNames) {
+            if (fn.optString("name") in extraToolNames) {
                 baseDecls.put(fn)
             }
         }
@@ -1379,6 +1474,9 @@ class GeminiCarAgent(
         } else {
             recentMemories.joinToString("\n") { "- $it" }
         }
+        val topContactsText = PhoneContactMatcher.formatForSystemPrompt(host.getTopFrequentContacts(30), 30)
+        val tabletApps = host.listTabletAppNames(25)
+        val tabletAppsText = if (tabletApps.isEmpty()) "nenhum listado" else tabletApps.joinToString(", ")
 
         return """
             Você é o HondaDeck Copilot, assistente automotivo em tempo real de um Honda Civic com tablet no painel.
@@ -1421,10 +1519,16 @@ class GeminiCarAgent(
             CELULAR (HONDADECK PONTE):
             - ${host.getPhoneSummary()}
 
+            CONTATOS FAVORITOS/FREQUENTES DO MOTORISTA (~30):
+            $topContactsText
+
+            APLICATIVOS NO TABLET:
+            - $tabletAppsText
+
             WHATSAPP RECEBIDO:
             - ${if (latestMsg != null) "De ${latestMsg.sender}: \"${latestMsg.message}\"" else "Nenhuma mensagem pendente"}
             
-            REGRA OBRIGATÓRIA DE CONFIRMAÇÃO: antes de enviar WhatsApp de texto, áudio ou responder mensagem, SEMPRE confirme com o motorista destinatário e texto (ex.: "Mando para Ana: 'tô chegando'?") e só execute após ele dizer "sim".
+            REGRA OBRIGATÓRIA DE CONFIRMAÇÃO: antes de enviar WhatsApp de texto, áudio, responder mensagem ou criar evento na agenda, SEMPRE confirme com o motorista os detalhes (ex.: "Mando para Ana: 'tô chegando'?" ou "Crio o evento 'Reunião' amanhã às 15h?") e só execute após ele dizer "sim". Para contatos ambíguos (ex.: várias "Ana"), pergunte qual. Se perguntarem "o que você consegue fazer?", liste suas capacidades (música, mapa/rotas, OBD-II/abastecimento, clima, contatos/WhatsApp/ligações, agenda/eventos/lembretes falados, abrir apps no tablet ou celular, câmera de ré e buscas).
 
             Se o usuário pedir para executar uma ação no carro ou app, responda normalmente e inclua na última linha:
             ACTION_JSON:{"action":"NOME_DA_ACAO","arg":"VALOR_OPCIONAL"}
@@ -1433,6 +1537,8 @@ class GeminiCarAgent(
             - MUSIC_SEARCH (arg = nome da música ou artista para tocar no painel)
             - OPEN_MAP | MAP_SEARCH (arg = tipo de lugar ou nome para buscar no mapa do app)
             - NAVIGATE (arg = destino, favorito ou endereço; traça rota dentro do app) | STOP_ROUTE (encerra rota ativa)
+            - SEARCH_CONTACT (arg = nome ou apelido) | AGENDA (arg = dia ou intervalo) | CREATE_EVENT (arg = JSON {"titulo":"...","data_hora":"...","duracao_minutos":60,"local":""}) | SET_REMINDER (arg = JSON {"texto":"...","quando":"..."})
+            - OPEN_APP (arg = nome do app no tablet) | OPEN_PHONE_APP (arg = nome do app no celular)
             - READ_WHATSAPP | READ_MESSAGES | REPLY_WHATSAPP | REPLY_MESSAGE (arg = texto exato da resposta)
             - SEND_WHATSAPP (arg = JSON {"contato":"Ana","texto":"tô chegando"}) | SEND_WHATSAPP_AUDIO (arg = contato ou número)
             - CALL_PHONE (arg = contato ou número) | CALL_WHATSAPP (arg = contato ou número) | ANSWER_CALL | END_CALL
@@ -1504,6 +1610,57 @@ class GeminiCarAgent(
             "CALL_WHATSAPP" -> if (arg.isNotBlank()) host.callWhatsAppViaPhone(arg) else null
             "ANSWER_CALL" -> host.answerPhoneCall()
             "END_CALL" -> host.endPhoneCall()
+            "SEARCH_CONTACT" -> if (arg.isNotBlank()) host.searchContactsForAgent(arg) else null
+            "AGENDA" -> host.getAgendaForRange(arg.takeIf { it.isNotBlank() }, null, null)
+            "CREATE_EVENT" -> {
+                val o = CopilotJson.parseObjOrNull(arg)
+                val title = o?.optStrictString("titulo")?.trim().orEmpty()
+                val whenTxt = o?.optStrictString("data_hora")?.trim()?.takeIf { it.isNotBlank() }
+                    ?: o?.optStrictString("quando")?.trim().orEmpty()
+                val dur = (
+                    o?.optDouble("duracao_minutos")?.toInt()
+                        ?: o?.optDouble("duracao")?.toInt()
+                        ?: 60
+                    ).coerceIn(10, 720)
+                val loc = o?.optStrictString("local")?.trim().orEmpty()
+                val rem = (
+                    o?.optDouble("lembrete_minutos")?.toInt()
+                        ?: o?.optDouble("lembrete")?.toInt()
+                    )?.takeIf { it >= 0 }
+                val confirmed = o?.optBoolean("confirmado") == true
+                val parsedDt = PortugueseDateTimeParser.parseDateTime(whenTxt)
+                if (title.isNotBlank() && parsedDt != null) {
+                    val startMs = parsedDt.dateTime.toInstant().toEpochMilli()
+                    val endMs = startMs + dur * 60_000L
+                    if (!confirmed) {
+                        pendingPhoneAction = PendingPhoneAction.CreateCalendarEvent(
+                            title = title,
+                            startMs = startMs,
+                            endMs = endMs,
+                            location = loc,
+                            reminderMinutes = rem
+                        )
+                        "Confirmar evento"
+                    } else {
+                        host.createCalendarEvent(title, startMs, endMs, loc, rem)
+                    }
+                } else {
+                    null
+                }
+            }
+            "SET_REMINDER" -> {
+                val o = CopilotJson.parseObjOrNull(arg)
+                val txt = o?.optStrictString("texto")?.trim().orEmpty()
+                val whenTxt = o?.optStrictString("quando")?.trim().orEmpty()
+                val parsedDt = PortugueseDateTimeParser.parseDateTime(whenTxt)
+                if (txt.isNotBlank() && parsedDt != null) {
+                    host.scheduleLocalReminder(txt, parsedDt.dateTime.toInstant().toEpochMilli())
+                } else {
+                    null
+                }
+            }
+            "OPEN_APP" -> if (arg.isNotBlank()) host.openTabletApp(arg) else null
+            "OPEN_PHONE_APP" -> if (arg.isNotBlank()) host.openPhoneApp(arg) else null
             "SWITCH_TAB" -> {
                 val tab = MainTab.entries.firstOrNull { it.name == arg.uppercase() } ?: MainTab.HOME
                 host.switchTab(tab)
@@ -1796,11 +1953,75 @@ class GeminiCarAgent(
             }
 
             is CopilotIntent.CalendarAgenda -> {
+                val summary = if (intent.rangeQuery.isNotBlank()) {
+                    host.getAgendaForRange(intent.rangeQuery, null, null)
+                } else {
+                    host.getCalendarAgendaSummary(intent.dayOffset)
+                }
                 AgentReplyResult(
-                    host.getCalendarAgendaSummary(intent.dayOffset),
+                    summary,
                     "Agenda",
                     isOffline = true
                 )
+            }
+
+            is CopilotIntent.SearchContact -> {
+                val res = host.searchContactsForAgent(intent.query)
+                AgentReplyResult(res, "Contatos", isOffline = true)
+            }
+
+            is CopilotIntent.CreateCalendarEvent -> {
+                val parsedDt = PortugueseDateTimeParser.parseDateTime(intent.whenText)
+                if (parsedDt == null) {
+                    AgentReplyResult(
+                        "Não consegui entender a data/hora \"${intent.whenText}\". Diga, por exemplo: amanhã às 3 da tarde ou sexta 9h.",
+                        "Agenda",
+                        isOffline = true
+                    )
+                } else {
+                    val startMs = parsedDt.dateTime.toInstant().toEpochMilli()
+                    val endMs = startMs + intent.durationMinutes * 60_000L
+                    pendingPhoneAction = PendingPhoneAction.CreateCalendarEvent(
+                        title = intent.title,
+                        startMs = startMs,
+                        endMs = endMs,
+                        location = intent.location.orEmpty()
+                    )
+                    AgentReplyResult(
+                        "Crio o evento \"${intent.title}\" para ${parsedDt.labelPt}? Diga sim para confirmar.",
+                        "Confirmar evento",
+                        isOffline = true
+                    )
+                }
+            }
+
+            is CopilotIntent.SetReminder -> {
+                val parsedDt = PortugueseDateTimeParser.parseDateTime(intent.whenText)
+                if (parsedDt == null) {
+                    AgentReplyResult(
+                        "Não entendi o horário \"${intent.whenText}\" para o lembrete. Diga, por exemplo: daqui a 20 minutos ou amanhã às 8h.",
+                        "Lembrete",
+                        isOffline = true
+                    )
+                } else {
+                    val triggerMs = parsedDt.dateTime.toInstant().toEpochMilli()
+                    val res = host.scheduleLocalReminder(intent.text, triggerMs)
+                    AgentReplyResult(res, "Lembrete", isOffline = true)
+                }
+            }
+
+            is CopilotIntent.OpenTabletApp -> {
+                val res = host.openTabletApp(intent.appName)
+                AgentReplyResult(res, "App", isOffline = true)
+            }
+
+            is CopilotIntent.OpenPhoneApp -> {
+                val res = host.openPhoneApp(intent.appName)
+                AgentReplyResult(res, "App no celular", isOffline = true)
+            }
+
+            CopilotIntent.ListCapabilities -> {
+                AgentReplyResult(host.getCapabilitiesSummary(), "Capacidades", isOffline = true)
             }
 
             is CopilotIntent.Telemetry -> when (intent.kind) {
@@ -1910,6 +2131,16 @@ class GeminiCarAgent(
             is PendingPhoneAction.ReplyMessage -> {
                 val res = host.replyPhoneMessage(action.messageId, action.text)
                 AgentReplyResult(res, "Mensagem respondida", isOffline = true)
+            }
+            is PendingPhoneAction.CreateCalendarEvent -> {
+                val res = host.createCalendarEvent(
+                    title = action.title,
+                    startMs = action.startMs,
+                    endMs = action.endMs,
+                    location = action.location,
+                    reminderMinutes = action.reminderMinutes
+                )
+                AgentReplyResult(res, "Evento criado", isOffline = true)
             }
         }
 
