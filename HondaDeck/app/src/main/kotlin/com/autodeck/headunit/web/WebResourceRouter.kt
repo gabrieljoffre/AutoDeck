@@ -1,7 +1,14 @@
 package com.autodeck.headunit.web
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.Drawable
+import android.os.Build
 import android.util.Log
 import android.webkit.WebResourceResponse
 import androidx.webkit.WebViewAssetLoader
@@ -32,12 +39,17 @@ import kotlin.math.tan
  * - `/tiles/{z}/{y}/{x}.png`: mapa base Esri Dark Gray com cache em disco (`filesDir/tiles`, LRU ~300 MB).
  * - `/labels/{z}/{y}/{x}.png`: camada de nomes Esri Dark Gray com cache em disco.
  * - `/tiles/light/{z}/{y}/{x}.png`: mapa claro Esri World Street Map (visual próximo ao Google Maps) com cache em disco.
+ * - `/appicon/{pacote}.png`: ícone real de app instalado no tablet (192 px PNG com máscara adaptativa), cache em disco, 404 se não instalado.
+ * - `/phoneicon/{pacote}.png`: ícone real de app enviado pelo celular (HondaDeck Ponte), salvo em `filesDir/phoneicons`, 404 se ausente.
  */
 class WebResourceRouter(
     context: Context,
     private val coverProvider: () -> Bitmap?
 ) {
-    private val tilesRootDir = File(context.applicationContext.filesDir, "tiles").apply { mkdirs() }
+    private val appContext = context.applicationContext
+    private val tilesRootDir = File(appContext.filesDir, "tiles").apply { mkdirs() }
+    private val appIconsRootDir = File(appContext.filesDir, "appicons").apply { mkdirs() }
+    private val phoneIconsRootDir = phoneIconsDir(appContext)
     private val writeCounter = AtomicInteger(0)
 
     @Volatile
@@ -60,6 +72,14 @@ class WebResourceRouter(
 
     val labelsHandler = WebViewAssetLoader.PathHandler { path ->
         handleTile(layer = LAYER_LABELS, path = path)
+    }
+
+    val appIconHandler = WebViewAssetLoader.PathHandler { path ->
+        handleTabletAppIcon(path)
+    }
+
+    val phoneIconHandler = WebViewAssetLoader.PathHandler { path ->
+        handlePhoneAppIcon(path)
     }
 
     private fun handleCover(path: String): WebResourceResponse {
@@ -252,6 +272,66 @@ class WebResourceRouter(
         }
     }
 
+    private fun handleTabletAppIcon(path: String): WebResourceResponse {
+        val pkg = parsePackageIconPath(path) ?: return notFound()
+        val pm = appContext.packageManager
+        val pkgInfo = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getPackageInfo(pkg, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getPackageInfo(pkg, 0)
+            }
+        }.getOrNull()
+
+        val cacheFile = File(appIconsRootDir, "$pkg.png")
+        if (pkgInfo == null) {
+            if (cacheFile.exists()) runCatching { cacheFile.delete() }
+            return notFound()
+        }
+
+        val lastUpdateMs = pkgInfo.lastUpdateTime
+        if (cacheFile.isFile && cacheFile.length() > 0L && cacheFile.lastModified() >= lastUpdateMs) {
+            val cached = runCatching { cacheFile.readBytes() }.getOrNull()
+            if (cached != null && cached.isNotEmpty()) {
+                return iconPngResponse(cached)
+            }
+        }
+
+        val drawable = runCatching { pm.getApplicationIcon(pkg) }.getOrNull() ?: return notFound()
+        val pngBytes = renderDrawableToPngBytes(drawable, APP_ICON_SIZE_PX) ?: return notFound()
+
+        runCatching {
+            appIconsRootDir.mkdirs()
+            val tmp = File(appIconsRootDir, "$pkg.png.tmp.${System.nanoTime()}")
+            tmp.writeBytes(pngBytes)
+            if (!tmp.renameTo(cacheFile)) {
+                cacheFile.writeBytes(pngBytes)
+                tmp.delete()
+            }
+            cacheFile.setLastModified(maxOf(System.currentTimeMillis(), lastUpdateMs))
+        }
+
+        return iconPngResponse(pngBytes)
+    }
+
+    private fun handlePhoneAppIcon(path: String): WebResourceResponse {
+        val pkg = parsePackageIconPath(path) ?: return notFound()
+        val file = File(phoneIconsRootDir, "$pkg.png")
+        if (!file.isFile || file.length() <= 0L) return notFound()
+        val bytes = runCatching { file.readBytes() }.getOrNull()?.takeIf { it.isNotEmpty() } ?: return notFound()
+        return iconPngResponse(bytes)
+    }
+
+    private fun iconPngResponse(bytes: ByteArray): WebResourceResponse = WebResourceResponse(
+        "image/png",
+        null,
+        200,
+        "OK",
+        mapOf("Cache-Control" to "public, max-age=86400"),
+        ByteArrayInputStream(bytes)
+    )
+
     private fun notFound(): WebResourceResponse = WebResourceResponse(
         "text/plain",
         "UTF-8",
@@ -296,8 +376,58 @@ class WebResourceRouter(
         private const val MAX_CACHE_BYTES = 300L * 1024L * 1024L
         private const val TRIM_TARGET_BYTES = 260L * 1024L * 1024L
         private const val TRIM_CHECK_INTERVAL = 120
+        const val APP_ICON_SIZE_PX = 192
 
         private val TILE_PATH_REGEX = Regex("""^/?(\d{1,2})/(\d+)/(\d+)\.png$""")
+        private val PACKAGE_ICON_PATH_REGEX =
+            Regex("""^/?([a-zA-Z][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_]+)+)\.png$""")
+
+        fun phoneIconsDir(context: Context): File =
+            File(context.applicationContext.filesDir, "phoneicons").apply { mkdirs() }
+
+        /** Valida `{pacote}.png` (impede path traversal) e retorna o nome do pacote. */
+        fun parsePackageIconPath(path: String): String? {
+            val clean = path.substringBefore('?').trim()
+            val m = PACKAGE_ICON_PATH_REGEX.matchEntire(clean) ?: return null
+            val pkg = m.groupValues[1]
+            if (pkg.length > 180 || pkg.contains("..")) return null
+            return pkg
+        }
+
+        /** Renderiza um Drawable de app (incluindo AdaptiveIconDrawable com máscara do sistema) em PNG. */
+        fun renderDrawableToPngBytes(drawable: Drawable, sizePx: Int = APP_ICON_SIZE_PX): ByteArray? {
+            val size = sizePx.coerceIn(48, 512)
+            val bitmap = runCatching { Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888) }.getOrNull()
+                ?: return null
+            return try {
+                val canvas = Canvas(bitmap)
+                drawable.setBounds(0, 0, size, size)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && drawable is AdaptiveIconDrawable) {
+                    val save = canvas.save()
+                    val mask = runCatching { drawable.iconMask }.getOrNull()
+                    if (mask != null && !mask.isEmpty) {
+                        canvas.clipPath(mask)
+                    } else {
+                        val fallbackMask = Path().apply {
+                            val r = size * 0.22f
+                            addRoundRect(RectF(0f, 0f, size.toFloat(), size.toFloat()), r, r, Path.Direction.CW)
+                        }
+                        canvas.clipPath(fallbackMask)
+                    }
+                    drawable.draw(canvas)
+                    canvas.restoreToCount(save)
+                } else {
+                    drawable.draw(canvas)
+                }
+                val baos = ByteArrayOutputStream()
+                val ok = bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                if (ok) baos.toByteArray().takeIf { it.isNotEmpty() } else null
+            } catch (_: Throwable) {
+                null
+            } finally {
+                bitmap.recycle()
+            }
+        }
 
         /** Extrai (z, y, x) de um caminho `{z}/{y}/{x}.png`. */
         fun parseTilePath(path: String): Triple<Int, Int, Int>? {

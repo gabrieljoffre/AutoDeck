@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.database.ContentObserver
 import android.net.Uri
 import android.net.nsd.NsdManager
@@ -67,6 +69,9 @@ class PonteServerService : Service() {
     private var nsdRegListener: NsdManager.RegistrationListener? = null
     private var contactsObserver: ContentObserver? = null
     private var contactsDebounceJob: Job? = null
+    private var packageReceiver: BroadcastReceiver? = null
+    private var iconsDebounceJob: Job? = null
+    private val sentIconPackages = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     private val clients = CopyOnWriteArrayList<ClientSession>()
     private val running = AtomicBoolean(false)
@@ -127,7 +132,9 @@ class PonteServerService : Service() {
         running.set(false)
         monitorJob?.cancel()
         contactsDebounceJob?.cancel()
+        iconsDebounceJob?.cancel()
         unregisterContactsObserver()
+        unregisterPackageReceiver()
         unregisterNsd()
         runCatching { serverSocket?.close() }
         runCatching { udpSocket?.close() }
@@ -150,6 +157,7 @@ class PonteServerService : Service() {
     private fun startServerLoops() {
         callManager.startMonitoring()
         registerContactsObserver()
+        registerPackageReceiver()
         refreshPublishedState()
         registerNsd()
 
@@ -255,6 +263,19 @@ class PonteServerService : Service() {
                     when (ev) {
                         is PonteNotificationBridge.NotifEvent.Received -> {
                             PonteStateHub.logActivity("Mensagem repassada: ${ev.message.sender} (${ev.message.appLabel})")
+                            val pkg = ev.message.packageName
+                            if (pkg.isNotBlank() && sentIconPackages.add(pkg)) {
+                                scope.launch(Dispatchers.IO) {
+                                    val icon = appsManager.extractAppIcon(pkg) ?: return@launch
+                                    broadcastEvent(
+                                        PhoneLinkProtocol.EVENT_APP_ICONS,
+                                        linkedMapOf(
+                                            "icons" to listOf(PhoneLinkCodec.appIconToMap(icon)),
+                                            "roles" to appsManager.resolveAppRoles()
+                                        )
+                                    )
+                                }
+                            }
                             broadcastEvent(
                                 PhoneLinkProtocol.EVENT_MESSAGE_RECEIVED,
                                 PhoneLinkCodec.messageToMap(ev.message)
@@ -544,6 +565,31 @@ class PonteServerService : Service() {
                 )
             }
 
+            PhoneLinkProtocol.METHOD_APPS_ICONS -> {
+                val requested = (req.params["packages"] as? List<*>)
+                    ?.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                val knownHashes = (req.params["knownHashes"] as? Map<*, *>)
+                    ?.entries
+                    ?.mapNotNull { (k, v) ->
+                        val ks = k?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                        val vs = v?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                        ks to vs
+                    }
+                    ?.toMap()
+                    .orEmpty()
+                val snap = appsManager.collectRelevantIcons(requested, knownHashes)
+                snap.installedRelevantPackages.forEach { sentIconPackages.add(it) }
+                PhoneLinkMessage.Response(
+                    id = req.id,
+                    ok = true,
+                    result = linkedMapOf(
+                        "icons" to snap.icons.map { PhoneLinkCodec.appIconToMap(it) },
+                        "roles" to snap.roles,
+                        "installedPackages" to snap.installedRelevantPackages
+                    )
+                )
+            }
+
             PhoneLinkProtocol.METHOD_APPS_OPEN -> {
                 val appName = req.params["app"]?.toString().orEmpty()
                 appsManager.openApp(appName).fold(
@@ -744,6 +790,69 @@ class PonteServerService : Service() {
                     )
                 )
             }
+            val iconSnap = appsManager.collectRelevantIcons()
+            iconSnap.installedRelevantPackages.forEach { sentIconPackages.add(it) }
+            if (iconSnap.icons.isNotEmpty() || iconSnap.roles.isNotEmpty()) {
+                session.send(
+                    PhoneLinkMessage.Event(
+                        PhoneLinkProtocol.EVENT_APP_ICONS,
+                        linkedMapOf(
+                            "icons" to iconSnap.icons.map { PhoneLinkCodec.appIconToMap(it) },
+                            "roles" to iconSnap.roles,
+                            "installedPackages" to iconSnap.installedRelevantPackages
+                        )
+                    )
+                )
+            }
+        }
+    }
+
+    private fun registerPackageReceiver() {
+        unregisterPackageReceiver()
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                scheduleAppIconsBroadcast()
+            }
+        }
+        packageReceiver = receiver
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(receiver, filter)
+            }
+        }
+    }
+
+    private fun unregisterPackageReceiver() {
+        val rec = packageReceiver ?: return
+        packageReceiver = null
+        runCatching { unregisterReceiver(rec) }
+    }
+
+    private fun scheduleAppIconsBroadcast() {
+        iconsDebounceJob?.cancel()
+        iconsDebounceJob = scope.launch(Dispatchers.IO) {
+            delay(1_500L)
+            if (!running.get()) return@launch
+            if (clients.none { it.authenticated }) return@launch
+            val snap = appsManager.collectRelevantIcons()
+            snap.installedRelevantPackages.forEach { sentIconPackages.add(it) }
+            broadcastEvent(
+                PhoneLinkProtocol.EVENT_APP_ICONS,
+                linkedMapOf(
+                    "icons" to snap.icons.map { PhoneLinkCodec.appIconToMap(it) },
+                    "roles" to snap.roles,
+                    "installedPackages" to snap.installedRelevantPackages
+                )
+            )
         }
     }
 

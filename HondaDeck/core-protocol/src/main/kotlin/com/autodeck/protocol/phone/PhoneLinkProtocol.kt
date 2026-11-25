@@ -37,6 +37,7 @@ object PhoneLinkProtocol {
     const val METHOD_CALENDAR_CREATE = "calendar.create"
     const val METHOD_APPS_LIST = "apps.list"
     const val METHOD_APPS_OPEN = "apps.open"
+    const val METHOD_APPS_ICONS = "apps.icons"
 
     // Eventos assíncronos (celular -> tablet)
     const val EVENT_CALL_STATE = "call.state"
@@ -44,6 +45,7 @@ object PhoneLinkProtocol {
     const val EVENT_MESSAGE_REMOVED = "message.removed"
     const val EVENT_PHONE_STATUS = "phone.status"
     const val EVENT_CONTACTS_UPDATED = "contacts.updated"
+    const val EVENT_APP_ICONS = "apps.icons"
 
     // Códigos de erro padronizados
     const val ERR_UNAUTHORIZED = "UNAUTHORIZED"
@@ -143,6 +145,13 @@ data class PhoneCalendarEvent(
 data class PhoneAppEntry(
     val packageName: String,
     val label: String
+)
+
+data class PhoneAppIcon(
+    val packageName: String,
+    val label: String = "",
+    val hash: String = "",
+    val pngBase64: String
 )
 
 data class PhoneMessageNotification(
@@ -410,6 +419,27 @@ object PhoneLinkCodec {
         val label = m["label"]?.toString()?.trim().orEmpty()
         if (pkg.isBlank() || label.isBlank()) return null
         return PhoneAppEntry(packageName = pkg, label = label)
+    }
+
+    fun appIconToMap(icon: PhoneAppIcon): Map<String, Any?> = linkedMapOf<String, Any?>(
+        "packageName" to icon.packageName,
+        "pngBase64" to icon.pngBase64
+    ).apply {
+        if (icon.label.isNotBlank()) put("label", icon.label)
+        if (icon.hash.isNotBlank()) put("hash", icon.hash)
+    }
+
+    fun mapToAppIcon(raw: Any?): PhoneAppIcon? {
+        val m = raw as? Map<*, *> ?: return null
+        val pkg = m["packageName"]?.toString()?.trim().orEmpty()
+        val pngBase64 = m["pngBase64"]?.toString()?.trim().orEmpty()
+        if (pkg.isBlank() || pngBase64.isBlank()) return null
+        return PhoneAppIcon(
+            packageName = pkg,
+            label = m["label"]?.toString()?.trim().orEmpty(),
+            hash = m["hash"]?.toString()?.trim().orEmpty(),
+            pngBase64 = pngBase64
+        )
     }
 
     fun callInfoToMap(info: PhoneCallInfo): Map<String, Any?> = linkedMapOf(

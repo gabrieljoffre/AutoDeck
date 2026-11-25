@@ -8,9 +8,11 @@ import android.os.Build
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.edit
+import com.autodeck.headunit.web.WebResourceRouter
 import com.autodeck.protocol.phone.BrazilPhoneNumber
 import com.autodeck.protocol.phone.ContactMatchResult
 import com.autodeck.protocol.phone.PhoneAppEntry
+import com.autodeck.protocol.phone.PhoneAppIcon
 import com.autodeck.protocol.phone.PhoneCalendarEvent
 import com.autodeck.protocol.phone.PhoneCallInfo
 import com.autodeck.protocol.phone.PhoneContact
@@ -81,6 +83,9 @@ data class PhoneLinkUiState(
     val contactsSyncedAtMs: Long = 0L,
     val contactsSyncing: Boolean = false,
     val contactsSyncError: String? = null,
+    val iconsVersion: Int = 0,
+    val iconPackages: Set<String> = emptySet(),
+    val appRoles: Map<String, String> = emptyMap(),
     val statusMessage: String = "Celular desconectado",
     val lastError: String? = null
 ) {
@@ -110,6 +115,9 @@ class PhoneLinkClient(
     private val contactsCache = PhoneContactsCache(
         runCatching { appContext.filesDir?.let { File(it, "phone_contacts_cache.json") } }.getOrNull()
     )
+    private val phoneIconsDir: File? = runCatching { WebResourceRouter.phoneIconsDir(appContext) }.getOrNull()
+    private val iconHashes = ConcurrentHashMap<String, String>()
+    private val iconVersionCounter = AtomicInteger(1)
     private val connectivityManager =
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     private val nsdManager = appContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
@@ -291,9 +299,12 @@ class PhoneLinkClient(
             remove(KEY_HOST)
             remove(KEY_PORT)
             remove(KEY_PHONE_NAME)
+            remove(KEY_ICON_HASHES)
+            remove(KEY_APP_ROLES)
         }
         closeActiveSocket()
         contactsCache.clear()
+        clearPhoneIconsCache()
         _state.update {
             it.copy(
                 connectionState = PhoneConnectionState.DISCONNECTED,
@@ -307,6 +318,9 @@ class PhoneLinkClient(
                 contactsSyncedAtMs = 0L,
                 contactsSyncing = false,
                 contactsSyncError = null,
+                iconsVersion = iconVersionCounter.incrementAndGet(),
+                iconPackages = emptySet(),
+                appRoles = emptyMap(),
                 statusMessage = "Celular despareado",
                 lastError = null
             )
@@ -841,7 +855,115 @@ class PhoneLinkClient(
                 }
                 _events.tryEmit(PhoneLinkClientEvent.ContactsSynced(parsed.size, syncedAt))
             }
+
+            PhoneLinkProtocol.EVENT_APP_ICONS -> {
+                applyIncomingAppIcons(ev.data)
+            }
         }
+    }
+
+    suspend fun syncPhoneAppIcons(packages: List<String>? = null): Result<Int> {
+        val params = linkedMapOf<String, Any?>(
+            "knownHashes" to iconHashes.toMap()
+        )
+        if (!packages.isNullOrEmpty()) params["packages"] = packages
+        val res = sendRpc(PhoneLinkProtocol.METHOD_APPS_ICONS, params, timeoutMs = 15_000L)
+        return res.map { r -> applyIncomingAppIcons(r.result) }
+    }
+
+    private fun applyIncomingAppIcons(payload: Map<String, Any?>): Int {
+        val dir = phoneIconsDir ?: return 0
+        dir.mkdirs()
+
+        val rawIcons = payload["icons"] as? List<*> ?: emptyList<Any?>()
+        val parsedIcons = rawIcons.mapNotNull { PhoneLinkCodec.mapToAppIcon(it) }
+        var changedCount = 0
+
+        for (icon in parsedIcons) {
+            val safePkg = WebResourceRouter.parsePackageIconPath("${icon.packageName}.png") ?: continue
+            val target = File(dir, "$safePkg.png")
+            if (icon.hash.isNotBlank() && iconHashes[safePkg] == icon.hash && target.isFile && target.length() > 0L) {
+                continue
+            }
+            val bytes = runCatching { Base64.decode(icon.pngBase64, Base64.DEFAULT) }.getOrNull()
+                ?.takeIf { it.isNotEmpty() } ?: continue
+            val wrote = runCatching {
+                val tmp = File(dir, "$safePkg.png.tmp.${System.nanoTime()}")
+                tmp.writeBytes(bytes)
+                if (!tmp.renameTo(target)) {
+                    target.writeBytes(bytes)
+                    tmp.delete()
+                }
+                true
+            }.getOrDefault(false)
+            if (wrote) {
+                if (icon.hash.isNotBlank()) iconHashes[safePkg] = icon.hash
+                changedCount++
+            }
+        }
+
+        val incomingRoles = (payload["roles"] as? Map<*, *>)
+            ?.entries
+            ?.mapNotNull { (k, v) ->
+                val ks = k?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                val vs = v?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                ks to vs
+            }
+            ?.toMap()
+            .orEmpty()
+
+        val mergedRoles = _state.value.appRoles + incomingRoles
+        val availablePackages = listCachedPhoneIconPackages()
+
+        prefs.edit {
+            putString(KEY_ICON_HASHES, PhoneLinkCodec.encodeValue(iconHashes.toMap()))
+            if (mergedRoles.isNotEmpty()) {
+                putString(KEY_APP_ROLES, PhoneLinkCodec.encodeValue(mergedRoles))
+            }
+        }
+
+        if (changedCount > 0 || incomingRoles.isNotEmpty() || availablePackages != _state.value.iconPackages) {
+            val nextVer = if (changedCount > 0) iconVersionCounter.incrementAndGet() else _state.value.iconsVersion.coerceAtLeast(1)
+            _state.update { st ->
+                st.copy(
+                    iconsVersion = nextVer,
+                    iconPackages = availablePackages,
+                    appRoles = mergedRoles
+                )
+            }
+        }
+        return changedCount
+    }
+
+    private fun listCachedPhoneIconPackages(): Set<String> {
+        val dir = phoneIconsDir ?: return emptySet()
+        return runCatching {
+            dir.listFiles()
+                ?.asSequence()
+                ?.filter { it.isFile && it.length() > 0L && it.name.endsWith(".png") }
+                ?.mapNotNull { WebResourceRouter.parsePackageIconPath(it.name) }
+                ?.toSet()
+                .orEmpty()
+        }.getOrDefault(emptySet())
+    }
+
+    private fun clearPhoneIconsCache() {
+        iconHashes.clear()
+        runCatching {
+            phoneIconsDir?.listFiles()?.forEach { f ->
+                if (f.isFile && f.name.endsWith(".png")) f.delete()
+            }
+        }
+    }
+
+    private fun loadPersistedStringMap(key: String): Map<String, String> {
+        val raw = prefs.getString(key, null)?.takeIf { it.isNotBlank() } ?: return emptyMap()
+        val parsed = PhoneLinkCodec.parseJsonValue(raw) as? Map<*, *> ?: return emptyMap()
+        return parsed.entries.mapNotNull { (k, v) ->
+            val ks = k?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val vs = v?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            ks to vs
+        }.toMap()
     }
 
     private fun closeActiveSocket() {
@@ -1052,6 +1174,9 @@ class PhoneLinkClient(
         val port = prefs.getInt(KEY_PORT, PhoneLinkProtocol.TCP_PORT)
         val name = prefs.getString(KEY_PHONE_NAME, null).orEmpty()
         val snap = contactsCache.current()
+        iconHashes.putAll(loadPersistedStringMap(KEY_ICON_HASHES))
+        val roles = loadPersistedStringMap(KEY_APP_ROLES)
+        val cachedPkgs = listCachedPhoneIconPackages()
         return PhoneLinkUiState(
             paired = token.isNotBlank(),
             phoneName = name,
@@ -1059,6 +1184,9 @@ class PhoneLinkClient(
             port = port,
             contactsCount = snap.count,
             contactsSyncedAtMs = snap.syncedAtMs,
+            iconsVersion = if (cachedPkgs.isNotEmpty()) 1 else 0,
+            iconPackages = cachedPkgs,
+            appRoles = roles,
             statusMessage = if (token.isNotBlank()) "Aguardando ${name.ifBlank { "celular" }}…" else "Celular não pareado"
         )
     }
@@ -1075,6 +1203,8 @@ class PhoneLinkClient(
         private const val KEY_PORT = "port"
         private const val KEY_TOKEN = "token"
         private const val KEY_PHONE_NAME = "phone_name"
+        private const val KEY_ICON_HASHES = "icon_hashes"
+        private const val KEY_APP_ROLES = "app_roles"
         private const val CONNECT_TIMEOUT_MS = 4_000
         private const val HEARTBEAT_INTERVAL_MS = 15_000L
     }
