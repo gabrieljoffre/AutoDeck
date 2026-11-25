@@ -25,6 +25,7 @@ import com.autodeck.protocol.phone.PhoneLinkMessage
 import com.autodeck.protocol.phone.PhoneLinkProtocol
 import com.autodeck.protocol.phone.UdpDiscoveryAnnouncement
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -671,6 +672,14 @@ class PonteServerService : Service() {
             }
 
             PhoneLinkProtocol.METHOD_CALL_END -> {
+                // Chamada do WhatsApp não aparece no telefone do Android: encerra pelo botão "Sair da ligação".
+                val endedWhatsApp = withContext(Dispatchers.Main) {
+                    PonteAccessibilityService.instance?.endWhatsAppCall() == true
+                }
+                if (endedWhatsApp) {
+                    PonteStateHub.logActivity("Chamada do WhatsApp encerrada pelo tablet.")
+                    return PhoneLinkMessage.Response(id = req.id, ok = true, result = linkedMapOf("message" to "Chamada do WhatsApp encerrada."))
+                }
                 callManager.end().fold(
                     onSuccess = { msg ->
                         PonteStateHub.logActivity(msg)

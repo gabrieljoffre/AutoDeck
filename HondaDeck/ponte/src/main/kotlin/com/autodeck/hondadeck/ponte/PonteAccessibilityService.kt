@@ -109,6 +109,7 @@ class PonteAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         PonteAccessibilityController.isServiceConnected = true
+        instance = this
         Log.i(TAG, "Serviço de Acessibilidade da Ponte conectado.")
     }
 
@@ -153,15 +154,20 @@ class PonteAccessibilityService : AccessibilityService() {
                 } else if (pending.mode == PonteAccessibilityController.ActionMode.SEND_VOICE) {
                     finishVoiceAfterSend(pending, pkg)
                 } else {
-                    // Ligação de voz: pode aparecer diálogo "Fazer chamada de voz?" -> confirma se aparecer
+                    // Ligação de voz: o WhatsApp pode abrir um menu (Ligação de voz / vídeo / link) e depois
+                    // um diálogo "Fazer chamada de voz?". Escolhe "Ligação de voz", confirma e conclui.
                     mainHandler.postDelayed({
                         val still = PonteAccessibilityController.currentActive()
                         if (still === pending) {
                             val r2 = rootInActiveWindow
-                            if (r2 != null) {
-                                tryClickCallConfirm(r2)
-                            }
-                            PonteAccessibilityController.markCompleted(pending, true)
+                            val pickedMenu = r2 != null && tryClickVoiceMenuItem(r2)
+                            mainHandler.postDelayed({
+                                if (PonteAccessibilityController.currentActive() === pending) {
+                                    rootInActiveWindow?.let { tryClickCallConfirm(it) }
+                                    PonteAccessibilityController.markCompleted(pending, true)
+                                    Log.i(TAG, "Ligação de voz do WhatsApp iniciada (menu=$pickedMenu).")
+                                }
+                            }, if (pickedMenu) 900L else 100L)
                         }
                     }, 700L)
                 }
@@ -344,7 +350,25 @@ class PonteAccessibilityService : AccessibilityService() {
         return false
     }
 
+    /** Item "Ligação de voz" do menu de chamadas do WhatsApp (é texto, não descrição). */
+    private fun tryClickVoiceMenuItem(root: AccessibilityNodeInfo): Boolean {
+        val labels = listOf("Ligação de voz", "Ligacao de voz", "Chamada de voz", "Voice call")
+        for (label in labels) {
+            val nodes = root.findAccessibilityNodeInfosByText(label)
+            for (n in nodes) {
+                val t = n.text?.toString()?.trim().orEmpty()
+                if (!t.equals(label, ignoreCase = true)) continue
+                if (clickNodeOrParent(n, maxHops = 5) || tapOnNode(n)) {
+                    Log.i(TAG, "Menu de chamadas: \"$label\" escolhido.")
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private fun tryClickVoiceCallOrConfirm(root: AccessibilityNodeInfo, pkg: String): Boolean {
+        if (tryClickVoiceMenuItem(root)) return true
         if (tryClickCallConfirm(root)) return true
         val callIds = listOf(
             "$pkg:id/menuitem_call",
@@ -425,7 +449,29 @@ class PonteAccessibilityService : AccessibilityService() {
         }, 1_150L)
     }
 
+    /** Encerra uma chamada do WhatsApp em andamento tocando em "Sair da ligação". */
+    fun endWhatsAppCall(): Boolean {
+        val roots = runCatching { windows.mapNotNull { it.root } }.getOrDefault(emptyList()) + listOfNotNull(rootInActiveWindow)
+        for (root in roots) {
+            val pkg = root.packageName?.toString().orEmpty()
+            if (pkg !in WHATSAPP_PACKAGES) continue
+            for (id in listOf("$pkg:id/end_call_button", "$pkg:id/footer_end_call_btn", "$pkg:id/end_call_btn")) {
+                for (n in root.findAccessibilityNodeInfosByViewId(id)) {
+                    if (clickNodeOrParent(n) || tapOnNode(n)) {
+                        Log.i(TAG, "Chamada do WhatsApp encerrada ($id).")
+                        return true
+                    }
+                }
+            }
+            if (clickByDescription(root, setOf("sair da ligação", "encerrar ligação", "encerrar chamada", "desligar", "end call", "leave call"))) return true
+        }
+        return false
+    }
+
     companion object {
+        /** Instância conectada (para ações diretas, como encerrar a chamada do WhatsApp). */
+        @Volatile
+        var instance: PonteAccessibilityService? = null
         private const val TAG = "PonteAccessibility"
         private const val CLICK_DEBOUNCE_MS = 650L
 
