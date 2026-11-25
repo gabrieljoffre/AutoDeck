@@ -145,4 +145,40 @@ class PlaceSearchTest {
         assertTrue(results.first().distanceKm < 5.0)
         assertTrue(results.any { it.name == "Posto BR Petrobras" })
     }
+
+    @Test
+    fun `recente distante e posto de saude nao vencem postos de combustivel proximos em Anapolis`() = runBlocking {
+        val localPhotonJson = """
+            {
+              "type": "FeatureCollection",
+              "features": [
+                {"type":"Feature","geometry":{"type":"Point","coordinates":[-48.9554,-16.2793]},"properties":{"name":"Posto de Saúde","street":"Avenida dos Pirineus","city":"Anápolis","state":"Goiás"}},
+                {"type":"Feature","geometry":{"type":"Point","coordinates":[-48.9437,-16.2880]},"properties":{"name":"Posto Carreteiro","street":"Avenida Universitária","city":"Anápolis","state":"Goiás"}},
+                {"type":"Feature","geometry":{"type":"Point","coordinates":[-48.9428,-16.3087]},"properties":{"name":"Posto Alé","street":"Avenida Senador Ramos Caiado","city":"Anápolis","state":"Goiás"}}
+              ]
+            }
+        """.trimIndent()
+
+        val engine = PlaceSearch(
+            httpFetcher = { url -> if (url.contains("photon.komoot.io")) localPhotonJson else "[]" },
+            minIntervalMs = 0L
+        )
+
+        val hints = listOf(
+            LocalPlaceHint(
+                name = "Posto de combustível",
+                address = "Avenida W 3, Aparecida de Goiânia - GO",
+                lat = -16.7435,
+                lon = -49.2317,
+                isFavorite = false
+            )
+        )
+
+        val results = engine.search("posto", -16.2859, -48.9626, localHints = hints)
+        assertTrue(results.isNotEmpty())
+        assertEquals("Posto Carreteiro", results[0].name)
+        assertEquals("Posto Alé", results[1].name)
+        assertTrue(results.indexOfFirst { it.name == "Posto de Saúde" } > results.indexOfFirst { it.name == "Posto Alé" })
+        assertTrue(results.indexOfFirst { it.address.contains("Aparecida") } > results.indexOfFirst { it.name == "Posto Alé" })
+    }
 }

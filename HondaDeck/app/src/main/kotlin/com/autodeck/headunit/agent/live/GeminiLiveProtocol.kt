@@ -186,6 +186,22 @@ object GeminiLiveProtocol {
     }
 
     /**
+     * Monta mensagem `clientContent` em texto para iniciar ou estimular um turno na sessão Live.
+     */
+    fun buildClientTextMessage(text: String): JSONObject {
+        val part = JSONObject().put("text", text)
+        val turn = JSONObject().apply {
+            put("role", "user")
+            put("parts", JSONArray().put(part))
+        }
+        val content = JSONObject().apply {
+            put("turns", JSONArray().put(turn))
+            put("turnComplete", true)
+        }
+        return JSONObject().put("clientContent", content)
+    }
+
+    /**
      * Interpreta qualquer mensagem JSON recebida do WebSocket da Gemini Live API.
      */
     fun parseServerMessage(rawJson: String): LiveServerEvent {

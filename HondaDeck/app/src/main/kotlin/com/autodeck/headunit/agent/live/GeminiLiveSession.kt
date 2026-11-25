@@ -89,7 +89,8 @@ class GeminiLiveSession(
     private val functionDeclarations: JSONArray,
     private val callbacks: GeminiLiveCallbacks,
     private val voiceName: String = GeminiLiveProtocol.DEFAULT_VOICE_NAME,
-    private val okHttpClient: OkHttpClient = defaultHttpClient()
+    private val okHttpClient: OkHttpClient = defaultHttpClient(),
+    private val initialPrompt: String? = null
 ) {
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
@@ -339,6 +340,11 @@ class GeminiLiveSession(
                 lastActivityMs.set(System.currentTimeMillis())
                 Log.i(TAG, "SetupComplete recebido; iniciando pipeline de áudio (captura 16 kHz + playback 24 kHz)")
                 startAudioPipelineIfNeeded()
+                val promptToSend = initialPrompt?.trim()?.takeIf { it.isNotEmpty() }
+                if (promptToSend != null) {
+                    val sent = webSocket?.send(GeminiLiveProtocol.buildClientTextMessage(promptToSend).toString()) == true
+                    Log.i(TAG, "clientContent inicial enviado (sent=$sent, chars=${promptToSend.length})")
+                }
                 updateSnapshot(
                     phase = LiveSessionPhase.LISTENING,
                     status = if (mode == LiveSessionMode.ASK) "Ouvindo… pode falar." else "Ao vivo · pode falar.",
@@ -722,6 +728,9 @@ class GeminiLiveSession(
 
     private fun runPlaybackLoop(track: AudioTrack, bufferSizeBytes: Int) {
         var writtenFramesInTurn = 0L
+        var chunksInTurn = 0
+        var flushCountInTurn = 0
+        var turnStartedAtMs = 0L
         var turnStartHeadFrames = readPlaybackHeadFrames(track)
         var turnHasStarted = false
 
@@ -732,7 +741,8 @@ class GeminiLiveSession(
                     PlaybackAction.Shutdown -> break
 
                     is PlaybackAction.Flush -> {
-                        Log.i(TAG, "AudioTrack flush (motivo=${action.reason}, gen=${action.generation})")
+                        flushCountInTurn++
+                        Log.i(TAG, "AudioTrack flush (motivo=${action.reason}, gen=${action.generation}, flushes=$flushCountInTurn)")
                         runCatching {
                             if (track.state == AudioTrack.STATE_INITIALIZED) {
                                 track.pause()
@@ -740,7 +750,9 @@ class GeminiLiveSession(
                             }
                         }
                         writtenFramesInTurn = 0L
+                        chunksInTurn = 0
                         turnHasStarted = false
+                        turnStartedAtMs = 0L
                         turnStartHeadFrames = readPlaybackHeadFrames(track)
                     }
 
@@ -751,15 +763,19 @@ class GeminiLiveSession(
                         if (action.startPlayback || !turnHasStarted) {
                             turnHasStarted = true
                             writtenFramesInTurn = 0L
+                            chunksInTurn = 0
+                            flushCountInTurn = 0
+                            turnStartedAtMs = System.currentTimeMillis()
                             turnStartHeadFrames = readPlaybackHeadFrames(track)
                             runCatching {
                                 if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                                     track.play()
                                 }
                             }
-                            Log.d(TAG, "AudioTrack iniciou reprodução contínua do turno (gen=${action.generation})")
+                            Log.i(TAG, "AudioTrack iniciou reprodução contínua do turno (gen=${action.generation})")
                         }
 
+                        chunksInTurn++
                         val outLevel = LiveAudioPlaybackController.rmsToVisualLevel(
                             LiveAudioPlaybackController.computePcm16Rms(action.pcm)
                         )
@@ -786,6 +802,9 @@ class GeminiLiveSession(
                             nowMs = System.currentTimeMillis()
                         )
                         if (completed) {
+                            val underruns = runCatching { track.underrunCount }.getOrDefault(-1)
+                            val elapsedMs = if (turnStartedAtMs > 0L) (System.currentTimeMillis() - turnStartedAtMs) else 0L
+                            val audioDurationMs = (writtenFramesInTurn * 1000L) / GeminiLiveProtocol.OUTPUT_SAMPLE_RATE_HZ
                             // Pausa suavemente após o hardware drenar tudo (sem flush), pronto para pré-buffer do próximo turno
                             runCatching {
                                 if (track.state == AudioTrack.STATE_INITIALIZED &&
@@ -794,10 +813,18 @@ class GeminiLiveSession(
                                     track.pause()
                                 }
                             }
+                            Log.i(
+                                TAG,
+                                "AudioTrack drenou turno completamente (gen=${action.generation}, chunks=$chunksInTurn, " +
+                                    "frames=$writtenFramesInTurn, audioMs=$audioDurationMs, elapsedMs=$elapsedMs, " +
+                                    "underruns=$underruns, flushes=$flushCountInTurn)"
+                            )
                             writtenFramesInTurn = 0L
+                            chunksInTurn = 0
+                            flushCountInTurn = 0
                             turnHasStarted = false
+                            turnStartedAtMs = 0L
                             turnStartHeadFrames = readPlaybackHeadFrames(track)
-                            Log.d(TAG, "AudioTrack drenou turno completamente (gen=${action.generation})")
                         }
                     }
                 }

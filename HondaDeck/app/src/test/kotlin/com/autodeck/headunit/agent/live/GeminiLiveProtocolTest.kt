@@ -115,6 +115,13 @@ class GeminiLiveProtocolTest {
         assertEquals("ajustar_volume", first.getString("name"))
         assertEquals("Volume 50%", first.getJSONObject("response").getString("result"))
         assertTrue(first.getJSONObject("response").getBoolean("ok"))
+
+        val clientText = GeminiLiveProtocol.buildClientTextMessage("Explique o sistema VTEC")
+        val content = clientText.getJSONObject("clientContent")
+        assertTrue(content.getBoolean("turnComplete"))
+        val turn = content.getJSONArray("turns").getJSONObject(0)
+        assertEquals("user", turn.getString("role"))
+        assertEquals("Explique o sistema VTEC", turn.getJSONArray("parts").getJSONObject(0).getString("text"))
     }
 
     @Test

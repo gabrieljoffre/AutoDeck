@@ -831,7 +831,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     // --- Agente Gemini & WhatsApp ---
     fun triggerVoiceAgent() = carAgent.triggerVoiceCommand()
     fun stopVoiceAgent() = carAgent.stopListening()
-    fun startCopilotLive() = carAgent.startLiveConversation()
+    fun startCopilotLive(initialPrompt: String? = null) = carAgent.startLiveConversation(initialPrompt)
     fun stopCopilotLive() = carAgent.stopLiveConversation()
     fun startCopilotAskVoice() = carAgent.startAskVoiceOneShot()
     fun clearCopilotMemory() {

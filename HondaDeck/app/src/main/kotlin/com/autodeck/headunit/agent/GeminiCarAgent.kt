@@ -497,8 +497,8 @@ class GeminiCarAgent(
     }
 
     /** Inicia modo Live contínuo ("Conversar") via Gemini Live API, com fallback automático. */
-    fun startLiveConversation() {
-        startLiveOrFallback(LiveSessionMode.LIVE)
+    fun startLiveConversation(initialPrompt: String? = null) {
+        startLiveOrFallback(LiveSessionMode.LIVE, initialPrompt)
     }
 
     /** Inicia modo rápido one-shot ("Peça ao Gemini"), com fallback automático. */
@@ -531,7 +531,7 @@ class GeminiCarAgent(
         }
     }
 
-    private fun startLiveOrFallback(mode: LiveSessionMode) {
+    private fun startLiveOrFallback(mode: LiveSessionMode, initialPrompt: String? = null) {
         val cfg = host.getConfig()
         if (cfg.voiceAssistantMode == VoiceAssistantMode.SYSTEM_ASSISTANT) {
             launchSystemVoiceAssistant()
@@ -599,6 +599,7 @@ class GeminiCarAgent(
                 )
             },
             functionDeclarations = GeminiLiveTools.buildFunctionDeclarations(),
+            initialPrompt = initialPrompt,
             callbacks = object : GeminiLiveCallbacks {
                 override fun onSnapshot(snapshot: LiveSessionSnapshot) {
                     val ended = snapshot.phase == LiveSessionPhase.ENDED

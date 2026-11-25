@@ -219,7 +219,10 @@ class WebBridge(
 
             "copilot.listen" -> runtime.triggerVoiceAgent()
             "copilot.cancel" -> runtime.stopVoiceAgent()
-            "copilot.live.start" -> runtime.startCopilotLive()
+            "copilot.live.start" -> {
+                val prompt = args.optString("prompt").trim().takeIf { it.isNotEmpty() }
+                runtime.startCopilotLive(prompt)
+            }
             "copilot.live.stop" -> runtime.stopCopilotLive()
             "copilot.ask.voice" -> runtime.startCopilotAskVoice()
             "copilot.clearMemory" -> runtime.clearCopilotMemory()

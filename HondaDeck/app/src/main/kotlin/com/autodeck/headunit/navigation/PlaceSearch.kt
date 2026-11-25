@@ -78,6 +78,8 @@ class PlaceSearch(
         if (raw.length < 2) return emptyList()
 
         val localHits = matchLocalHints(raw, localHints, originLat, originLon)
+        val localPriority = localHits.filter { it.priority }
+        val localDistantRecents = localHits.filterNot { it.priority }.map { it.result }
         val effectiveQuery = expandQuery(raw)
         val cacheKey = buildCacheKey(effectiveQuery, originLat, originLon)
         val now = clockMs()
@@ -87,13 +89,13 @@ class PlaceSearch(
             if (hit != null && now - hit.savedAtMs <= CACHE_TTL_MS) {
                 hit.results.map { r ->
                     r.copy(distanceKm = calcDistanceKm(originLat, originLon, r.lat, r.lon))
-                }.sortedBy { it.distanceKm }
+                }.let { sortPlaces(it, effectiveQuery) }
             } else {
                 null
             }
         }
         if (cachedRemote != null) {
-            return mergeResults(localHits, cachedRemote)
+            return mergeResults(localPriority.map { it.result }, sortPlaces(cachedRemote + localDistantRecents, effectiveQuery))
         }
 
         // 1) Photon (rápido, tolerante a typos/incompletos, com viés na posição atual)
@@ -154,7 +156,10 @@ class PlaceSearch(
         synchronized(cache) {
             cache[cacheKey] = CacheEntry(clockMs(), remote)
         }
-        return mergeResults(localHits, remote)
+        return mergeResults(
+            localPriority.map { it.result },
+            sortPlaces(remote + localDistantRecents, effectiveQuery)
+        )
     }
 
     private suspend fun fetchNominatimRateLimited(url: String): String = nominatimMutex.withLock {
@@ -315,19 +320,24 @@ class PlaceSearch(
             return deduplicateAndSort(out)
         }
 
+        internal data class MatchedLocalHint(
+            val result: PlaceSearchResult,
+            val priority: Boolean
+        )
+
         /** Filtra favoritos e recentes tolerando acentos, nomes incompletos e pequenos erros de digitação. */
-        fun matchLocalHints(
+        internal fun matchLocalHints(
             query: String,
             hints: List<LocalPlaceHint>,
             originLat: Double,
             originLon: Double
-        ): List<PlaceSearchResult> {
+        ): List<MatchedLocalHint> {
             if (hints.isEmpty()) return emptyList()
             val qNorm = normalizeText(query)
             if (qNorm.length < 2) return emptyList()
             val qTokens = qNorm.split(" ").filter { it.isNotBlank() }
 
-            val scored = mutableListOf<Pair<Int, PlaceSearchResult>>()
+            val scored = mutableListOf<Pair<Int, MatchedLocalHint>>()
             for (h in hints) {
                 if (!h.lat.isFinite() || !h.lon.isFinite() || (h.lat == 0.0 && h.lon == 0.0)) continue
                 val nameNorm = normalizeText(h.name)
@@ -337,18 +347,42 @@ class PlaceSearch(
                 if (score > 0) {
                     val bonus = if (h.isFavorite) 20 else 0
                     val distKm = calcDistanceKm(originLat, originLon, h.lat, h.lon)
-                    scored += (score + bonus) to PlaceSearchResult(
+                    val res = PlaceSearchResult(
                         name = h.name,
                         address = h.address,
                         lat = h.lat,
                         lon = h.lon,
                         distanceKm = distKm
                     )
+                    // Favoritos sempre têm prioridade; recentes só têm prioridade se estiverem na região (<= 25 km)
+                    val priority = h.isFavorite || distKm <= NEARBY_LOCAL_HINT_MAX_KM
+                    scored += (score + bonus) to MatchedLocalHint(res, priority)
                 }
             }
             return scored
-                .sortedWith(compareByDescending<Pair<Int, PlaceSearchResult>> { it.first }.thenBy { it.second.distanceKm })
+                .sortedWith(compareByDescending<Pair<Int, MatchedLocalHint>> { it.first }.thenBy { it.second.result.distanceKm })
                 .map { it.second }
+        }
+
+        private const val NEARBY_LOCAL_HINT_MAX_KM = 25.0
+
+        private fun isNonFuelPosto(name: String): Boolean {
+            val n = normalizeText(name)
+            return n.contains("posto de saude") ||
+                n.contains("posto policial") ||
+                n.contains("posto fiscal") ||
+                n.contains("posto de coleta") ||
+                n.contains("posto medico")
+        }
+
+        private fun sortPlaces(list: List<PlaceSearchResult>, effectiveQuery: String): List<PlaceSearchResult> {
+            val fuelSearch = effectiveQuery == "posto de combustível"
+            return list.distinctBy { dedupKey(it) }
+                .sortedWith(
+                    compareBy<PlaceSearchResult> { if (fuelSearch && isNonFuelPosto(it.name)) 1 else 0 }
+                        .thenBy { it.distanceKm }
+                )
+                .take(MAX_RESULTS)
         }
 
         private fun mergeResults(
