@@ -14,7 +14,7 @@ import { initGauge, updateGaugeTargets } from './gauge.js';
 import { initMap, setMapMode, setMapAccent, updateMapState } from './map.js';
 import { initMusic, updateMusic, focusFullMusicSearch } from './music.js';
 import { initDock, updateDock, updateNotification, setDockActiveMode, showToast } from './dock.js';
-import { initCopilot, updateCopilot, onAgentReply } from './copilot.js';
+import { initCopilot, updateCopilot, updateCopilotLevel, onAgentReply } from './copilot.js';
 import { initSettings, updateSettings, setSettingsVisible, showSettingsTab } from './settings.js';
 import { initCalendarCard, updateCalendarCard, openCalendarCard, closeCalendarCard } from './calendar-card.js';
 import { initWeatherCard, updateWeatherCard, openWeatherCard, closeWeatherCard } from './weather-card.js';
@@ -185,6 +185,7 @@ function onState(next) {
 function onTelemetry(t) {
   updateGaugeTargets(t);
   if (t.speedKmh !== undefined) setBackgroundSpeed(t.speedKmh);
+  if (t.copilotLevel !== undefined) updateCopilotLevel(t.copilotLevel);
 }
 
 function onEvent(ev) {

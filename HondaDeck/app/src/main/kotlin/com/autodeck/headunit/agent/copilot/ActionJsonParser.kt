@@ -31,6 +31,7 @@ object ActionJsonParser {
         "OPEN_MAPS",
         "MAP_SEARCH",
         "NAVIGATE",
+        "STOP_ROUTE",
         "READ_WHATSAPP",
         "REPLY_WHATSAPP",
         "SWITCH_TAB",
@@ -41,7 +42,8 @@ object ActionJsonParser {
         "REPORT",
         "WEATHER",
         "VOLUME",
-        "ASK_GEMINI_APP"
+        "ASK_GEMINI_APP",
+        "FORGET_CONVERSATIONS"
     )
 
     private val MARKER_REGEX = Regex("""(?i)ACTION_JSON\s*:""")

@@ -25,8 +25,11 @@ enum class VoiceAssistantMode(val labelPt: String, val descriptionPt: String) {
     )
 }
 
-/** Modelo do Copiloto: responde no plano gratuito da chave (os 2.x foram desativados). */
+/** Modelo de texto do Copiloto (fallback REST): responde no plano gratuito da chave. */
 const val DEFAULT_GEMINI_MODEL = "gemini-flash-lite-latest"
+
+/** Modelo de voz em tempo real (Gemini Live API via WebSocket). */
+const val DEFAULT_GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
 
 data class HeadUnitConfig(
     val setupCompleted: Boolean = true,
@@ -66,6 +69,7 @@ data class HeadUnitConfig(
     // Agente Gemini & Voz
     val geminiApiKey: String = "",
     val geminiModel: String = DEFAULT_GEMINI_MODEL,
+    val geminiLiveModel: String = DEFAULT_GEMINI_LIVE_MODEL,
     val voiceAssistantMode: VoiceAssistantMode = VoiceAssistantMode.HYBRID_GEMINI,
     val wakeWordEnabled: Boolean = true,
     val wakeWordPhrase: String = "ok honda",
@@ -145,9 +149,11 @@ class HeadUnitPreferences(context: Context) {
             showBootSplashOnIgnition = prefs.getBoolean(KEY_SHOW_BOOT_ON_IGNITION, true),
             // Vazio nas Configurações = usa a chave embutida no build (local.properties).
             geminiApiKey = (prefs.getString(KEY_GEMINI_API_KEY, "") ?: "").ifBlank { BuildConfig.GEMINI_API_KEY },
-            // Os modelos 2.x foram desativados pelo Google: quem ainda tiver um salvo passa para o atual.
+            // Os modelos 2.x de texto foram desativados pelo Google: quem ainda tiver um salvo passa para o atual.
             geminiModel = (prefs.getString(KEY_GEMINI_MODEL, null) ?: "")
                 .takeIf { it.isNotBlank() && !it.startsWith("gemini-2.") } ?: DEFAULT_GEMINI_MODEL,
+            geminiLiveModel = (prefs.getString(KEY_GEMINI_LIVE_MODEL, null) ?: "")
+                .takeIf { it.isNotBlank() } ?: DEFAULT_GEMINI_LIVE_MODEL,
             voiceAssistantMode = voiceAssistantMode,
             wakeWordEnabled = prefs.getBoolean(KEY_WAKE_WORD_ENABLED, true),
             wakeWordPhrase = prefs.getString(KEY_WAKE_WORD_PHRASE, "ok honda") ?: "ok honda",
@@ -229,6 +235,7 @@ class HeadUnitPreferences(context: Context) {
 
             putString(KEY_GEMINI_API_KEY, config.geminiApiKey)
             putString(KEY_GEMINI_MODEL, config.geminiModel)
+            putString(KEY_GEMINI_LIVE_MODEL, config.geminiLiveModel)
             putString(KEY_VOICE_ASSISTANT_MODE, config.voiceAssistantMode.name)
             putBoolean(KEY_WAKE_WORD_ENABLED, config.wakeWordEnabled)
             putString(KEY_WAKE_WORD_PHRASE, config.wakeWordPhrase)
@@ -326,6 +333,7 @@ class HeadUnitPreferences(context: Context) {
         const val KEY_SHOW_BOOT_ON_IGNITION = "show_boot_on_ignition"
         const val KEY_GEMINI_API_KEY = "gemini_api_key"
         const val KEY_GEMINI_MODEL = "gemini_model"
+        const val KEY_GEMINI_LIVE_MODEL = "gemini_live_model"
         const val KEY_VOICE_ASSISTANT_MODE = "voice_assistant_mode"
         const val KEY_WAKE_WORD_ENABLED = "wake_word_enabled"
         const val KEY_WAKE_WORD_PHRASE = "wake_word_phrase"

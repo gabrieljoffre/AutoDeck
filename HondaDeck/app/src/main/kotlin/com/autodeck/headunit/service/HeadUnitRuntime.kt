@@ -13,6 +13,7 @@ import com.autodeck.headunit.agent.GeminiCarAgent
 import com.autodeck.headunit.agent.copilot.CopilotIntentParser
 import com.autodeck.headunit.agent.copilot.FavoriteRef
 import com.autodeck.headunit.agent.copilot.VolumeDirection
+import com.autodeck.headunit.agent.copilot.WebKnowledgeTools
 import com.autodeck.headunit.data.FavoritePlace
 import com.autodeck.headunit.data.FavoritePlacesStore
 import com.autodeck.headunit.data.HeadUnitConfig
@@ -783,6 +784,13 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     // --- Agente Gemini & WhatsApp ---
     fun triggerVoiceAgent() = carAgent.triggerVoiceCommand()
     fun stopVoiceAgent() = carAgent.stopListening()
+    fun startCopilotLive() = carAgent.startLiveConversation()
+    fun stopCopilotLive() = carAgent.stopLiveConversation()
+    fun startCopilotAskVoice() = carAgent.startAskVoiceOneShot()
+    fun clearCopilotMemory() {
+        carAgent.clearConversationMemory()
+        emitWebEvent("toast", "Memória das conversas apagada")
+    }
     fun sendAgentPrompt(text: String) = carAgent.sendUserPrompt(text, speakReply = true)
     fun readLatestWhatsAppAloud() = carAgent.readLatestWhatsAppAloud()
 
@@ -998,10 +1006,62 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         return "Tema do mapa: $norm"
     }
 
+    override fun setAccentColor(colorHex: String): String {
+        val clean = colorHex.trim().uppercase()
+        if (!Regex("^#[0-9A-F]{6}$").matches(clean)) return "Cor inválida: $colorHex"
+        updateConfig { it.copy(accentColor = clean) }
+        return "Cor do painel alterada para $clean."
+    }
+
     override fun openMapFullScreen(): String {
         selectTab(MainTab.NAVIGATION)
         emitWebEvent("openMode", mode = "mapFull")
         return "Mapa em tela cheia"
+    }
+
+    override fun stopRoute(): String {
+        stopInAppNavigation()
+        emitWebEvent("toast", "Rota encerrada")
+        return "Rota encerrada."
+    }
+
+    override fun openHome(): String {
+        selectTab(MainTab.HOME)
+        emitWebEvent("openMode", mode = "home")
+        return "Painel principal"
+    }
+
+    override fun getRouteSummary(): String? {
+        val r = _uiState.value.route
+        if (!r.isActive) return null
+        val distKm = r.remainingDistanceM / 1000.0
+        val distText = if (distKm >= 1.0) "%.1f km".format(distKm) else "${r.remainingDistanceM.toInt()} m"
+        val min = (r.remainingDurationS / 60.0).toInt().coerceAtLeast(1)
+        val dest = r.destinationLabel.ifBlank { "destino" }
+        return "Indo para $dest ($distText, cerca de $min min)."
+    }
+
+    override suspend fun getWeatherSummaryForCity(city: String): String? = withContext(Dispatchers.IO) {
+        runCatching { WebKnowledgeTools().buscarClima(city) }.getOrNull()
+    }
+
+    override fun readDtcSummaryForAgent(): String {
+        val dtcs = coordinator.state.dtcCodes
+        if (dtcs.isEmpty() && obdTransport?.isConnected == true) {
+            readDtcCodes()
+        }
+        return if (dtcs.isEmpty()) {
+            "Nenhum código de falha DTC registrado no Civic."
+        } else {
+            "Encontradas ${dtcs.size} falhas DTC: ${dtcs.joinToString("; ") { "${it.code} (${it.descriptionPt})" }}."
+        }
+    }
+
+    override fun readAndMarkWhatsApp(): String {
+        val latest = mediaController.messages.value.firstOrNull()
+            ?: return "Nenhuma mensagem nova do WhatsApp no momento."
+        mediaController.markMessageRead(latest.key)
+        return "Mensagem de ${latest.sender} no ${latest.appLabel}: ${latest.message}"
     }
 
     override fun toggleReverseCamera(): String {
@@ -1374,7 +1434,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                     lastObservedAgentMsgId = latestBot.id
                 }
                 _uiState.update { it.copy(agentState = agent) }
-                if (isNewReply && latestBot.text.isNotBlank()) {
+                if (isNewReply && latestBot.text.isNotBlank() && !latestBot.suppressReplyPopup && agent.copilotMode == "idle") {
                     emitWebEvent("agentReply", latestBot.text)
                 }
             }

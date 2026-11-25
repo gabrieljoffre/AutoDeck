@@ -341,9 +341,16 @@ export function installMockBackend() {
     copilot: {
       listening: false,
       thinking: false,
+      speaking: false,
       online: true,
       model: 'gemini-flash-lite-latest',
-      status: 'Aguardando "ok honda"',
+      liveModel: 'gemini-2.5-flash-native-audio-latest',
+      mode: 'idle',
+      phase: 'idle',
+      level: 0,
+      userText: '',
+      replyText: '',
+      status: 'Pronto. Toque em Conversar ou Peça ao Gemini.',
       lastUser: '',
       lastReply: '',
       lastAction: ''
@@ -397,6 +404,7 @@ export function installMockBackend() {
       spotifyShowRecent: true,
       geminiKeySet: true,
       geminiModel: 'gemini-flash-lite-latest',
+      geminiLiveModel: 'gemini-2.5-flash-native-audio-latest',
       wakeWord: 'ok honda',
       wakeWordEnabled: true,
       obdDevice: '00:1D:A5:68:98:8B',
@@ -807,11 +815,83 @@ export function installMockBackend() {
             }
           }, 4200);
           break;
+        case 'copilot.live.start':
+          clearTimeout(listenTimer);
+          state.copilot.mode = 'live';
+          state.copilot.phase = 'listening';
+          state.copilot.listening = true;
+          state.copilot.thinking = false;
+          state.copilot.speaking = false;
+          state.copilot.level = 0.35;
+          state.copilot.userText = '';
+          state.copilot.replyText = '';
+          state.copilot.status = 'Ao vivo · pode falar.';
+          emitState();
+          listenTimer = setTimeout(() => {
+            if (state.copilot.mode === 'live') {
+              state.copilot.userText = 'Como está o motor do Civic hoje?';
+              state.copilot.phase = 'speaking';
+              state.copilot.speaking = true;
+              state.copilot.listening = false;
+              state.copilot.level = 0.72;
+              state.copilot.replyText = `Motor a ${state.telemetry.coolantC}°C, bateria em ${state.telemetry.voltage.toFixed(1)}V e tudo normal no Civic.`;
+              state.copilot.status = 'Gemini respondendo…';
+              emitState();
+            }
+          }, 1800);
+          break;
+        case 'copilot.ask.voice':
+          clearTimeout(listenTimer);
+          state.copilot.mode = 'ask';
+          state.copilot.phase = 'listening';
+          state.copilot.listening = true;
+          state.copilot.thinking = false;
+          state.copilot.speaking = false;
+          state.copilot.level = 0.42;
+          state.copilot.userText = '';
+          state.copilot.replyText = '';
+          state.copilot.status = 'Ouvindo… pode falar.';
+          emitState();
+          listenTimer = setTimeout(() => {
+            if (state.copilot.mode !== 'ask') return;
+            state.copilot.userText = 'Aumentar volume para 70%';
+            state.copilot.phase = 'speaking';
+            state.copilot.speaking = true;
+            state.copilot.listening = false;
+            state.copilot.level = 0.68;
+            state.audio.volumePct = 70;
+            state.copilot.replyText = 'Volume ajustado para 70%.';
+            state.copilot.status = 'Gemini respondendo…';
+            emitState();
+            listenTimer = setTimeout(() => {
+              if (state.copilot.mode === 'ask') {
+                state.copilot.mode = 'idle';
+                state.copilot.phase = 'idle';
+                state.copilot.speaking = false;
+                state.copilot.level = 0;
+                state.copilot.status = 'Pronto.';
+                emitState();
+              }
+            }, 2200);
+          }, 1600);
+          break;
+        case 'copilot.live.stop':
         case 'copilot.cancel':
           clearTimeout(listenTimer);
+          state.copilot.mode = 'idle';
+          state.copilot.phase = 'idle';
           state.copilot.listening = false;
           state.copilot.thinking = false;
+          state.copilot.speaking = false;
+          state.copilot.level = 0;
+          state.copilot.status = 'Conversa encerrada.';
           emitState();
+          break;
+        case 'copilot.clearMemory':
+          state.copilot.userText = '';
+          state.copilot.replyText = '';
+          emitState();
+          emitEvent('toast', { text: 'Memória das conversas apagada' });
           break;
         case 'copilot.ask':
           clearTimeout(listenTimer);

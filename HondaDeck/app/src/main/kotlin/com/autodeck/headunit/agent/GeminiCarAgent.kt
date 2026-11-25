@@ -26,6 +26,16 @@ import com.autodeck.headunit.agent.copilot.GeminiToolLoop
 import com.autodeck.headunit.agent.copilot.TelemetryKind
 import com.autodeck.headunit.agent.copilot.VolumeDirection
 import com.autodeck.headunit.agent.copilot.WebKnowledgeTools
+import com.autodeck.headunit.agent.live.CopilotMemoryStore
+import com.autodeck.headunit.agent.live.CopilotMemoryTurn
+import com.autodeck.headunit.agent.live.GeminiLiveCallbacks
+import com.autodeck.headunit.agent.live.GeminiLiveSession
+import com.autodeck.headunit.agent.live.GeminiLiveTools
+import com.autodeck.headunit.agent.live.LiveFunctionCall
+import com.autodeck.headunit.agent.live.LiveSessionMode
+import com.autodeck.headunit.agent.live.LiveSessionPhase
+import com.autodeck.headunit.agent.live.LiveSessionSnapshot
+import com.autodeck.headunit.agent.live.LiveToolExecution
 import com.autodeck.headunit.data.DEFAULT_GEMINI_MODEL
 import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.VoiceAssistantMode
@@ -47,6 +57,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
@@ -58,7 +69,8 @@ data class AgentChatMessage(
     val isUser: Boolean,
     val text: String,
     val actionBadge: String? = null,
-    val isOfflineEngine: Boolean = false
+    val isOfflineEngine: Boolean = false,
+    val suppressReplyPopup: Boolean = false
 )
 
 data class AgentUiState(
@@ -66,14 +78,19 @@ data class AgentUiState(
     val isWakeWordListening: Boolean = false,
     val isThinking: Boolean = false,
     val isSpeaking: Boolean = false,
+    val copilotMode: String = "idle", // "idle" | "live" | "ask"
+    val livePhase: String = "idle",   // "idle" | "connecting" | "listening" | "thinking" | "speaking"
+    val audioLevel: Float = 0f,       // 0..1 para animação da onda
+    val userText: String = "",
+    val replyText: String = "",
     val partialTranscript: String = "",
-    val statusText: String = "Pronto. Diga \"Ok Honda\" ou toque no microfone.",
+    val statusText: String = "Pronto. Toque em Conversar ou Peça ao Gemini.",
     val isOnlineAvailable: Boolean = false,
-    val engineBadge: String = "Híbrido (Gemini + Offline)",
+    val engineBadge: String = "Híbrido (Gemini Live + Offline)",
     val messages: List<AgentChatMessage> = listOf(
         AgentChatMessage(
             isUser = false,
-            text = "Olá! Sou o copiloto do seu Civic. Posso ler dados do motor, controlar o Spotify, traçar rotas no Google Maps e ler/responder mensagens do WhatsApp.",
+            text = "Olá! Sou o copiloto do seu Civic. Posso ler dados do motor, controlar o Spotify, traçar rotas no mapa e ler/responder mensagens do WhatsApp.",
             isOfflineEngine = true
         )
     )
@@ -124,8 +141,44 @@ interface CarAgentHostBridge {
     /** Altera o tema visual do mapa ("AUTO", "LIGHT" ou "DARK"). */
     fun setMapTheme(theme: String): String = "Tema do mapa: $theme"
 
+    /** Altera a cor de destaque do painel (`#RRGGBB`). */
+    fun setAccentColor(colorHex: String): String = "Cor do painel: $colorHex"
+
     /** Abre o mapa em modo tela cheia (`mapFull`). */
     fun openMapFullScreen(): String = navigateTo(null, null, false)
+
+    /** Encerra a rota ativa no mapa do app. */
+    fun stopRoute(): String = "Rota encerrada."
+
+    /** Volta para a tela inicial do painel (fecha mapa/Spotify expandido). */
+    fun openHome(): String = switchTab(MainTab.HOME)
+
+    /** Resumo textual da rota ativa no app (ou null se não houver rota). */
+    fun getRouteSummary(): String? = null
+
+    /** Resumo dos itens de manutenção cadastrados (ou null se não houver). */
+    fun getMaintenanceSummary(): String? = null
+
+    /** Consulta clima de uma cidade específica (fallback web). */
+    suspend fun getWeatherSummaryForCity(city: String): String? = null
+
+    /** Lê e retorna resumo dos códigos de falha DTC atuais do veículo. */
+    fun readDtcSummaryForAgent(): String {
+        val dtcs = getHeadUnitState().dtcCodes
+        return if (dtcs.isEmpty()) {
+            "Nenhum código de falha DTC registrado no Civic."
+        } else {
+            "Encontradas ${dtcs.size} falhas DTC: ${dtcs.joinToString("; ") { "${it.code} (${it.descriptionPt})" }}."
+        }
+    }
+
+    /** Lê a última mensagem recebida do WhatsApp e marca como lida. */
+    fun readAndMarkWhatsApp(): String {
+        val latest = getWhatsAppMessages().firstOrNull()
+            ?: return "Nenhuma mensagem recente do WhatsApp."
+        markMessagesRead()
+        return "Mensagem de ${latest.sender} no ${latest.appLabel}: ${latest.message}"
+    }
 
     /** Busca música na Spotify Web API e toca pelo App Remote (ou fallback). */
     suspend fun searchAndPlayMusic(query: String): String = controlMusic("SEARCH", query)
@@ -181,7 +234,10 @@ class GeminiCarAgent(
     private val webKnowledgeTools: WebKnowledgeTools = WebKnowledgeTools(),
     private val rawGeminiPostOverride: ((model: String, body: JSONObject, apiKey: String) -> Result<String>)? = null,
     private val internetCheckOverride: (() -> Boolean)? = null,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val memoryStore: CopilotMemoryStore = CopilotMemoryStore(
+        runCatching { appContext.filesDir?.let { File(it, "copilot_memory.json") } }.getOrNull()
+    )
 ) {
     private val _state = MutableStateFlow(AgentUiState())
     val state: StateFlow<AgentUiState> = _state.asStateFlow()
@@ -194,7 +250,9 @@ class GeminiCarAgent(
     private var wakeLoopActive = false
     private var activeCommandMode = false
     private var continuousSession = false
+    private var fallbackOneShotAsk = false
     private var restartWakeJob: Job? = null
+    private var liveSession: GeminiLiveSession? = null
 
     init {
         scope.launch(mainDispatcher) {
@@ -216,12 +274,21 @@ class GeminiCarAgent(
 
                     override fun onDone(utteranceId: String?) {
                         scope.launch(mainDispatcher) {
-                            _state.update { it.copy(isSpeaking = false) }
+                            val wasAskOneShot = fallbackOneShotAsk
+                            fallbackOneShotAsk = false
+                            _state.update { cur ->
+                                cur.copy(
+                                    isSpeaking = false,
+                                    audioLevel = 0f,
+                                    copilotMode = if (wasAskOneShot && cur.copilotMode == "ask") "idle" else cur.copilotMode,
+                                    livePhase = if (wasAskOneShot && cur.copilotMode == "ask") "idle" else cur.livePhase
+                                )
+                            }
                             val cfg = host.getConfig()
-                            if (continuousSession && cfg.continuousConversationEnabled && isForeground) {
+                            if (!wasAskOneShot && continuousSession && cfg.continuousConversationEnabled && isForeground) {
                                 delay(280L)
                                 startDirectVoiceCommand(fromContinuous = true)
-                            } else if (cfg.wakeWordEnabled && isForeground) {
+                            } else if (cfg.wakeWordEnabled && isForeground && liveSession?.isActive() != true) {
                                 scheduleWakeWordRestart(400L)
                             }
                         }
@@ -229,7 +296,16 @@ class GeminiCarAgent(
 
                     @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?) {
-                        _state.update { it.copy(isSpeaking = false) }
+                        val wasAskOneShot = fallbackOneShotAsk
+                        fallbackOneShotAsk = false
+                        _state.update { cur ->
+                            cur.copy(
+                                isSpeaking = false,
+                                audioLevel = 0f,
+                                copilotMode = if (wasAskOneShot && cur.copilotMode == "ask") "idle" else cur.copilotMode,
+                                livePhase = if (wasAskOneShot && cur.copilotMode == "ask") "idle" else cur.livePhase
+                            )
+                        }
                     }
                 })
             }
@@ -239,9 +315,9 @@ class GeminiCarAgent(
     fun setAppForeground(inForeground: Boolean) {
         isForeground = inForeground
         val cfg = host.getConfig()
-        if (inForeground && cfg.wakeWordEnabled && cfg.voiceAssistantMode != VoiceAssistantMode.SYSTEM_ASSISTANT) {
+        if (inForeground && cfg.wakeWordEnabled && cfg.voiceAssistantMode != VoiceAssistantMode.SYSTEM_ASSISTANT && liveSession?.isActive() != true) {
             scheduleWakeWordRestart(700L)
-        } else if (!inForeground && !activeCommandMode) {
+        } else if (!inForeground && !activeCommandMode && liveSession?.isActive() != true) {
             stopRecognizerNow()
         }
     }
@@ -251,7 +327,8 @@ class GeminiCarAgent(
         if (config.wakeWordEnabled &&
             isForeground &&
             config.voiceAssistantMode != VoiceAssistantMode.SYSTEM_ASSISTANT &&
-            !activeCommandMode
+            !activeCommandMode &&
+            liveSession?.isActive() != true
         ) {
             scheduleWakeWordRestart(500L)
         } else if (!config.wakeWordEnabled) {
@@ -268,12 +345,213 @@ class GeminiCarAgent(
             VoiceAssistantMode.SYSTEM_ASSISTANT -> "Assistente Android"
             VoiceAssistantMode.LOCAL_ONLY -> "Motor Local Offline"
             VoiceAssistantMode.HYBRID_GEMINI -> when {
-                online && cfg.geminiApiKey.isNotBlank() -> "Gemini Online (${cfg.geminiModel})"
+                online && cfg.geminiApiKey.isNotBlank() -> "Gemini Live (${cfg.geminiLiveModel})"
                 online && cfg.geminiApiKey.isBlank() -> "Offline (Configure Chave Gemini)"
                 else -> "Offline (Sem Internet)"
             }
         }
         _state.update { it.copy(isOnlineAvailable = online, engineBadge = badge) }
+    }
+
+    /** Inicia modo Live contínuo ("Conversar") via Gemini Live API, com fallback automático. */
+    fun startLiveConversation() {
+        startLiveOrFallback(LiveSessionMode.LIVE)
+    }
+
+    /** Inicia modo rápido one-shot ("Peça ao Gemini"), com fallback automático. */
+    fun startAskVoiceOneShot() {
+        startLiveOrFallback(LiveSessionMode.ASK)
+    }
+
+    /** Encerra a sessão Live ou qualquer escuta/fala ativa. */
+    fun stopLiveConversation() {
+        val active = liveSession
+        liveSession = null
+        if (active != null && active.isActive()) {
+            active.stop("Conversa encerrada.")
+        } else {
+            stopListening()
+        }
+    }
+
+    /** Limpa o histórico salvo e resumos de conversas ("esqueça as conversas"). */
+    fun clearConversationMemory() {
+        memoryStore.clear()
+        conversationHistory.clear()
+        _state.update {
+            it.copy(
+                userText = "",
+                replyText = "",
+                statusText = "Memória das conversas apagada."
+            )
+        }
+    }
+
+    private fun startLiveOrFallback(mode: LiveSessionMode) {
+        val cfg = host.getConfig()
+        if (cfg.voiceAssistantMode == VoiceAssistantMode.SYSTEM_ASSISTANT) {
+            launchSystemVoiceAssistant()
+            return
+        }
+        if (!hasAudioPermission()) {
+            _state.update { it.copy(statusText = "Permita o acesso ao microfone nas Configurações.") }
+            return
+        }
+
+        // Encerra qualquer sessão/escuta anterior antes de abrir a nova
+        liveSession?.let { prev ->
+            liveSession = null
+            if (prev.isActive()) prev.stop("Reiniciando sessão…")
+        }
+        restartWakeJob?.cancel()
+        wakeLoopActive = false
+        activeCommandMode = false
+        continuousSession = false
+        fallbackOneShotAsk = false
+        scope.launch(mainDispatcher) {
+            stopRecognizerNow()
+            runCatching { tts?.stop() }
+        }
+
+        refreshConnectivityBadge()
+        val canUseLive = cfg.voiceAssistantMode == VoiceAssistantMode.HYBRID_GEMINI &&
+            _state.value.isOnlineAvailable &&
+            cfg.geminiApiKey.isNotBlank()
+
+        if (!canUseLive) {
+            startFallbackVoice(mode, "Usando modo local/texto…")
+            return
+        }
+
+        val session = GeminiLiveSession(
+            appContext = appContext,
+            scope = scope,
+            apiKey = cfg.geminiApiKey,
+            model = cfg.geminiLiveModel,
+            mode = mode,
+            systemInstructionProvider = {
+                GeminiLiveTools.buildSystemInstruction(
+                    host = host,
+                    recentSummaries = memoryStore.recentSummaries(limit = 5),
+                    oneShot = (mode == LiveSessionMode.ASK)
+                )
+            },
+            functionDeclarations = GeminiLiveTools.buildFunctionDeclarations(),
+            callbacks = object : GeminiLiveCallbacks {
+                override fun onSnapshot(snapshot: LiveSessionSnapshot) {
+                    val ended = snapshot.phase == LiveSessionPhase.ENDED
+                    _state.update { cur ->
+                        cur.copy(
+                            isListening = snapshot.phase == LiveSessionPhase.LISTENING || snapshot.phase == LiveSessionPhase.CONNECTING,
+                            isThinking = snapshot.phase == LiveSessionPhase.THINKING,
+                            isSpeaking = snapshot.phase == LiveSessionPhase.SPEAKING,
+                            isWakeWordListening = false,
+                            copilotMode = if (ended) "idle" else snapshot.mode.wireValue,
+                            livePhase = snapshot.phase.wireValue,
+                            audioLevel = if (ended) 0f else snapshot.level,
+                            userText = if (snapshot.userText.isNotBlank()) snapshot.userText else cur.userText,
+                            replyText = if (snapshot.replyText.isNotBlank()) snapshot.replyText else cur.replyText,
+                            statusText = snapshot.statusText
+                        )
+                    }
+                }
+
+                override suspend fun onToolCall(call: LiveFunctionCall): LiveToolExecution {
+                    return GeminiLiveTools.executeTool(
+                        call = call,
+                        host = host,
+                        onClearMemory = { clearConversationMemory() }
+                    )
+                }
+
+                override fun onFallbackRequired(reason: String, mode: LiveSessionMode) {
+                    Log.w("GeminiCarAgent", "Gemini Live indisponível ($reason); alternando para fluxo texto/offline.")
+                    liveSession = null
+                    startFallbackVoice(mode, "Gemini Live indisponível · usando fallback")
+                }
+
+                override fun onSessionEnded(
+                    mode: LiveSessionMode,
+                    turns: List<CopilotMemoryTurn>,
+                    startedAtMs: Long,
+                    endedAtMs: Long,
+                    reason: String
+                ) {
+                    liveSession = null
+                    if (turns.isNotEmpty()) {
+                        memoryStore.recordSession(
+                            mode = mode.wireValue,
+                            turns = turns,
+                            startedAtMs = startedAtMs,
+                            endedAtMs = endedAtMs
+                        )
+                        val lastU = turns.lastOrNull { it.role == "user" }?.text.orEmpty()
+                        val lastM = turns.lastOrNull { it.role != "user" }?.text.orEmpty()
+                        if (lastU.isNotBlank()) {
+                            appendMessage(AgentChatMessage(isUser = true, text = lastU))
+                        }
+                        if (lastM.isNotBlank()) {
+                            appendMessage(
+                                AgentChatMessage(
+                                    isUser = false,
+                                    text = lastM,
+                                    isOfflineEngine = false,
+                                    suppressReplyPopup = true
+                                )
+                            )
+                        }
+                    }
+                    _state.update { cur ->
+                        cur.copy(
+                            isListening = false,
+                            isThinking = false,
+                            isSpeaking = false,
+                            copilotMode = "idle",
+                            livePhase = "idle",
+                            audioLevel = 0f,
+                            statusText = reason
+                        )
+                    }
+                    if (host.getConfig().wakeWordEnabled && isForeground) {
+                        scheduleWakeWordRestart(600L)
+                    }
+                }
+            }
+        )
+        liveSession = session
+        _state.update {
+            it.copy(
+                copilotMode = mode.wireValue,
+                livePhase = LiveSessionPhase.CONNECTING.wireValue,
+                audioLevel = 0f,
+                userText = "",
+                replyText = "",
+                isListening = true,
+                isThinking = false,
+                isSpeaking = false,
+                statusText = if (mode == LiveSessionMode.ASK) "Conectando ao Gemini…" else "Iniciando conversa ao vivo…"
+            )
+        }
+        session.start()
+    }
+
+    private fun startFallbackVoice(mode: LiveSessionMode, statusHint: String) {
+        fallbackOneShotAsk = (mode == LiveSessionMode.ASK)
+        _state.update {
+            it.copy(
+                copilotMode = mode.wireValue,
+                livePhase = "listening",
+                audioLevel = 0f,
+                userText = "",
+                replyText = "",
+                statusText = statusHint
+            )
+        }
+        startDirectVoiceCommand(
+            fromContinuous = false,
+            overrideContinuous = (mode == LiveSessionMode.LIVE),
+            copilotModeTag = mode.wireValue
+        )
     }
 
     fun triggerVoiceCommand() {
@@ -282,15 +560,24 @@ class GeminiCarAgent(
             launchSystemVoiceAssistant()
             return
         }
+        if (liveSession?.isActive() == true) {
+            stopLiveConversation()
+            return
+        }
         if (_state.value.isListening && activeCommandMode) {
             stopListening()
             return
         }
-        startDirectVoiceCommand(fromContinuous = false)
+        startLiveConversation()
     }
 
     fun stopListening() {
+        liveSession?.let { active ->
+            liveSession = null
+            if (active.isActive()) active.stop("Escuta pausada.")
+        }
         continuousSession = false
+        fallbackOneShotAsk = false
         activeCommandMode = false
         wakeLoopActive = false
         restartWakeJob?.cancel()
@@ -301,7 +588,11 @@ class GeminiCarAgent(
                 it.copy(
                     isListening = false,
                     isWakeWordListening = false,
+                    isThinking = false,
                     isSpeaking = false,
+                    copilotMode = "idle",
+                    livePhase = "idle",
+                    audioLevel = 0f,
                     partialTranscript = "",
                     statusText = "Escuta pausada."
                 )
@@ -331,13 +622,17 @@ class GeminiCarAgent(
         speak(reply)
     }
 
-    private fun startDirectVoiceCommand(fromContinuous: Boolean) {
+    private fun startDirectVoiceCommand(
+        fromContinuous: Boolean,
+        overrideContinuous: Boolean? = null,
+        copilotModeTag: String? = null
+    ) {
         if (!hasAudioPermission()) {
-            _state.update { it.copy(statusText = "Permita o acesso ao microfone nas Configurações.") }
+            _state.update { it.copy(copilotMode = "idle", livePhase = "idle", statusText = "Permita o acesso ao microfone nas Configurações.") }
             return
         }
         if (!SpeechRecognizer.isRecognitionAvailable(appContext)) {
-            _state.update { it.copy(statusText = "Reconhecimento de voz indisponível neste aparelho.") }
+            _state.update { it.copy(copilotMode = "idle", livePhase = "idle", statusText = "Reconhecimento de voz indisponível neste aparelho.") }
             return
         }
 
@@ -346,12 +641,14 @@ class GeminiCarAgent(
             runCatching { tts?.stop() }
             wakeLoopActive = false
             activeCommandMode = true
-            continuousSession = host.getConfig().continuousConversationEnabled
-            _state.update {
-                it.copy(
+            continuousSession = overrideContinuous ?: host.getConfig().continuousConversationEnabled
+            _state.update { cur ->
+                cur.copy(
                     isListening = true,
                     isWakeWordListening = false,
                     isSpeaking = false,
+                    copilotMode = copilotModeTag ?: cur.copilotMode,
+                    livePhase = "listening",
                     partialTranscript = "",
                     statusText = if (fromContinuous) "Continuando conversa... pode falar." else "Ouvindo você..."
                 )
@@ -365,7 +662,7 @@ class GeminiCarAgent(
         restartWakeJob = scope.launch(mainDispatcher) {
             delay(delayMs)
             val cfg = host.getConfig()
-            if (!cfg.wakeWordEnabled || !isForeground || activeCommandMode || _state.value.isSpeaking) return@launch
+            if (!cfg.wakeWordEnabled || !isForeground || activeCommandMode || _state.value.isSpeaking || liveSession?.isActive() == true) return@launch
             if (cfg.voiceAssistantMode == VoiceAssistantMode.SYSTEM_ASSISTANT) return@launch
             if (!hasAudioPermission() || !SpeechRecognizer.isRecognitionAvailable(appContext)) return@launch
 
@@ -404,7 +701,12 @@ class GeminiCarAgent(
         recognizer.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) = Unit
             override fun onBeginningOfSpeech() = Unit
-            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onRmsChanged(rmsdB: Float) {
+                if (!isWakeWordMode) {
+                    val norm = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+                    _state.update { it.copy(audioLevel = norm) }
+                }
+            }
             override fun onBufferReceived(buffer: ByteArray?) = Unit
             override fun onEndOfSpeech() = Unit
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -418,7 +720,7 @@ class GeminiCarAgent(
                 if (text.isBlank()) return
 
                 if (!isWakeWordMode) {
-                    _state.update { it.copy(partialTranscript = text) }
+                    _state.update { it.copy(partialTranscript = text, userText = text) }
                 } else {
                     val wakePhrase = host.getConfig().wakeWordPhrase
                     if (containsWakeWord(text, wakePhrase)) {
@@ -453,17 +755,22 @@ class GeminiCarAgent(
                 }
 
                 activeCommandMode = false
-                _state.update { it.copy(isListening = false, partialTranscript = "") }
+                _state.update { it.copy(isListening = false, audioLevel = 0f, partialTranscript = "") }
                 if (spoken.isBlank()) {
                     continuousSession = false
+                    fallbackOneShotAsk = false
+                    _state.update { it.copy(copilotMode = "idle", livePhase = "idle") }
                     if (host.getConfig().wakeWordEnabled) scheduleWakeWordRestart(500L)
                 } else if (isStopPhrase(spoken)) {
                     continuousSession = false
+                    fallbackOneShotAsk = false
                     val bye = "Certo, qualquer coisa é só chamar."
                     appendMessage(AgentChatMessage(isUser = true, text = spoken))
                     appendMessage(AgentChatMessage(isUser = false, text = bye, isOfflineEngine = true))
+                    _state.update { it.copy(copilotMode = "idle", livePhase = "idle", userText = spoken, replyText = bye) }
                     speak(bye)
                 } else {
+                    _state.update { it.copy(userText = spoken) }
                     sendUserPrompt(spoken, speakReply = true)
                 }
             }
@@ -485,9 +792,13 @@ class GeminiCarAgent(
 
                 activeCommandMode = false
                 continuousSession = false
+                fallbackOneShotAsk = false
                 _state.update {
                     it.copy(
                         isListening = false,
+                        copilotMode = "idle",
+                        livePhase = "idle",
+                        audioLevel = 0f,
                         partialTranscript = "",
                         statusText = if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                             "Não ouvi nenhuma frase."
@@ -528,6 +839,22 @@ class GeminiCarAgent(
             val cfg = host.getConfig()
             val online = _state.value.isOnlineAvailable
             val parsedIntent = CopilotIntentParser.parse(userText, host.getFavoritePlaces())
+            if (parsedIntent is CopilotIntent.ForgetConversations) {
+                clearConversationMemory()
+                val reply = "Pronto, apaguei o histórico das nossas conversas."
+                _state.update {
+                    it.copy(
+                        isThinking = false,
+                        userText = userText,
+                        replyText = reply,
+                        statusText = "Memória limpa"
+                    )
+                }
+                appendMessage(AgentChatMessage(isUser = false, text = reply, actionBadge = "Memória limpa", isOfflineEngine = true))
+                if (speakReply) speak(reply)
+                return@launch
+            }
+
             val canUseGemini = cfg.voiceAssistantMode == VoiceAssistantMode.HYBRID_GEMINI &&
                 online &&
                 cfg.geminiApiKey.isNotBlank() &&
@@ -536,6 +863,8 @@ class GeminiCarAgent(
             _state.update {
                 it.copy(
                     isThinking = true,
+                    livePhase = if (it.copilotMode != "idle") "thinking" else it.livePhase,
+                    userText = userText,
                     statusText = if (canUseGemini) "Consultando Gemini..." else "Processando localmente..."
                 )
             }
@@ -546,9 +875,20 @@ class GeminiCarAgent(
                 runLocalOfflineAgent(userText)
             }
 
+            if (result.actionBadge != "Memória limpa") {
+                memoryStore.recordSingleExchange(
+                    userText = userText,
+                    replyText = result.replyText,
+                    mode = if (_state.value.copilotMode == "ask") "ask" else "text"
+                )
+            }
+
             _state.update {
                 it.copy(
                     isThinking = false,
+                    livePhase = if (it.copilotMode != "idle") "speaking" else it.livePhase,
+                    userText = userText,
+                    replyText = result.replyText,
                     statusText = result.actionBadge?.let { b -> "Executado: $b" } ?: "Resposta pronta."
                 )
             }
@@ -561,8 +901,14 @@ class GeminiCarAgent(
                     isOfflineEngine = result.isOffline
                 )
             )
-            if (speakReply) {
+            if (speakReply && ttsReady) {
                 speak(result.replyText)
+            } else if (fallbackOneShotAsk) {
+                fallbackOneShotAsk = false
+                delay(2_800L)
+                _state.update { cur ->
+                    if (cur.copilotMode == "ask") cur.copy(copilotMode = "idle", livePhase = "idle") else cur
+                }
             }
         }
     }
@@ -774,10 +1120,21 @@ class GeminiCarAgent(
             }
         }
 
+        val recentMemories = memoryStore.recentSummaries(limit = 5)
+        val memoryText = if (recentMemories.isEmpty()) {
+            "Nenhuma conversa anterior salva."
+        } else {
+            recentMemories.joinToString("\n") { "- $it" }
+        }
+
         return """
             Você é o HondaDeck Copilot, assistente automotivo em tempo real de um Honda Civic com tablet no painel.
-            Responda sempre em Português do Brasil, de forma clara, natural e curta (ideal para ser lida em voz alta enquanto dirige).
-            
+            Motorista em Anápolis-GO, Brasil.
+            Responda sempre em Português do Brasil, de forma clara, natural e curta (ideal para ser lida em voz alta enquanto dirige) e sempre confirme ações executadas.
+
+            MEMÓRIA DE CONVERSAS RECENTES:
+            $memoryText
+
             TELEMETRIA DO CARRO AGORA:
             - Status OBD2: ${hu.obdStatus.labelPt}
             - Velocidade: ${derived.correctedSpeedKmh?.toInt() ?: snap.speedKmh?.toInt() ?: 0} km/h
@@ -793,6 +1150,12 @@ class GeminiCarAgent(
             
             MÚSICA AGORA (${media.appLabel}):
             - Tocando: ${media.isPlaying} | Faixa: "${media.title}" por "${media.artist}"
+
+            ROTA NO APP:
+            - ${host.getRouteSummary() ?: "nenhuma rota ativa"}
+
+            MANUTENÇÃO:
+            - ${host.getMaintenanceSummary() ?: "sem itens cadastrados"}
 
             CLIMA NO LOCAL DO CARRO:
             - ${host.getWeatherSummary() ?: "sem dados no momento"}
@@ -811,13 +1174,14 @@ class GeminiCarAgent(
             - MUSIC_PLAY | MUSIC_PAUSE | MUSIC_NEXT | MUSIC_PREV | OPEN_SPOTIFY
             - MUSIC_SEARCH (arg = nome da música ou artista para tocar no painel)
             - OPEN_MAP | MAP_SEARCH (arg = tipo de lugar ou nome para buscar no mapa do app)
-            - NAVIGATE (arg = destino, favorito ou endereço; traça rota dentro do app)
+            - NAVIGATE (arg = destino, favorito ou endereço; traça rota dentro do app) | STOP_ROUTE (encerra rota ativa)
             - READ_WHATSAPP | REPLY_WHATSAPP (arg = texto exato da resposta)
             - SWITCH_TAB (arg = HOME, NAVIGATION, MUSIC, AGENT_VOICE, OBD_SCANNER, SETTINGS)
             - OPEN_CAMERA | CLOSE_CAMERA
             - REPORT (relatório completo do veículo) | WEATHER (resumo do clima)
             - VOLUME (arg = "up", "down", "mute", "unmute" ou número de 0 a 100)
             - ASK_GEMINI_APP (arg = pergunta para abrir no app Gemini do tablet)
+            - FORGET_CONVERSATIONS (apaga histórico/memória de conversas salvas)
             - LOG_FUEL (arg = JSON em texto: {"litros":40,"preco":6.29,"km":123456,"cheio":true}; omita campos que o motorista não disse; "cheio" só true se ele disse que completou)
 
             DIÁRIO DE ABASTECIMENTO (consumo real medido tanque cheio a tanque cheio):
@@ -853,6 +1217,11 @@ class GeminiCarAgent(
             "NAVIGATE" -> {
                 val fav = matchFavoriteByArg(arg)
                 host.navigateTo(arg.takeIf { it.isNotBlank() }, fav, false)
+            }
+            "STOP_ROUTE" -> host.stopRoute()
+            "FORGET_CONVERSATIONS" -> {
+                clearConversationMemory()
+                "Memória limpa"
             }
             "READ_WHATSAPP" -> {
                 host.markMessagesRead()
@@ -990,6 +1359,16 @@ class GeminiCarAgent(
             CopilotIntent.OpenMap -> {
                 val badge = host.navigateTo(null, null, false)
                 AgentReplyResult("Abrindo o mapa.", badge, isOffline = true)
+            }
+
+            CopilotIntent.StopRoute -> {
+                val badge = host.stopRoute()
+                AgentReplyResult("Rota encerrada.", badge, isOffline = true)
+            }
+
+            CopilotIntent.ForgetConversations -> {
+                clearConversationMemory()
+                AgentReplyResult("Pronto, apaguei o histórico das nossas conversas.", "Memória limpa", isOffline = true)
             }
 
             CopilotIntent.ExpandMapFull -> {

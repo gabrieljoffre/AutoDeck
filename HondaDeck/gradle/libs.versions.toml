@@ -9,6 +9,7 @@ composeBom = "2025.05.00"
 junit = "4.13.2"
 webkit = "1.12.1"
 orgJson = "20240303"
+okhttp = "4.12.0"
 
 [libraries]
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -27,6 +28,7 @@ androidx-compose-material-icons-extended = { group = "androidx.compose.material"
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

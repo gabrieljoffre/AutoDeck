@@ -252,11 +252,20 @@ object StateDto {
 
         val lastUserMsg = ui.agentState.messages.lastOrNull { it.isUser }
         val lastBotMsg = ui.agentState.messages.lastOrNull { !it.isUser }
+        val resolvedUserText = ui.agentState.userText.ifBlank { lastUserMsg?.text ?: "" }
+        val resolvedReplyText = ui.agentState.replyText.ifBlank { lastBotMsg?.text ?: "" }
         val copilotObj = JSONObject().apply {
             put("listening", ui.agentState.isListening)
             put("thinking", ui.agentState.isThinking)
+            put("speaking", ui.agentState.isSpeaking)
             put("online", ui.agentState.isOnlineAvailable)
             put("model", ui.config.geminiModel)
+            put("liveModel", ui.config.geminiLiveModel)
+            put("mode", ui.agentState.copilotMode)
+            put("phase", ui.agentState.livePhase)
+            put("level", round2(ui.agentState.audioLevel.toDouble().coerceIn(0.0, 1.0)))
+            put("userText", resolvedUserText)
+            put("replyText", resolvedReplyText)
             put("status", ui.agentState.statusText)
             put("lastUser", lastUserMsg?.text ?: "")
             put("lastReply", lastBotMsg?.text ?: "")
@@ -331,6 +340,7 @@ object StateDto {
             put("spotifyShowRecent", ui.config.spotifyShowRecent)
             put("geminiKeySet", ui.config.geminiApiKey.isNotBlank())
             put("geminiModel", ui.config.geminiModel)
+            put("geminiLiveModel", ui.config.geminiLiveModel)
             put("wakeWord", ui.config.wakeWordPhrase)
             put("wakeWordEnabled", ui.config.wakeWordEnabled)
             put("obdDevice", ui.config.obdDeviceMac.orEmpty())
@@ -410,6 +420,9 @@ object StateDto {
             put("rpm", rpm.roundToInt())
             put("gear", gear)
             put("fuelPct", round1(fuelPct))
+            if (ui.agentState.copilotMode != "idle") {
+                put("copilotLevel", round2(ui.agentState.audioLevel.toDouble().coerceIn(0.0, 1.0)))
+            }
         }
     }
 

@@ -219,6 +219,10 @@ class WebBridge(
 
             "copilot.listen" -> runtime.triggerVoiceAgent()
             "copilot.cancel" -> runtime.stopVoiceAgent()
+            "copilot.live.start" -> runtime.startCopilotLive()
+            "copilot.live.stop" -> runtime.stopCopilotLive()
+            "copilot.ask.voice" -> runtime.startCopilotAskVoice()
+            "copilot.clearMemory" -> runtime.clearCopilotMemory()
             "copilot.ask" -> {
                 val text = args.optString("text").trim()
                 if (text.isNotBlank()) runtime.sendAgentPrompt(text)
@@ -295,6 +299,12 @@ class WebBridge(
                 val v = args.optString("value").trim()
                 if (v.isNotBlank()) {
                     runtime.updateConfig { it.copy(geminiModel = v) }
+                }
+            }
+            "geminiLiveModel" -> {
+                val v = args.optString("value").trim()
+                if (v.isNotBlank()) {
+                    runtime.updateConfig { it.copy(geminiLiveModel = v) }
                 }
             }
             "wakeWord" -> {
@@ -417,6 +427,10 @@ class WebBridge(
             "copilot.listen",
             "copilot.cancel",
             "copilot.ask",
+            "copilot.live.start",
+            "copilot.live.stop",
+            "copilot.ask.voice",
+            "copilot.clearMemory",
             "notif.read",
             "notif.dismiss",
             "obd.connect",

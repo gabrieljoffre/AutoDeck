@@ -235,4 +235,31 @@ class StateDtoTest {
         assertEquals("google", googleJson.getJSONObject("map").getString("provider"))
         assertEquals("AIzaTestKey123", googleJson.getJSONObject("map").getString("jsKey"))
     }
+
+    @Test
+    fun `exporta campos do Gemini Live em copilot e copilotLevel na telemetria quando ativo`() {
+        val ui = HeadUnitUiState(
+            agentState = com.autodeck.headunit.agent.AgentUiState(
+                isListening = true,
+                copilotMode = "live",
+                livePhase = "listening",
+                audioLevel = 0.64f,
+                userText = "Como está o motor?",
+                replyText = "Motor a 89 graus."
+            )
+        )
+        val json = StateDto.buildStateJson(ui)
+        val copilot = json.getJSONObject("copilot")
+        assertEquals("live", copilot.getString("mode"))
+        assertEquals(0.64, copilot.getDouble("level"), 0.02)
+        assertEquals("Como está o motor?", copilot.getString("userText"))
+        assertEquals("Motor a 89 graus.", copilot.getString("replyText"))
+        assertEquals(
+            com.autodeck.headunit.data.DEFAULT_GEMINI_LIVE_MODEL,
+            json.getJSONObject("settings").getString("geminiLiveModel")
+        )
+
+        val fastTel = StateDto.buildTelemetryJson(ui)
+        assertEquals(0.64, fastTel.getDouble("copilotLevel"), 0.02)
+    }
 }

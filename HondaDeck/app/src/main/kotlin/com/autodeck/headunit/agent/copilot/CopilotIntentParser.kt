@@ -57,7 +57,9 @@ sealed interface CopilotIntent {
     data object MusicPlay : CopilotIntent
     data object OpenSpotify : CopilotIntent
     data object OpenMap : CopilotIntent
+    data object StopRoute : CopilotIntent
     data object ExpandMapFull : CopilotIntent
+    data object ForgetConversations : CopilotIntent
     data class SetMapTheme(val theme: String) : CopilotIntent
     data class ReplyWhatsApp(val text: String) : CopilotIntent
     data object ReadWhatsApp : CopilotIntent
@@ -153,6 +155,12 @@ object CopilotIntentParser {
     )
     private val OPEN_MAP_EXACT = Regex(
         """^(?:(?:abrir|abre|abra|mostrar|mostra|mostre|ver|ir\s+para\s+o)\s+(?:o\s+)?)?(?:mapa|maps|google\s+maps|tela\s+de\s+mapa|navegacao)$"""
+    )
+    private val STOP_ROUTE_REGEX = Regex(
+        """\b(?:encerrar|encerra|encerre|cancelar|cancela|cancele|parar|para|pare|finalizar|finaliza|desligar)\s+(?:a\s+)?(?:rota|navegacao|trajeto|gps)\b"""
+    )
+    private val FORGET_CONVERSATIONS_REGEX = Regex(
+        """\b(?:esqueca|esquecer|esquece|apagar|apaga|apague|limpar|limpa|limpe)\s+(?:as\s+|todas\s+as\s+|a\s+|o\s+)?(?:conversas|memoria(?:\s+das?\s+conversas)?|historico(?:\s+de\s+conversas)?)\b"""
     )
     private val OPEN_SPOTIFY_REGEX = Regex(
         """^(?:(?:abrir|abre|abra|mostrar|mostra|mostre|ir\s+para\s+o)\s+(?:o\s+)?)?spotify$|\b(?:abrir|abre|abra)\s+(?:o\s+)?spotify\b"""
@@ -287,6 +295,11 @@ object CopilotIntentParser {
             }
         }
 
+        // 1b. Limpar memória de conversas ("esqueça as conversas")
+        if (FORGET_CONVERSATIONS_REGEX.containsMatchIn(q)) {
+            return CopilotIntent.ForgetConversations
+        }
+
         // 2. Responder WhatsApp ANTES de ler WhatsApp e antes de rota/música
         for (pat in REPLY_WHATSAPP_PATTERNS) {
             val m = pat.find(q)
@@ -334,6 +347,9 @@ object CopilotIntentParser {
         }
         if (OPEN_MAP_EXACT.matches(q)) {
             return CopilotIntent.OpenMap
+        }
+        if (STOP_ROUTE_REGEX.containsMatchIn(q)) {
+            return CopilotIntent.StopRoute
         }
 
         // 7. Rota / Navegação (PRIORIDADE ROTA > MÚSICA: "ir para a próxima rua" cai aqui!)

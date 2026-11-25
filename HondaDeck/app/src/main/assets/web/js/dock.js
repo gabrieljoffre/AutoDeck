@@ -7,6 +7,7 @@ let switchModeFn = null;
 let volumeDragging = false;
 let volumeReleaseTimer = null;
 let copilotPhase = 'idle';
+let copilotMode = 'idle';
 let lastNotifId = null;
 let lastNotifSig = '';
 
@@ -23,10 +24,18 @@ export function initDock({ switchMode }) {
   });
 
   document.getElementById('dock-copilot-btn').addEventListener('click', () => {
-    if (copilotPhase === 'listening' || copilotPhase === 'thinking') {
-      sendCommand('copilot.cancel');
+    if (copilotMode === 'live' || copilotPhase === 'listening' || copilotPhase === 'thinking') {
+      sendCommand('copilot.live.stop');
     } else {
-      sendCommand('copilot.listen');
+      sendCommand('copilot.live.start');
+    }
+  });
+
+  document.getElementById('dock-ask-gemini-btn')?.addEventListener('click', () => {
+    if (copilotMode === 'ask') {
+      sendCommand('copilot.live.stop');
+    } else {
+      sendCommand('copilot.ask.voice');
     }
   });
 
@@ -101,13 +110,42 @@ export function updateDock(state) {
   }
 }
 
-/** Reflete o estado do copiloto no botão do dock. */
-export function setDockCopilotPhase(phase) {
+/** Reflete o estado do copiloto nos botões "Conversar" e "Peça ao Gemini" do dock. */
+export function setDockCopilotPhase(phase, mode = 'idle') {
   copilotPhase = phase;
-  const btn = document.getElementById('dock-copilot-btn');
-  const lbl = document.getElementById('dock-copilot-label');
-  btn.classList.toggle('active', phase === 'listening' || phase === 'thinking');
-  setText(lbl, phase === 'listening' ? 'OUVINDO…' : phase === 'thinking' ? 'PENSANDO…' : 'COPILOTO');
+  copilotMode = mode;
+  const liveBtn = document.getElementById('dock-copilot-btn');
+  const liveLbl = document.getElementById('dock-copilot-label');
+  const askBtn = document.getElementById('dock-ask-gemini-btn');
+  const askLbl = document.getElementById('dock-ask-label');
+
+  const isLive = mode === 'live';
+  const isAsk = mode === 'ask';
+  const legacyBusy = mode === 'idle' && (phase === 'listening' || phase === 'thinking');
+
+  if (liveBtn && liveLbl) {
+    liveBtn.classList.toggle('active', isLive || legacyBusy);
+    liveBtn.classList.toggle('live-on', isLive);
+    setText(
+      liveLbl,
+      isLive
+        ? (phase === 'speaking' ? 'FALANDO' : phase === 'connecting' ? 'CONECTANDO' : 'AO VIVO')
+        : phase === 'listening'
+          ? 'OUVINDO…'
+          : phase === 'thinking'
+            ? 'PENSANDO…'
+            : 'CONVERSAR'
+    );
+  }
+  if (askBtn && askLbl) {
+    askBtn.classList.toggle('active', isAsk);
+    setText(
+      askLbl,
+      isAsk
+        ? (phase === 'speaking' ? 'GEMINI…' : phase === 'thinking' ? 'AÇÕES…' : 'OUVINDO…')
+        : 'PEÇA AO GEMINI'
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

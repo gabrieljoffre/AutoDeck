@@ -256,5 +256,9 @@ class CopilotIntentParserTest {
         assertEquals(CopilotIntent.SetMapTheme("AUTO"), CopilotIntentParser.parse("mapa no modo automático", favorites))
         assertEquals(CopilotIntent.ExpandMapFull, CopilotIntentParser.parse("aumentar o mapa", favorites))
         assertEquals(CopilotIntent.ExpandMapFull, CopilotIntentParser.parse("mapa em tela cheia", favorites))
+        assertEquals(CopilotIntent.StopRoute, CopilotIntentParser.parse("encerrar rota", favorites))
+        assertEquals(CopilotIntent.StopRoute, CopilotIntentParser.parse("cancelar navegação", favorites))
+        assertEquals(CopilotIntent.ForgetConversations, CopilotIntentParser.parse("esqueça as conversas", favorites))
+        assertEquals(CopilotIntent.ForgetConversations, CopilotIntentParser.parse("apagar histórico de conversas", favorites))
     }
 }

@@ -19,6 +19,7 @@ const SWATCH_NAMES = {
   '#F472B6': 'Rosa'
 };
 const GEMINI_MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-3.8-flash'];
+const GEMINI_LIVE_MODELS = ['gemini-2.5-flash-native-audio-latest', 'gemini-2.0-flash-live-001'];
 const FAV_ICONS = [
   ['home', 'Casa'],
   ['work', 'Trabalho'],
@@ -436,8 +437,19 @@ function buildCopilot(root) {
     if (e.key === 'Enter') saveKey();
   });
 
-  const modelSel = el('select', { className: 'hd-select', 'aria-label': 'Modelo Gemini' });
+  const liveModelSel = el('select', { className: 'hd-select', 'aria-label': 'Modelo Gemini Live (voz)' });
+  liveModelSel.addEventListener('change', () => sendCommand('settings.set', { key: 'geminiLiveModel', value: liveModelSel.value }));
+
+  const modelSel = el('select', { className: 'hd-select', 'aria-label': 'Modelo Gemini (fallback texto)' });
   modelSel.addEventListener('change', () => sendCommand('settings.set', { key: 'geminiModel', value: modelSel.value }));
+
+  const clearMemBtn = confirmButton(
+    'Esquecer conversas',
+    'Confirmar limpeza?',
+    'btn-danger',
+    () => sendCommand('copilot.clearMemory'),
+    { idle: 'copilot-clear-memory', confirm: 'copilot-clear-memory-confirm' }
+  );
 
   const wakeIn = textInput({ placeholder: 'ok honda' });
   const saveWake = () => {
@@ -467,8 +479,16 @@ function buildCopilot(root) {
       field('Chave da API', keyIn),
       keyStatus,
       el('div', { style: 'display:flex;justify-content:flex-end' }, el('button', { className: 'btn-accent-sm', type: 'button', onClick: saveKey }, 'Salvar chave')),
-      field('Modelo', modelSel),
+      field('Modelo Gemini Live (voz ao vivo)', liveModelSel),
+      field('Modelo texto (fallback)', modelSel),
       copilotStatus
+    ),
+    el(
+      'div',
+      { className: 'settings-card-block' },
+      kicker('MEMÓRIA DAS CONVERSAS'),
+      el('span', { className: 'settings-sub' }, 'O copiloto guarda um resumo curto das últimas conversas para manter contexto. Você também pode dizer “esqueça as conversas”.'),
+      el('div', { style: 'display:flex' }, clearMemBtn)
     ),
     el(
       'div',
@@ -484,6 +504,12 @@ function buildCopilot(root) {
     keyStatus.textContent = s.settings.geminiKeySet ? 'Chave configurada ✓ (por segurança não é exibida)' : 'Nenhuma chave configurada — o copiloto não responderá.';
     keyStatus.style.color = s.settings.geminiKeySet ? 'var(--green)' : 'var(--yellow)';
     keyIn.placeholder = s.settings.geminiKeySet ? 'Configurada — cole outra para substituir' : 'Cole a chave da API Gemini';
+  });
+  reg(tabUpdaters, (s) => String(s.settings.geminiLiveModel || ''), (s) => {
+    const models = [...GEMINI_LIVE_MODELS];
+    if (s.settings.geminiLiveModel && !models.includes(s.settings.geminiLiveModel)) models.unshift(s.settings.geminiLiveModel);
+    liveModelSel.replaceChildren(...models.map((m) => el('option', { value: m }, m)));
+    liveModelSel.value = s.settings.geminiLiveModel || GEMINI_LIVE_MODELS[0];
   });
   reg(tabUpdaters, (s) => String(s.settings.geminiModel), (s) => {
     const models = [...GEMINI_MODELS];

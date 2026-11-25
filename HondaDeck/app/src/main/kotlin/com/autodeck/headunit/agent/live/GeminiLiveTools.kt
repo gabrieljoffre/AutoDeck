@@ -1,0 +1,546 @@
+package com.autodeck.headunit.agent.live
+
+import com.autodeck.headunit.agent.CarAgentHostBridge
+import com.autodeck.headunit.agent.copilot.CopilotIntentParser
+import com.autodeck.headunit.agent.copilot.CopilotJson
+import com.autodeck.headunit.agent.copilot.FavoriteRef
+import com.autodeck.headunit.agent.copilot.VolumeDirection
+import com.autodeck.protocol.coordinator.MainTab
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Locale
+
+data class LiveToolExecution(
+    val result: String,
+    val actionBadge: String? = null
+)
+
+/**
+ * Declarações de ferramentas (function calling) e executor do Gemini Live,
+ * reaproveitando integralmente o [CarAgentHostBridge] do HondaDeck.
+ */
+object GeminiLiveTools {
+
+    private val ACCENT_ALIASES = mapOf(
+        "ciano" to "#22D3EE",
+        "azul" to "#22D3EE",
+        "lima" to "#A3E635",
+        "verde" to "#A3E635",
+        "ambar" to "#FB923C",
+        "laranja" to "#FB923C",
+        "violeta" to "#A78BFA",
+        "roxo" to "#A78BFA",
+        "rosa" to "#F472B6"
+    )
+
+    fun buildFunctionDeclarations(): JSONArray = JSONArray().apply {
+        put(
+            fnDecl(
+                name = "controlar_musica",
+                description = "Controla a reprodução do Spotify no painel: tocar, pausar, próxima faixa, faixa anterior, abrir/fechar tela do Spotify ou buscar e tocar música/artista/playlist.",
+                properties = JSONObject().apply {
+                    put("acao", enumProp("Ação musical desejada.", listOf("play", "pause", "next", "prev", "open", "close", "search_and_play")))
+                    put("consulta", strProp("Nome da música, artista, álbum ou playlist quando acao='search_and_play'."))
+                },
+                required = listOf("acao")
+            )
+        )
+        put(
+            fnDecl(
+                name = "ajustar_volume",
+                description = "Ajusta o volume do som do carro: definir porcentagem exata, subir, descer, mutar ou tirar do mudo.",
+                properties = JSONObject().apply {
+                    put("acao", enumProp("Tipo de ajuste de volume.", listOf("set", "up", "down", "mute", "unmute")))
+                    put("porcentagem", intProp("Valor de 0 a 100 quando acao='set'."))
+                },
+                required = listOf("acao")
+            )
+        )
+        put(
+            fnDecl(
+                name = "controlar_tela",
+                description = "Abre, fecha ou expande as telas do painel: início (home), mapa 2/3 (map), mapa em tela cheia (map_full), Spotify 2/3 (music) ou ajustes (settings).",
+                properties = JSONObject().apply {
+                    put("tela", enumProp("Tela alvo.", listOf("home", "map", "map_full", "music", "settings")))
+                    put("acao", enumProp("Abrir, fechar (volta para home) ou expandir.", listOf("open", "close", "expand")))
+                },
+                required = listOf("tela")
+            )
+        )
+        put(
+            fnDecl(
+                name = "buscar_lugar",
+                description = "Busca lugares próximos no mapa do aplicativo (postos, farmácias, restaurantes, endereços) e exibe os resultados na tela.",
+                properties = JSONObject().apply {
+                    put("consulta", strProp("Nome ou categoria do lugar a buscar."))
+                },
+                required = listOf("consulta")
+            )
+        )
+        put(
+            fnDecl(
+                name = "iniciar_rota",
+                description = "Traça rota dentro do aplicativo para um destino, endereço ou local favorito pelo nome (ex.: Casa, Trabalho, Posto).",
+                properties = JSONObject().apply {
+                    put("destino", strProp("Nome do favorito, local ou endereço de destino."))
+                    put("mapa_externo", boolProp("True somente se o motorista pedir explicitamente para abrir no Google Maps ou Waze externo."))
+                },
+                required = listOf("destino")
+            )
+        )
+        put(
+            fnDecl(
+                name = "encerrar_rota",
+                description = "Encerra/cancela a navegação de rota ativa no mapa do painel.",
+                properties = JSONObject()
+            )
+        )
+        put(
+            fnDecl(
+                name = "ler_telemetria_carro",
+                description = "Lê dados em tempo real do Honda Civic via OBD-II: telemetria do motor, alertas ativos, códigos de falha DTC, consumo/tanque, manutenção ou relatório completo.",
+                properties = JSONObject().apply {
+                    put(
+                        "tipo",
+                        enumProp(
+                            "Tipo de informação veicular.",
+                            listOf("resumo", "motor", "temperatura", "bateria", "consumo", "tanque", "alertas", "dtc", "manutencao", "relatorio")
+                        )
+                    )
+                },
+                required = listOf("tipo")
+            )
+        )
+        put(
+            fnDecl(
+                name = "consultar_abastecimento",
+                description = "Consulta o diário de abastecimento: consumo real, último tanque, gastos nos últimos 30 dias e custo por km.",
+                properties = JSONObject()
+            )
+        )
+        put(
+            fnDecl(
+                name = "registrar_abastecimento",
+                description = "Registra um novo abastecimento no diário do carro e atualiza o tanque virtual.",
+                properties = JSONObject().apply {
+                    put("litros", numProp("Quantidade de litros abastecidos."))
+                    put("preco_por_litro", numProp("Preço por litro em reais, se informado."))
+                    put("hodometro_km", numProp("Quilometragem atual do painel, se informada."))
+                    put("tanque_cheio", boolProp("True se completou o tanque, false se foi parcial."))
+                },
+                required = listOf("litros")
+            )
+        )
+        put(
+            fnDecl(
+                name = "consultar_clima",
+                description = "Consulta o clima local do carro (ou de outra cidade informada).",
+                properties = JSONObject().apply {
+                    put("cidade", strProp("Nome da cidade se diferente da localização atual do carro."))
+                }
+            )
+        )
+        put(
+            fnDecl(
+                name = "consultar_agenda",
+                description = "Consulta os compromissos do motorista na agenda para hoje ou amanhã.",
+                properties = JSONObject().apply {
+                    put("dia", enumProp("Dia desejado.", listOf("hoje", "amanha")))
+                }
+            )
+        )
+        put(
+            fnDecl(
+                name = "ler_whatsapp",
+                description = "Lê as mensagens recentes recebidas no WhatsApp.",
+                properties = JSONObject()
+            )
+        )
+        put(
+            fnDecl(
+                name = "responder_whatsapp",
+                description = "Envia uma resposta rápida para a última mensagem recebida no WhatsApp.",
+                properties = JSONObject().apply {
+                    put("mensagem", strProp("Texto exato da resposta a enviar."))
+                },
+                required = listOf("mensagem")
+            )
+        )
+        put(
+            fnDecl(
+                name = "controlar_camera_re",
+                description = "Abre ou fecha a visualização manual da câmera de ré.",
+                properties = JSONObject().apply {
+                    put("acao", enumProp("Abrir ou fechar a câmera de ré.", listOf("open", "close")))
+                },
+                required = listOf("acao")
+            )
+        )
+        put(
+            fnDecl(
+                name = "configurar_aparencia",
+                description = "Troca o tema do mapa (AUTO, LIGHT/claro ou DARK/escuro) e/ou a cor de destaque do painel (ciano, lima, âmbar, violeta, rosa ou hex).",
+                properties = JSONObject().apply {
+                    put("tema_mapa", enumProp("Tema visual do mapa.", listOf("AUTO", "LIGHT", "DARK")))
+                    put("cor_destaque", strProp("Cor de destaque do painel: ciano, lima, ambar, violeta, rosa ou código #RRGGBB."))
+                }
+            )
+        )
+        put(
+            fnDecl(
+                name = "limpar_memoria_conversas",
+                description = "Apaga o histórico salvo e os resumos de conversas anteriores quando o motorista pede para esquecer as conversas.",
+                properties = JSONObject()
+            )
+        )
+    }
+
+    /**
+     * Constrói o `systemInstruction` completo do Gemini Live com persona automotiva pt-BR,
+     * perfil do motorista, memória de sessões anteriores e estado vivo do Civic/música/rota.
+     */
+    fun buildSystemInstruction(
+        host: CarAgentHostBridge,
+        recentSummaries: List<String>,
+        oneShot: Boolean
+    ): String {
+        val hu = host.getHeadUnitState()
+        val snap = hu.obdSnapshot
+        val derived = snap.derived
+        val media = host.getMediaState()
+        val favorites = host.getFavoritePlaces()
+        val latestWa = host.getWhatsAppMessages().firstOrNull()
+        val routeSummary = host.getRouteSummary()
+        val maintenanceSummary = host.getMaintenanceSummary()
+        val fuelLog = host.getFuelLogSummary()
+        val weather = host.getWeatherSummary()
+
+        val favText = if (favorites.isEmpty()) {
+            "Nenhum favorito cadastrado."
+        } else {
+            favorites.joinToString("; ") { f ->
+                val hint = f.voice.takeIf { it.isNotBlank() }?.let { " (voz: \"$it\")" }.orEmpty()
+                "${f.name}$hint"
+            }
+        }
+
+        val memoryBlock = if (recentSummaries.isEmpty()) {
+            "Nenhuma conversa anterior salva."
+        } else {
+            recentSummaries.joinToString("\n") { "- $it" }
+        }
+
+        val oneShotRule = if (oneShot) {
+            "MODO RÁPIDO (Peça ao Gemini): responda de forma direta e concisa em uma única resposta curta, executando a ferramenta necessária e confirmando o que foi feito."
+        } else {
+            "MODO CONVERSA AO VIVO: mantenha um diálogo natural, amigável e objetivo para quem está dirigindo."
+        }
+
+        return """
+            Você é o Copiloto do HondaDeck, assistente de voz ao vivo instalado no painel de um Honda Civic.
+            REGRAS DE PERSONA:
+            - Fale SEMPRE em Português do Brasil (pt-BR), com frases curtas, claras e naturais para quem está dirigindo.
+            - $oneShotRule
+            - SEMPRE use as ferramentas disponíveis para agir no carro/painel (Spotify, volume, mapa, rotas, OBD, abastecimento, WhatsApp, câmera de ré, tema/cor, limpar memória) e para pesquisar fatos atuais use o Google Search nativo.
+            - SEMPRE confirme brevemente em voz alta toda ação executada (ex.: "Volume ajustado para 50%", "Rota para Casa iniciada", "Música pausada").
+            - Nunca invente leituras do carro: consulte `ler_telemetria_carro` quando precisar de dados atualizados.
+
+            PERFIL DO MOTORISTA:
+            - Cidade base: Anápolis-GO, Brasil.
+            - Veículo: Honda Civic (painel HondaDeck 3.0).
+
+            MEMÓRIA DE CONVERSAS RECENTES:
+            $memoryBlock
+
+            ESTADO ATUAL DO CARRO E PAINEL:
+            - OBD-II: ${hu.obdStatus.labelPt} | Velocidade: ${derived.correctedSpeedKmh?.toInt() ?: snap.speedKmh?.toInt() ?: 0} km/h | RPM: ${snap.rpm?.toInt() ?: 0} | Marcha: ${derived.estimatedGearLabel}
+            - Motor: ${snap.coolantTempC?.let { "${it.toInt()}°C" } ?: "sem leitura"} (${derived.thermalStatusLabel}) | Bateria: ${snap.batteryVoltageV?.let { "%.1fV".format(Locale.US, it) } ?: "sem leitura"} | Carga: ${snap.engineLoadPct?.let { "${it.toInt()}%" } ?: "--"}
+            - Consumo médio: ${snap.averageKmPerL?.let { "%.1f km/L".format(Locale.US, it) } ?: "--"} | Tanque virtual: ${derived.virtualTankPercent.toInt()}% (${"%.1f".format(Locale.US, derived.virtualTankRemainingLiters)} L) | Autonomia: ${derived.estimatedRangeKm?.let { "${it.toInt()} km" } ?: "--"}
+            - Alertas OBD ativos: ${if (hu.obdAlerts.isEmpty()) "Nenhum" else hu.obdAlerts.joinToString { it.title }}
+            - Falhas DTC: ${if (hu.dtcCodes.isEmpty()) "Nenhuma" else hu.dtcCodes.joinToString { it.code }}
+            - Diário de abastecimento: ${fuelLog ?: "sem registros"}
+            - Manutenção: ${maintenanceSummary ?: "sem itens cadastrados"}
+            - Música (${media.appLabel}): ${if (media.isPlaying) "tocando" else "pausada"}${if (media.title.isNotBlank()) " \"${media.title}\" de \"${media.artist}\"" else ""}
+            - Rota no app: ${routeSummary ?: "nenhuma rota ativa"}
+            - Locais favoritos: $favText
+            - Clima: ${weather ?: "sem dados no momento"}
+            - WhatsApp pendente: ${if (latestWa != null) "mensagem de ${latestWa.sender}" else "nenhuma"}
+        """.trimIndent()
+    }
+
+    suspend fun executeTool(
+        call: LiveFunctionCall,
+        host: CarAgentHostBridge,
+        onClearMemory: () -> Unit
+    ): LiveToolExecution {
+        val args = CopilotJson.parseObjOrNull(call.argsJson)
+        return when (call.name) {
+            "controlar_musica" -> {
+                val acao = args?.optString("acao")?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val consulta = args?.optString("consulta")?.trim().orEmpty()
+                when (acao) {
+                    "play" -> LiveToolExecution(host.controlMusic("MUSIC_PLAY"), "Spotify Play")
+                    "pause" -> LiveToolExecution(host.controlMusic("MUSIC_PAUSE"), "Spotify Pausa")
+                    "next" -> LiveToolExecution(host.controlMusic("MUSIC_NEXT"), "Próxima faixa")
+                    "prev" -> LiveToolExecution(host.controlMusic("MUSIC_PREV"), "Faixa anterior")
+                    "open" -> LiveToolExecution(host.controlMusic("OPEN_SPOTIFY"), "Spotify")
+                    "close" -> LiveToolExecution(host.openHome(), "Painel inicial")
+                    "search_and_play" -> {
+                        val res = if (consulta.isNotBlank()) {
+                            host.searchAndPlayMusic(consulta)
+                        } else {
+                            host.controlMusic("MUSIC_PLAY")
+                        }
+                        LiveToolExecution(res, if (consulta.isNotBlank()) "Spotify: $consulta" else "Spotify")
+                    }
+                    else -> LiveToolExecution("Ação musical não reconhecida: $acao")
+                }
+            }
+
+            "ajustar_volume" -> {
+                val acao = args?.optString("acao")?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val pct = args?.optDouble("porcentagem")?.toInt()?.coerceIn(0, 100)
+                val res = when (acao) {
+                    "set" -> host.adjustVolume(VolumeDirection.SET, pct ?: 60)
+                    "up" -> host.adjustVolume(VolumeDirection.UP, null)
+                    "down" -> host.adjustVolume(VolumeDirection.DOWN, null)
+                    "mute" -> host.adjustVolume(VolumeDirection.MUTE, 0)
+                    "unmute" -> host.adjustVolume(VolumeDirection.UNMUTE, null)
+                    else -> if (pct != null) host.adjustVolume(VolumeDirection.SET, pct) else "Informe a ação de volume."
+                }
+                LiveToolExecution(res, res)
+            }
+
+            "controlar_tela" -> {
+                val tela = args?.optString("tela")?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val acao = args?.optString("acao")?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                if (acao == "close") {
+                    LiveToolExecution(host.openHome(), "Painel inicial")
+                } else {
+                    when (tela) {
+                        "home" -> LiveToolExecution(host.openHome(), "Painel inicial")
+                        "map_full" -> LiveToolExecution(host.openMapFullScreen(), "Mapa tela cheia")
+                        "map" -> if (acao == "expand") {
+                            LiveToolExecution(host.openMapFullScreen(), "Mapa tela cheia")
+                        } else {
+                            LiveToolExecution(host.navigateTo(null, null, false), "Mapa")
+                        }
+                        "music" -> LiveToolExecution(host.controlMusic("OPEN_SPOTIFY"), "Spotify")
+                        "settings" -> LiveToolExecution(host.switchTab(MainTab.SETTINGS), "Ajustes")
+                        else -> LiveToolExecution(host.openHome(), "Painel inicial")
+                    }
+                }
+            }
+
+            "buscar_lugar" -> {
+                val q = args?.optString("consulta")?.trim().orEmpty()
+                if (q.isBlank()) {
+                    LiveToolExecution("Informe o nome ou tipo de lugar para buscar.")
+                } else {
+                    val res = host.searchPlacesForTool(q)
+                    LiveToolExecution(res, "Busca: $q")
+                }
+            }
+
+            "iniciar_rota" -> {
+                val destino = args?.optString("destino")?.trim().orEmpty()
+                val externo = args?.optBoolean("mapa_externo") ?: false
+                if (destino.isBlank()) {
+                    LiveToolExecution(host.navigateTo(null, null, false), "Mapa")
+                } else {
+                    val fav = matchFavorite(destino, host.getFavoritePlaces())
+                    val res = host.navigateTo(destino, fav, externo)
+                    LiveToolExecution(res, res)
+                }
+            }
+
+            "encerrar_rota" -> {
+                val res = host.stopRoute()
+                LiveToolExecution(res, "Rota encerrada")
+            }
+
+            "ler_telemetria_carro" -> {
+                val tipo = args?.optString("tipo")?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val text = buildTelemetryResponse(tipo, host)
+                LiveToolExecution(text, "OBD-II")
+            }
+
+            "consultar_abastecimento" -> {
+                val summary = host.getFuelLogSummary()
+                    ?: "Ainda não há abastecimentos registrados no diário."
+                LiveToolExecution(summary, "Abastecimento")
+            }
+
+            "registrar_abastecimento" -> {
+                val litros = args?.optDouble("litros")
+                if (litros == null || litros <= 0.0) {
+                    LiveToolExecution("Informe a quantidade de litros abastecidos.")
+                } else {
+                    val preco = args.optDouble("preco_por_litro")?.takeIf { it > 0.0 }
+                    val km = args.optDouble("hodometro_km")?.takeIf { it > 0.0 }
+                    val cheio = args.optBoolean("tanque_cheio") ?: true
+                    val res = host.logRefuelFromAgent(litros, preco, km, cheio)
+                    LiveToolExecution(res, "Abastecimento")
+                }
+            }
+
+            "consultar_clima" -> {
+                val city = args?.optString("cidade")?.trim().orEmpty()
+                val summary = if (city.isBlank()) {
+                    host.getWeatherSummary() ?: "Clima local ainda indisponível (aguardando GPS/internet)."
+                } else {
+                    host.getWeatherSummaryForCity(city)
+                        ?: host.getWeatherSummary()
+                        ?: "Não foi possível obter o clima de $city."
+                }
+                LiveToolExecution(summary, "Clima")
+            }
+
+            "consultar_agenda" -> {
+                val dia = args?.optString("dia")?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val offset = if (dia.contains("amanh")) 1 else 0
+                val summary = host.getCalendarAgendaSummary(offset)
+                LiveToolExecution(summary, "Agenda")
+            }
+
+            "ler_whatsapp" -> {
+                val res = host.readAndMarkWhatsApp()
+                LiveToolExecution(res, "WhatsApp")
+            }
+
+            "responder_whatsapp" -> {
+                val msg = args?.optString("mensagem")?.trim().orEmpty()
+                if (msg.isBlank()) {
+                    LiveToolExecution("Informe o texto da resposta para o WhatsApp.")
+                } else {
+                    val res = host.replyLatestWhatsApp(msg)
+                    LiveToolExecution(res, "WhatsApp")
+                }
+            }
+
+            "controlar_camera_re" -> {
+                val acao = args?.optString("acao")?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val res = if (acao == "close") host.closeReverseCamera() else host.openReverseCamera()
+                LiveToolExecution(res, "Câmera de Ré")
+            }
+
+            "configurar_aparencia" -> {
+                val tema = args?.optString("tema_mapa")?.trim().orEmpty()
+                val cor = args?.optString("cor_destaque")?.trim().orEmpty()
+                val parts = mutableListOf<String>()
+                if (tema.isNotBlank()) {
+                    parts += host.setMapTheme(tema)
+                }
+                if (cor.isNotBlank()) {
+                    val hex = resolveAccentHex(cor)
+                    if (hex != null) {
+                        parts += host.setAccentColor(hex)
+                    } else {
+                        parts += "Cor não reconhecida: $cor. Opções: ciano, lima, âmbar, violeta ou rosa."
+                    }
+                }
+                val result = parts.joinToString(". ").ifBlank { "Informe tema_mapa (AUTO/LIGHT/DARK) ou cor_destaque." }
+                LiveToolExecution(result, "Aparência")
+            }
+
+            "limpar_memoria_conversas" -> {
+                onClearMemory()
+                LiveToolExecution("Memória e histórico de conversas apagados com sucesso.", "Memória limpa")
+            }
+
+            else -> LiveToolExecution("Ferramenta desconhecida: ${call.name}")
+        }
+    }
+
+    private fun buildTelemetryResponse(tipo: String, host: CarAgentHostBridge): String {
+        val hu = host.getHeadUnitState()
+        val snap = hu.obdSnapshot
+        val derived = snap.derived
+        return when (tipo) {
+            "temperatura" -> {
+                val t = snap.coolantTempC?.toInt()
+                if (t != null) "Temperatura do motor em $t°C (${derived.thermalStatusLabel})."
+                else "Sem leitura de temperatura do motor no momento."
+            }
+            "bateria" -> {
+                val v = snap.batteryVoltageV
+                if (v != null) "Bateria em ${"%.1f".format(Locale.US, v)}V."
+                else "Sem leitura de voltagem da bateria no momento."
+            }
+            "consumo", "tanque" -> {
+                val avg = snap.averageKmPerL?.let { "%.1f km/L".format(Locale.US, it) } ?: "ainda calculando"
+                val inst = snap.instantKmPerL?.let { "%.1f km/L".format(Locale.US, it) } ?: "--"
+                val range = derived.estimatedRangeKm?.let { "${it.toInt()} km" } ?: "indisponível"
+                val fuel = host.getFuelLogSummary()?.let { " Diário: $it." }.orEmpty()
+                "Consumo médio $avg (instantâneo $inst), tanque virtual em ${derived.virtualTankPercent.toInt()}% (${"%.1f".format(Locale.US, derived.virtualTankRemainingLiters)} L) e autonomia estimada de $range.$fuel"
+            }
+            "alertas" -> {
+                if (hu.obdAlerts.isEmpty()) "Nenhum alerta OBD ativo no Civic."
+                else "Alertas ativos: ${hu.obdAlerts.joinToString("; ") { "${it.title}${if (it.detail.isNotBlank()) " (${it.detail})" else ""}" }}."
+            }
+            "dtc" -> host.readDtcSummaryForAgent()
+            "manutencao" -> host.getMaintenanceSummary() ?: "Nenhum item de manutenção cadastrado no painel."
+            "relatorio" -> host.buildCarReport()
+            else -> {
+                val temp = snap.coolantTempC?.let { "${it.toInt()}°C" } ?: "sem leitura"
+                val volt = snap.batteryVoltageV?.let { "%.1fV".format(Locale.US, it) } ?: "sem leitura"
+                val load = snap.engineLoadPct?.let { "${it.toInt()}%" } ?: "--"
+                val spd = derived.correctedSpeedKmh?.toInt() ?: snap.speedKmh?.toInt() ?: 0
+                val rpm = snap.rpm?.toInt() ?: 0
+                val alerts = if (hu.obdAlerts.isEmpty()) "sem alertas" else "${hu.obdAlerts.size} alertas"
+                val dtcs = if (hu.dtcCodes.isEmpty()) "sem falhas DTC" else "${hu.dtcCodes.size} falhas (${hu.dtcCodes.joinToString { it.code }})"
+                "Civic (${hu.obdStatus.labelPt}): $spd km/h, $rpm RPM (${derived.estimatedGearLabel}), motor $temp, bateria $volt, carga $load, $alerts, $dtcs."
+            }
+        }
+    }
+
+    private fun matchFavorite(destino: String, favorites: List<FavoriteRef>): FavoriteRef? {
+        val norm = CopilotIntentParser.normalize(destino)
+        if (norm.isEmpty()) return null
+        return favorites.firstOrNull { f ->
+            val n = CopilotIntentParser.normalize(f.name)
+            val id = CopilotIntentParser.normalize(f.id)
+            val v = CopilotIntentParser.normalize(f.voice)
+            n == norm || id == norm || (v.isNotEmpty() && v == norm)
+        }
+    }
+
+    internal fun resolveAccentHex(raw: String): String? {
+        val trimmed = raw.trim()
+        if (Regex("^#[0-9A-Fa-f]{6}$").matches(trimmed)) {
+            return trimmed.uppercase(Locale.ROOT)
+        }
+        val norm = CopilotIntentParser.normalize(trimmed)
+        return ACCENT_ALIASES.entries.firstOrNull { (k, _) -> norm.contains(k) }?.value
+    }
+
+    private fun fnDecl(
+        name: String,
+        description: String,
+        properties: JSONObject,
+        required: List<String> = emptyList()
+    ): JSONObject = JSONObject().apply {
+        put("name", name)
+        put("description", description)
+        put(
+            "parameters",
+            JSONObject().apply {
+                put("type", "OBJECT")
+                put("properties", properties)
+                if (required.isNotEmpty()) {
+                    put("required", JSONArray(required))
+                }
+            }
+        )
+    }
+
+    private fun strProp(desc: String) = JSONObject().put("type", "STRING").put("description", desc)
+    private fun numProp(desc: String) = JSONObject().put("type", "NUMBER").put("description", desc)
+    private fun intProp(desc: String) = JSONObject().put("type", "INTEGER").put("description", desc)
+    private fun boolProp(desc: String) = JSONObject().put("type", "BOOLEAN").put("description", desc)
+    private fun enumProp(desc: String, values: List<String>) = JSONObject().apply {
+        put("type", "STRING")
+        put("description", desc)
+        put("enum", JSONArray(values))
+    }
+}
