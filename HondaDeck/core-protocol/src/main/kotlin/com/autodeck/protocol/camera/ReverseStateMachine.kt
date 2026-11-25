@@ -113,6 +113,13 @@ class ReverseStateMachine(
         return state
     }
 
+    fun enterManualPreview(): ReverseCameraState {
+        if (state != ReverseCameraState.ACTIVE && state != ReverseCameraState.CONFIRMING_LOSS) {
+            state = ReverseCameraState.MANUAL_PREVIEW
+        }
+        return state
+    }
+
     fun exitManualPreview(): ReverseCameraState {
         if (state == ReverseCameraState.MANUAL_PREVIEW) {
             consecutiveSignalFrames = 0

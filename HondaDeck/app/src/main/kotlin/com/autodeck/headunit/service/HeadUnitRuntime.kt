@@ -10,6 +10,9 @@ import com.autodeck.headunit.MainActivity
 import com.autodeck.headunit.agent.AgentUiState
 import com.autodeck.headunit.agent.CarAgentHostBridge
 import com.autodeck.headunit.agent.GeminiCarAgent
+import com.autodeck.headunit.agent.copilot.CopilotIntentParser
+import com.autodeck.headunit.agent.copilot.FavoriteRef
+import com.autodeck.headunit.agent.copilot.VolumeDirection
 import com.autodeck.headunit.data.FavoritePlace
 import com.autodeck.headunit.data.FavoritePlacesStore
 import com.autodeck.headunit.data.HeadUnitConfig
@@ -780,8 +783,9 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                 "Faixa anterior"
             }
             "OPEN_SPOTIFY" -> {
-                mediaController.launchPreferredMusicApp()
-                _uiState.value.config.preferredMusicLabel
+                selectTab(MainTab.MUSIC)
+                emitWebEvent("openMode", mode = "music")
+                "Spotify"
             }
             "SEARCH" -> {
                 val q = query.orEmpty()
@@ -792,14 +796,148 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
     }
 
-    override fun navigateTo(destination: String?): String {
-        return if (!destination.isNullOrBlank()) {
-            navigateToDestination(destination)
+    override fun getFavoritePlaces(): List<FavoriteRef> =
+        _uiState.value.favoritePlaces.map { f ->
+            FavoriteRef(
+                id = f.id,
+                name = f.name,
+                address = f.address,
+                lat = f.lat.takeIf { it != 0.0 },
+                lon = f.lon.takeIf { it != 0.0 },
+                voice = f.voice
+            )
+        }
+
+    override fun navigateTo(destination: String?): String =
+        navigateTo(destination, favorite = null, forceExternalMaps = false)
+
+    override fun navigateTo(
+        destination: String?,
+        favorite: FavoriteRef?,
+        forceExternalMaps: Boolean
+    ): String {
+        val cleanDest = destination?.trim().orEmpty()
+        if (forceExternalMaps && cleanDest.isNotBlank()) {
+            navigateExternally(cleanDest)
+            return "Maps externo: $cleanDest"
+        }
+        if (favorite != null) {
+            routeToPlace(favorite.name, favorite.lat, favorite.lon)
+            selectTab(MainTab.NAVIGATION)
             emitWebEvent("openMode", mode = "map")
-            "Rota: $destination"
-        } else {
+            return "Rota: ${favorite.name}"
+        }
+        if (cleanDest.isNotBlank()) {
+            val normDest = CopilotIntentParser.normalize(cleanDest)
+            val matchedFav = _uiState.value.favoritePlaces.firstOrNull { f ->
+                CopilotIntentParser.normalize(f.name) == normDest ||
+                    CopilotIntentParser.normalize(f.id) == normDest
+            }
+            if (matchedFav != null) {
+                routeToPlace(
+                    matchedFav.name,
+                    matchedFav.lat.takeIf { it != 0.0 },
+                    matchedFav.lon.takeIf { it != 0.0 }
+                )
+            } else {
+                navigateToDestination(cleanDest)
+            }
+            selectTab(MainTab.NAVIGATION)
             emitWebEvent("openMode", mode = "map")
-            "Mapa"
+            return "Rota: ${matchedFav?.name ?: cleanDest}"
+        }
+        selectTab(MainTab.NAVIGATION)
+        emitWebEvent("openMode", mode = "map")
+        return "Mapa"
+    }
+
+    override fun searchPlacesOnMap(query: String): String {
+        val q = query.trim()
+        if (q.isNotEmpty()) {
+            searchPlaces(q)
+        }
+        selectTab(MainTab.NAVIGATION)
+        emitWebEvent("openMode", mode = "map")
+        return if (q.isNotEmpty()) "Busca no mapa: $q" else "Mapa"
+    }
+
+    override suspend fun searchPlacesForTool(query: String): String {
+        val q = query.trim()
+        if (q.isEmpty()) return "Informe o local que deseja procurar."
+        val gps = _uiState.value.gpsState
+        val results = withContext(Dispatchers.IO) {
+            runCatching { placeSearch.search(q, gps.latitude, gps.longitude) }.getOrDefault(emptyList())
+        }
+        _uiState.update { it.copy(placeSearch = PlaceSearchState(query = q, loading = false, results = results)) }
+        selectTab(MainTab.NAVIGATION)
+        emitWebEvent("openMode", mode = "map")
+        if (results.isEmpty()) return "Nenhum lugar encontrado para \"$q\" perto daqui."
+        return results.take(5).mapIndexed { i, r ->
+            val dist = r.distanceKm?.let { " (%.1f km)".format(it) }.orEmpty()
+            val addr = r.address.takeIf { it.isNotBlank() }?.let { " - $it" }.orEmpty()
+            "${i + 1}. ${r.name}$dist$addr"
+        }.joinToString("\n")
+    }
+
+    override suspend fun searchAndPlayMusic(query: String): String {
+        val q = query.trim()
+        if (q.isEmpty()) return controlMusic("MUSIC_PLAY", null)
+
+        if (mediaController.spotify.isConnected) {
+            val res = withContext(Dispatchers.IO) {
+                runCatching { spotifyWeb.search(q) }.getOrNull()
+            }
+            val targetUri = res?.tracks?.firstOrNull()?.uri
+                ?: res?.playlists?.firstOrNull()?.uri
+                ?: res?.albums?.firstOrNull()?.uri
+                ?: res?.artists?.firstOrNull()?.uri
+            if (!targetUri.isNullOrBlank()) {
+                mediaController.spotify.play(targetUri)
+                selectTab(MainTab.MUSIC)
+                emitWebEvent("openMode", mode = "music")
+                return "Spotify: $q"
+            }
+        }
+        mediaController.searchAndPlayInSpotify(q)
+        return "Busca: $q"
+    }
+
+    override fun openReverseCamera(): String {
+        openManualCameraPreview()
+        return "Câmera de Ré aberta"
+    }
+
+    override fun closeReverseCamera(): String {
+        exitManualCameraPreview()
+        return "Câmera de Ré fechada"
+    }
+
+    override fun adjustVolume(direction: VolumeDirection, value: Int?): String {
+        val cur = _uiState.value.masterVolumePct
+        return when (direction) {
+            VolumeDirection.UP -> {
+                val next = (cur + 15).coerceAtMost(100)
+                setMasterVolumePct(next)
+                "Volume $next%"
+            }
+            VolumeDirection.DOWN -> {
+                val next = (cur - 15).coerceAtLeast(0)
+                setMasterVolumePct(next)
+                "Volume $next%"
+            }
+            VolumeDirection.SET -> {
+                val next = (value ?: 60).coerceIn(0, 100)
+                setMasterVolumePct(next)
+                "Volume $next%"
+            }
+            VolumeDirection.MUTE -> {
+                if (!_uiState.value.isAudioMuted) toggleAudioMute()
+                "Mudo"
+            }
+            VolumeDirection.UNMUTE -> {
+                if (_uiState.value.isAudioMuted) toggleAudioMute()
+                "Som ativo"
+            }
         }
     }
 
@@ -841,6 +979,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     // --- Câmera & OBD2 ---
     fun toggleManualCameraPreview() {
         coordinator.toggleManualCameraPreview()
+        publishState()
+    }
+
+    fun openManualCameraPreview() {
+        coordinator.enterManualCameraPreview()
         publishState()
     }
 

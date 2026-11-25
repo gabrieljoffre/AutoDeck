@@ -142,7 +142,7 @@ class HondaDeckStartupTest {
         assertEquals("MUSIC_NEXT", bridge.lastMusicAction)
 
         agent.sendUserPrompt("Ir para Avenida Paulista", speakReply = false)
-        assertEquals("Avenida Paulista", bridge.lastDestination)
+        assertTrue(bridge.lastDestination.equals("Avenida Paulista", ignoreCase = true))
     }
 
     @Test

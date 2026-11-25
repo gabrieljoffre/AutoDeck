@@ -121,6 +121,10 @@ class WebBridge(
             "ui.ready" -> {
                 uiReady = true
                 pushFullState(runtime.uiState.value)
+                runtime.connectSpotify(activityContext)
+                if (runtime.uiState.value.spotifyStatus == com.autodeck.headunit.media.SpotifyLinkStatus.CONNECTED) {
+                    runtime.refreshSpotifyPlaylists()
+                }
             }
 
             "ui.setAccent" -> {

@@ -1,6 +1,7 @@
 package com.autodeck.headunit.agent
 
 import android.Manifest
+import android.app.SearchManager
 import android.content.Context
 import android.media.AudioManager
 import android.content.Intent
@@ -15,6 +16,16 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
+import com.autodeck.headunit.agent.copilot.ActionJsonParser
+import com.autodeck.headunit.agent.copilot.CopilotIntent
+import com.autodeck.headunit.agent.copilot.CopilotIntentParser
+import com.autodeck.headunit.agent.copilot.CopilotJson
+import com.autodeck.headunit.agent.copilot.CopilotTab
+import com.autodeck.headunit.agent.copilot.FavoriteRef
+import com.autodeck.headunit.agent.copilot.GeminiToolLoop
+import com.autodeck.headunit.agent.copilot.TelemetryKind
+import com.autodeck.headunit.agent.copilot.VolumeDirection
+import com.autodeck.headunit.agent.copilot.WebKnowledgeTools
 import com.autodeck.headunit.data.DEFAULT_GEMINI_MODEL
 import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.VoiceAssistantMode
@@ -89,19 +100,78 @@ interface CarAgentHostBridge {
 
     /** Consumo real e gastos do diário de abastecimento (null se não houver registros). */
     fun getFuelLogSummary(): String? = null
+
+    /** Favoritos salvos pelo usuário para navegação por voz e contexto do Gemini. */
+    fun getFavoritePlaces(): List<FavoriteRef> = emptyList()
+
+    /** Navegação com suporte a favorito e mapa externo explícito. */
+    fun navigateTo(
+        destination: String?,
+        favorite: FavoriteRef?,
+        forceExternalMaps: Boolean
+    ): String = navigateTo(destination)
+
+    /** Busca lugares no mapa e abre a aba/modo mapa com os resultados. */
+    fun searchPlacesOnMap(query: String): String = "Busca no mapa: $query"
+
+    /** Busca lugares para retornar ao tool-calling do Gemini. */
+    suspend fun searchPlacesForTool(query: String): String = searchPlacesOnMap(query)
+
+    /** Busca música na Spotify Web API e toca pelo App Remote (ou fallback). */
+    suspend fun searchAndPlayMusic(query: String): String = controlMusic("SEARCH", query)
+
+    /** Abre a câmera de ré (idempotente, não alterna). */
+    fun openReverseCamera(): String = toggleReverseCamera()
+
+    /** Fecha a visualização manual da câmera de ré. */
+    fun closeReverseCamera(): String = toggleReverseCamera()
+
+    /** Ajusta o volume principal do tablet. */
+    fun adjustVolume(direction: VolumeDirection, value: Int? = null): String = "Volume"
+
+    /** Relatório completo do veículo (motor, consumo, diário, manutenção e clima). */
+    fun buildCarReport(): String {
+        val hu = getHeadUnitState()
+        val snap = hu.obdSnapshot
+        val derived = snap.derived
+        val temp = snap.coolantTempC?.let { "${it.toInt()}°C" } ?: "sem leitura"
+        val volt = snap.batteryVoltageV?.let { "%.1fV".format(it) } ?: "sem leitura"
+        val load = snap.engineLoadPct?.let { "${it.toInt()}%" } ?: "--"
+        val dtcs = if (hu.dtcCodes.isEmpty()) "sem falhas" else "${hu.dtcCodes.size} falhas (${hu.dtcCodes.joinToString { it.code }})"
+        val avg = snap.averageKmPerL?.let { "%.1f km/L".format(it) } ?: "--"
+        val range = derived.estimatedRangeKm?.let { "${it.toInt()} km" } ?: "--"
+        val tank = "${derived.virtualTankPercent.toInt()}%"
+        val fuel = getFuelLogSummary()
+        val weather = getWeatherSummary()
+        return buildString {
+            append("Relatório do Civic: motor a ").append(temp)
+            append(", bateria ").append(volt)
+            append(", uso ").append(load)
+            append(", ").append(dtcs).append(". ")
+            append("Consumo médio ").append(avg)
+            append(", tanque em ").append(tank)
+            append(" e autonomia de ").append(range).append(". ")
+            if (!fuel.isNullOrBlank()) append("Diário: ").append(fuel).append(". ")
+            if (!weather.isNullOrBlank()) append(weather)
+        }.trim()
+    }
 }
 
 /**
  * Agente Automotivo Híbrido:
- * - Online: Google Gemini API com acesso em tempo real à telemetria OBD2, Spotify, GPS e WhatsApp.
- * - Offline: Motor Local instantâneo no tablet para operar sem internet do celular.
+ * - Online: Google Gemini API (google_search -> function calling próprio -> app Gemini do tablet).
+ * - Offline: Motor Local determinístico via [CopilotIntentParser].
  * - Voz: Wake-word configurável ("Ok Honda"), SpeechRecognizer e conversa contínua via TTS pt-BR.
  */
 class GeminiCarAgent(
     private val appContext: Context,
     private val scope: CoroutineScope,
     private val host: CarAgentHostBridge,
-    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val webKnowledgeTools: WebKnowledgeTools = WebKnowledgeTools(),
+    private val rawGeminiPostOverride: ((model: String, body: JSONObject, apiKey: String) -> Result<String>)? = null,
+    private val internetCheckOverride: (() -> Boolean)? = null,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
     private val _state = MutableStateFlow(AgentUiState())
     val state: StateFlow<AgentUiState> = _state.asStateFlow()
@@ -447,9 +517,11 @@ class GeminiCarAgent(
             refreshConnectivityBadge()
             val cfg = host.getConfig()
             val online = _state.value.isOnlineAvailable
+            val parsedIntent = CopilotIntentParser.parse(userText, host.getFavoritePlaces())
             val canUseGemini = cfg.voiceAssistantMode == VoiceAssistantMode.HYBRID_GEMINI &&
                 online &&
-                cfg.geminiApiKey.isNotBlank()
+                cfg.geminiApiKey.isNotBlank() &&
+                parsedIntent !is CopilotIntent.AskGeminiApp
 
             _state.update {
                 it.copy(
@@ -494,7 +566,7 @@ class GeminiCarAgent(
     private suspend fun callGeminiWithFallback(
         userText: String,
         cfg: HeadUnitConfig
-    ): AgentReplyResult = withContext(Dispatchers.IO) {
+    ): AgentReplyResult = withContext(ioDispatcher) {
         val systemPrompt = buildSystemContextPrompt()
         val contents = JSONArray()
 
@@ -514,36 +586,113 @@ class GeminiCarAgent(
             }
         )
 
-        fun requestBody(withSearch: Boolean) = JSONObject().apply {
+        fun buildRequestBody(
+            contentsArr: JSONArray,
+            toolsArr: JSONArray?
+        ) = JSONObject().apply {
             put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
-            put("contents", contents)
-            // Pesquisa Google: o Copilot passa a responder sobre notícias, trânsito, horários,
-            // resultados de jogos etc., como o app do Gemini, sem perder os dados do carro.
-            if (withSearch) put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+            put("contents", contentsArr)
+            if (toolsArr != null) put("tools", toolsArr)
             put("generationConfig", JSONObject().apply {
                 put("temperature", 0.4)
-                put("maxOutputTokens", 400)
+                put("maxOutputTokens", 450)
             })
         }
 
-        // 1) modelo escolhido com pesquisa; 2) sem pesquisa (o plano gratuito recusa a pesquisa com 429);
-        // 3) modelo padrão sem pesquisa (caso o escolhido tenha sido desativado: 404).
-        val attempts = listOf(
-            cfg.geminiModel to true,
-            cfg.geminiModel to false,
-            DEFAULT_GEMINI_MODEL to false
-        ).distinct()
-        var apiResult: Result<String> = Result.failure(IllegalStateException("sem tentativa"))
-        for ((model, withSearch) in attempts) {
-            apiResult = requestGemini(model, requestBody(withSearch), cfg.geminiApiKey)
-            if (apiResult.isSuccess) break
-            Log.w("GeminiCarAgent", "Gemini $model (pesquisa=$withSearch) falhou: ${apiResult.exceptionOrNull()?.message?.take(160)}")
+        // Passo 1: tentar google_search nativo (funciona se o usuário ativar faturamento)
+        val searchTools = JSONArray().put(JSONObject().put("google_search", JSONObject()))
+        val searchResult = requestGeminiText(
+            cfg.geminiModel,
+            buildRequestBody(contents, searchTools),
+            cfg.geminiApiKey
+        )
+        if (searchResult.isSuccess) {
+            return@withContext recordAndParseGeminiReply(searchResult.getOrThrow(), userText)
         }
-        rawGeminiReply(apiResult, userText)
+        Log.w(
+            "GeminiCarAgent",
+            "Gemini ${cfg.geminiModel} (google_search) falhou: ${searchResult.exceptionOrNull()?.message?.take(160)}"
+        )
+
+        // Passo 2: ferramentas próprias via function calling (funciona no plano gratuito)
+        val ownTools = JSONArray(WebKnowledgeTools.GEMINI_TOOLS_JSON)
+        var toolModel = cfg.geminiModel
+        val toolLoopReply = GeminiToolLoop.runSuspend(
+            contentsJson = contents.toString(),
+            maxRounds = 3,
+            timeoutMs = 12_000L,
+            callModel = { currentContentsJson ->
+                val arr = JSONArray(currentContentsJson)
+                var res = performGeminiPost(toolModel, buildRequestBody(arr, ownTools), cfg.geminiApiKey)
+                if (res.isFailure && toolModel != DEFAULT_GEMINI_MODEL) {
+                    val errMsg = res.exceptionOrNull()?.message.orEmpty()
+                    if (errMsg.contains("HTTP 404") || errMsg.contains("HTTP 400")) {
+                        toolModel = DEFAULT_GEMINI_MODEL
+                        res = performGeminiPost(toolModel, buildRequestBody(arr, ownTools), cfg.geminiApiKey)
+                    }
+                }
+                res.getOrElse { err ->
+                    Log.w("GeminiCarAgent", "GeminiToolLoop ($toolModel) falhou: ${err.message?.take(160)}")
+                    throw err
+                }
+            },
+            executeTool = { name, argsJson ->
+                executeKnowledgeTool(name, argsJson)
+            }
+        )
+        if (!toolLoopReply.isNullOrBlank()) {
+            return@withContext recordAndParseGeminiReply(toolLoopReply, userText)
+        }
+
+        // Passo 3: se for comando local conhecido, resolve offline; senão tenta Gemini sem tools antes do fallback local
+        val localIntent = CopilotIntentParser.parse(userText, host.getFavoritePlaces())
+        if (localIntent !is CopilotIntent.Unknown) {
+            return@withContext runLocalOfflineAgent(userText)
+        }
+
+        val plainAttempts = listOf(cfg.geminiModel, DEFAULT_GEMINI_MODEL).distinct()
+        for (model in plainAttempts) {
+            val plain = requestGeminiText(model, buildRequestBody(contents, null), cfg.geminiApiKey)
+            if (plain.isSuccess) {
+                return@withContext recordAndParseGeminiReply(plain.getOrThrow(), userText)
+            }
+            Log.w("GeminiCarAgent", "Gemini $model (sem tools) falhou: ${plain.exceptionOrNull()?.message?.take(160)}")
+        }
+
+        runLocalOfflineAgent(userText)
     }
 
-    private fun requestGemini(model: String, body: JSONObject, apiKey: String): Result<String> =
-        runCatching {
+    private suspend fun executeKnowledgeTool(name: String, argsJson: String): String {
+        val args = CopilotJson.parseObjOrNull(argsJson)
+        return when (name) {
+            "buscar_noticias" -> {
+                val q = args?.optStrictString("consulta").orEmpty()
+                webKnowledgeTools.buscarNoticias(q)
+            }
+            "buscar_wikipedia" -> {
+                val q = args?.optStrictString("consulta").orEmpty()
+                webKnowledgeTools.buscarWikipedia(q)
+            }
+            "clima" -> {
+                val city = args?.optStrictString("cidade")?.trim().orEmpty()
+                if (city.isEmpty()) {
+                    host.getWeatherSummary() ?: webKnowledgeTools.buscarClima(null)
+                } else {
+                    webKnowledgeTools.buscarClima(city)
+                }
+            }
+            "buscar_lugar" -> {
+                val q = args?.optStrictString("consulta").orEmpty()
+                host.searchPlacesForTool(q)
+            }
+            "dados_do_carro" -> host.buildCarReport()
+            else -> "Ferramenta desconhecida: $name"
+        }
+    }
+
+    private fun performGeminiPost(model: String, body: JSONObject, apiKey: String): Result<String> {
+        rawGeminiPostOverride?.let { return it(model, body, apiKey) }
+        return runCatching {
             val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
             val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -564,29 +713,25 @@ class GeminiCarAgent(
             if (code !in 200..299) {
                 throw IllegalStateException("HTTP $code: $raw")
             }
+            raw
+        }
+    }
+
+    private fun requestGeminiText(model: String, body: JSONObject, apiKey: String): Result<String> {
+        return performGeminiPost(model, body, apiKey).mapCatching { raw ->
             val json = JSONObject(raw)
             val candidates = json.optJSONArray("candidates") ?: throw IllegalStateException("Sem resposta do Gemini")
             val first = candidates.getJSONObject(0)
             val parts = first.getJSONObject("content").getJSONArray("parts")
-            // Com a pesquisa Google a resposta pode vir em mais de uma parte de texto.
             (0 until parts.length())
                 .mapNotNull { parts.getJSONObject(it).optString("text").takeIf { t -> t.isNotBlank() } }
                 .joinToString("")
                 .trim()
                 .ifBlank { throw IllegalStateException("Resposta vazia do Gemini") }
         }
+    }
 
-    private fun rawGeminiReply(apiResult: Result<String>, userText: String): AgentReplyResult {
-        val rawText = apiResult.getOrNull()
-        if (rawText.isNullOrBlank()) {
-            // Se falhar rede/cota, responde localmente sem deixar o motorista na mão!
-            val local = runLocalOfflineAgent(userText)
-            return local.copy(
-                replyText = local.replyText,
-                isOffline = true
-            )
-        }
-
+    private suspend fun recordAndParseGeminiReply(rawText: String, userText: String): AgentReplyResult {
         val parsed = parseAndExecuteGeminiAction(rawText)
         conversationHistory.add("user" to userText)
         conversationHistory.add("model" to parsed.replyText)
@@ -603,6 +748,16 @@ class GeminiCarAgent(
         val media = host.getMediaState()
         val msgs = host.getWhatsAppMessages()
         val latestMsg = msgs.firstOrNull()
+        val favorites = host.getFavoritePlaces()
+        val favLines = if (favorites.isEmpty()) {
+            "Nenhum favorito salvo ainda."
+        } else {
+            favorites.joinToString("\n") { f ->
+                val voiceHint = f.voice.takeIf { it.isNotBlank() }?.let { " (voz: \"$it\")" }.orEmpty()
+                val addrHint = f.address.takeIf { it.isNotBlank() }?.let { " - $it" }.orEmpty()
+                "- ${f.name}$voiceHint$addrHint"
+            }
+        }
 
         return """
             Você é o HondaDeck Copilot, assistente automotivo em tempo real de um Honda Civic com tablet no painel.
@@ -627,20 +782,27 @@ class GeminiCarAgent(
             CLIMA NO LOCAL DO CARRO:
             - ${host.getWeatherSummary() ?: "sem dados no momento"}
 
-            Você pode usar a pesquisa Google para perguntas sobre o mundo (notícias, trânsito, horários, lugares).
+            FAVORITOS DO MOTORISTA:
+            $favLines
+
+            Você tem acesso a ferramentas de internet (notícias, Wikipédia, clima, busca de lugares, dados do carro). Use-as quando precisar de fatos atuais ou externos.
 
             WHATSAPP RECEBIDO:
             - ${if (latestMsg != null) "De ${latestMsg.sender}: \"${latestMsg.message}\"" else "Nenhuma mensagem pendente"}
             
-            Se o usuário pedir para executar uma ação no carro ou app, responda normalmente e inclua EXATAMENTE na última linha:
+            Se o usuário pedir para executar uma ação no carro ou app, responda normalmente e inclua na última linha:
             ACTION_JSON:{"action":"NOME_DA_ACAO","arg":"VALOR_OPCIONAL"}
             Ações válidas:
             - MUSIC_PLAY | MUSIC_PAUSE | MUSIC_NEXT | MUSIC_PREV | OPEN_SPOTIFY
-            - MUSIC_SEARCH (arg = nome da música ou artista)
-            - OPEN_MAPS | NAVIGATE (arg = destino ou endereço)
+            - MUSIC_SEARCH (arg = nome da música ou artista para tocar no painel)
+            - OPEN_MAP | MAP_SEARCH (arg = tipo de lugar ou nome para buscar no mapa do app)
+            - NAVIGATE (arg = destino, favorito ou endereço; traça rota dentro do app)
             - READ_WHATSAPP | REPLY_WHATSAPP (arg = texto exato da resposta)
             - SWITCH_TAB (arg = HOME, NAVIGATION, MUSIC, AGENT_VOICE, OBD_SCANNER, SETTINGS)
-            - OPEN_CAMERA
+            - OPEN_CAMERA | CLOSE_CAMERA
+            - REPORT (relatório completo do veículo) | WEATHER (resumo do clima)
+            - VOLUME (arg = "up", "down", "mute", "unmute" ou número de 0 a 100)
+            - ASK_GEMINI_APP (arg = pergunta para abrir no app Gemini do tablet)
             - LOG_FUEL (arg = JSON em texto: {"litros":40,"preco":6.29,"km":123456,"cheio":true}; omita campos que o motorista não disse; "cheio" só true se ele disse que completou)
 
             DIÁRIO DE ABASTECIMENTO (consumo real medido tanque cheio a tanque cheio):
@@ -649,35 +811,34 @@ class GeminiCarAgent(
         """.trimIndent()
     }
 
-    private fun parseAndExecuteGeminiAction(rawText: String): AgentReplyResult {
-        val marker = "ACTION_JSON:"
-        val idx = rawText.indexOf(marker)
-        if (idx < 0) {
-            return AgentReplyResult(replyText = rawText.trim(), isOffline = false)
+    private suspend fun parseAndExecuteGeminiAction(rawText: String): AgentReplyResult {
+        val (cleanText, action, arg) = ActionJsonParser.parse(rawText)
+        if (action == null) {
+            return AgentReplyResult(replyText = cleanText, isOffline = false)
         }
-        val spoken = rawText.substring(0, idx).trim()
-        val jsonStr = rawText.substring(idx + marker.length).lineSequence().firstOrNull().orEmpty().trim()
-        var badge: String? = null
-        runCatching {
-            val obj = JSONObject(jsonStr)
-            val action = obj.optString("action").uppercase()
-            val arg = obj.optString("arg")
-            badge = executeHostAction(action, arg)
+        if (!ActionJsonParser.isValidAction(action)) {
+            Log.w("GeminiCarAgent", "Ação ACTION_JSON inválida ignorada: $action")
+            return AgentReplyResult(replyText = cleanText.ifBlank { "Pronto." }, isOffline = false)
         }
+        val badge = executeHostAction(action, arg.orEmpty())
         return AgentReplyResult(
-            replyText = spoken.ifBlank { badge ?: "Pronto." },
+            replyText = cleanText.ifBlank { badge ?: "Pronto." },
             actionBadge = badge,
             isOffline = false
         )
     }
 
-    private fun executeHostAction(action: String, arg: String): String? {
-        return when (action) {
+    private suspend fun executeHostAction(action: String, arg: String): String? {
+        return when (action.uppercase()) {
             "MUSIC_PLAY", "MUSIC_PAUSE", "MUSIC_NEXT", "MUSIC_PREV", "OPEN_SPOTIFY" ->
-                host.controlMusic(action, null)
-            "MUSIC_SEARCH" -> host.controlMusic("SEARCH", arg)
-            "OPEN_MAPS" -> host.navigateTo(null)
-            "NAVIGATE" -> host.navigateTo(arg.takeIf { it.isNotBlank() })
+                host.controlMusic(action.uppercase(), null)
+            "MUSIC_SEARCH" -> host.searchAndPlayMusic(arg)
+            "OPEN_MAP", "OPEN_MAPS" -> host.navigateTo(null, null, false)
+            "MAP_SEARCH" -> host.searchPlacesOnMap(arg)
+            "NAVIGATE" -> {
+                val fav = matchFavoriteByArg(arg)
+                host.navigateTo(arg.takeIf { it.isNotBlank() }, fav, false)
+            }
             "READ_WHATSAPP" -> {
                 host.markMessagesRead()
                 "WhatsApp lido"
@@ -687,92 +848,77 @@ class GeminiCarAgent(
                 val tab = MainTab.entries.firstOrNull { it.name == arg.uppercase() } ?: MainTab.HOME
                 host.switchTab(tab)
             }
-            "OPEN_CAMERA" -> host.toggleReverseCamera()
+            "OPEN_CAMERA" -> host.openReverseCamera()
+            "CLOSE_CAMERA" -> host.closeReverseCamera()
+            "REPORT" -> {
+                host.buildCarReport()
+                "Relatório do Civic"
+            }
+            "WEATHER" -> "Clima"
+            "VOLUME" -> {
+                val normArg = CopilotIntentParser.normalize(arg)
+                when {
+                    normArg == "up" || normArg == "aumentar" -> host.adjustVolume(VolumeDirection.UP, null)
+                    normArg == "down" || normArg == "abaixar" || normArg == "diminuir" ->
+                        host.adjustVolume(VolumeDirection.DOWN, null)
+                    normArg == "mute" || normArg == "mudo" -> host.adjustVolume(VolumeDirection.MUTE, 0)
+                    normArg == "unmute" || normArg == "desmutar" -> host.adjustVolume(VolumeDirection.UNMUTE, null)
+                    else -> {
+                        val pct = normArg.toIntOrNull()?.coerceIn(0, 100)
+                        if (pct != null) host.adjustVolume(VolumeDirection.SET, pct) else null
+                    }
+                }
+            }
+            "ASK_GEMINI_APP" -> openExternalGeminiApp(arg)
             "LOG_FUEL" -> {
-                // arg = {"litros":40,"preco":6.29,"km":123456,"cheio":true}
-                val o = runCatching { JSONObject(arg) }.getOrNull() ?: return null
-                val liters = o.optDouble("litros").takeIf { !it.isNaN() && it > 0 } ?: return null
+                val o = CopilotJson.parseObjOrNull(arg) ?: return null
+                val liters = o.optDouble("litros")?.takeIf { it > 0 } ?: return null
                 host.logRefuelFromAgent(
                     liters = liters,
-                    pricePerLiter = o.optDouble("preco").takeIf { !it.isNaN() && it > 0 },
-                    odometerKm = o.optDouble("km").takeIf { !it.isNaN() && it > 0 },
-                    fullTank = o.optBoolean("cheio", false)
+                    pricePerLiter = o.optDouble("preco")?.takeIf { it > 0 },
+                    odometerKm = o.optDouble("km")?.takeIf { it > 0 },
+                    fullTank = o.optBoolean("cheio") ?: false
                 )
             }
-            else -> null
+            else -> {
+                Log.w("GeminiCarAgent", "Ação não tratada: $action")
+                null
+            }
         }
     }
 
-    private fun runLocalOfflineAgent(rawInput: String): AgentReplyResult {
-        val q = normalize(rawInput)
+    private fun matchFavoriteByArg(arg: String): FavoriteRef? {
+        val norm = CopilotIntentParser.normalize(arg)
+        if (norm.isEmpty()) return null
+        return host.getFavoritePlaces().firstOrNull {
+            CopilotIntentParser.normalize(it.name) == norm || CopilotIntentParser.normalize(it.id) == norm
+        }
+    }
+
+    private suspend fun runLocalOfflineAgent(rawInput: String): AgentReplyResult {
+        val favorites = host.getFavoritePlaces()
+        val intent = CopilotIntentParser.parse(rawInput, favorites)
         val hu = host.getHeadUnitState()
         val snap = hu.obdSnapshot
         val derived = snap.derived
 
-        return when {
-            // Diário de abastecimento: "abasteci 40 litros a 6,29 com 123.456 km, completei"
-            Regex("\\b(abasteci|abastecer|enchi o tanque|completei o tanque)\\b").containsMatchIn(q) -> {
-                val parsed = FuelLogCalculator.parseUtterance(rawInput)
-                val liters = parsed?.resolvedLiters
-                if (parsed == null || liters == null) {
-                    AgentReplyResult(
-                        "Para registrar, diga os litros e, se puder, o preço e o hodômetro. Exemplo: abasteci 40 litros a 6,29 com 123 mil 456 quilômetros, completei.",
-                        "Abastecimento",
-                        isOffline = true
-                    )
+        return when (intent) {
+            is CopilotIntent.AskGeminiApp -> {
+                val badge = openExternalGeminiApp(intent.question)
+                val msg = if (intent.question.isNotBlank()) {
+                    "Abrindo o Gemini do tablet com a sua pergunta."
                 } else {
-                    val msg = host.logRefuelFromAgent(liters, parsed.resolvedPrice, parsed.odometerKm, parsed.fullTank)
-                    AgentReplyResult(msg, "Abastecimento", isOffline = true)
+                    "Abrindo o aplicativo Gemini do tablet."
                 }
+                AgentReplyResult(msg, badge, isOffline = true)
             }
-            q.contains("quanto gastei") || q.contains("gasto com combustivel") || q.contains("consumo real") -> {
-                AgentReplyResult(
-                    host.getFuelLogSummary()?.let { "Pelo seu diário: $it." }
-                        ?: "Ainda não há abastecimentos registrados. Diga, por exemplo: abasteci 40 litros a 6,29, completei.",
-                    "Abastecimento",
-                    isOffline = true
-                )
+
+            is CopilotIntent.ReplyWhatsApp -> {
+                val res = host.replyLatestWhatsApp(intent.text)
+                AgentReplyResult(res, "WhatsApp", isOffline = true)
             }
-            q.contains("proxima") || q.contains("pular") || q.contains("avancar musica") -> {
-                val badge = host.controlMusic("MUSIC_NEXT")
-                AgentReplyResult("Passando para a próxima música.", badge, isOffline = true)
-            }
-            q.contains("anterior") || q.contains("voltar musica") -> {
-                val badge = host.controlMusic("MUSIC_PREV")
-                AgentReplyResult("Voltando para a música anterior.", badge, isOffline = true)
-            }
-            q.contains("pausar") || q.contains("parar musica") || q.contains("pause") -> {
-                val badge = host.controlMusic("MUSIC_PAUSE")
-                AgentReplyResult("Música pausada.", badge, isOffline = true)
-            }
-            q.startsWith("tocar ") || q.contains("coloca ") -> {
-                val query = rawInput.substringAfter("tocar ", rawInput.substringAfter("coloca ", "")).trim()
-                if (query.length >= 2 && !query.equals("musica", ignoreCase = true)) {
-                    val badge = host.controlMusic("SEARCH", query)
-                    AgentReplyResult("Buscando $query no Spotify.", badge, isOffline = true)
-                } else {
-                    val badge = host.controlMusic("MUSIC_PLAY")
-                    AgentReplyResult("Retomando a música.", badge, isOffline = true)
-                }
-            }
-            Regex("\\btocar\\b").containsMatchIn(q) || q.contains("continuar musica") || Regex("\\bplay\\b").containsMatchIn(q) -> {
-                val badge = host.controlMusic("MUSIC_PLAY")
-                AgentReplyResult("Tocando música agora.", badge, isOffline = true)
-            }
-            q.contains("abrir spotify") || q.contains("abre o spotify") -> {
-                val badge = host.controlMusic("OPEN_SPOTIFY")
-                AgentReplyResult("Abrindo o Spotify.", badge, isOffline = true)
-            }
-            q.contains("ir para ") || q.contains("navegar para ") || q.contains("rota para ") -> {
-                val dest = rawInput.replace(Regex("(?i).*(ir para|navegar para|rota para)\\s+"), "").trim()
-                val badge = host.navigateTo(dest.takeIf { it.isNotBlank() })
-                AgentReplyResult("Iniciando rota para $dest.", badge, isOffline = true)
-            }
-            q.contains("abrir maps") || q.contains("google maps") || q.contains("abrir mapa") -> {
-                val badge = host.navigateTo(null)
-                AgentReplyResult("Abrindo o mapa.", badge, isOffline = true)
-            }
-            q.contains("ler mensagem") || q.contains("whatsapp") || q.contains("mensagens") -> {
+
+            CopilotIntent.ReadWhatsApp -> {
                 val latest = host.getWhatsAppMessages().firstOrNull()
                 if (latest == null) {
                     AgentReplyResult("Não há mensagens recentes do WhatsApp.", isOffline = true)
@@ -785,14 +931,109 @@ class GeminiCarAgent(
                     )
                 }
             }
-            q.startsWith("responder ") -> {
-                val reply = rawInput.replaceFirst(Regex("(?i)responder\\s+"), "").trim()
-                val res = host.replyLatestWhatsApp(reply)
-                AgentReplyResult(res, "WhatsApp", isOffline = true)
+
+            is CopilotIntent.LogFuel -> {
+                val parsed = FuelLogCalculator.parseUtterance(intent.raw)
+                val liters = parsed?.resolvedLiters
+                if (parsed == null || liters == null) {
+                    AgentReplyResult(
+                        "Para registrar, diga os litros e, se puder, o preço e o hodômetro. Exemplo: abasteci 40 litros a 6,29 com 123 mil 456 quilômetros, completei.",
+                        "Abastecimento",
+                        isOffline = true
+                    )
+                } else {
+                    val msg = host.logRefuelFromAgent(liters, parsed.resolvedPrice, parsed.odometerKm, parsed.fullTank)
+                    AgentReplyResult(msg, "Abastecimento", isOffline = true)
+                }
             }
-            // Clima vem antes de "temperatura" para "temperatura lá fora" não cair no motor.
-            Regex("\\b(clima|chuva|chover)\\b").containsMatchIn(q) ||
-                q.contains("previsao do tempo") || q.contains("la fora") -> {
+
+            CopilotIntent.FuelSummary -> {
+                AgentReplyResult(
+                    host.getFuelLogSummary()?.let { "Pelo seu diário: $it." }
+                        ?: "Ainda não há abastecimentos registrados. Diga, por exemplo: abasteci 40 litros a 6,29, completei.",
+                    "Abastecimento",
+                    isOffline = true
+                )
+            }
+
+            is CopilotIntent.Navigate -> {
+                val badge = host.navigateTo(intent.dest, intent.favorite, intent.forceExternalMaps)
+                val label = intent.favorite?.name ?: intent.dest
+                val msg = if (intent.forceExternalMaps) {
+                    "Abrindo rota para $label no mapa externo."
+                } else {
+                    "Iniciando rota para $label no painel."
+                }
+                AgentReplyResult(msg, badge, isOffline = true)
+            }
+
+            is CopilotIntent.MapSearch -> {
+                val badge = host.searchPlacesOnMap(intent.query)
+                AgentReplyResult("Buscando ${intent.query} no mapa.", badge, isOffline = true)
+            }
+
+            CopilotIntent.OpenMap -> {
+                val badge = host.navigateTo(null, null, false)
+                AgentReplyResult("Abrindo o mapa.", badge, isOffline = true)
+            }
+
+            CopilotIntent.OpenSpotify -> {
+                val badge = host.controlMusic("OPEN_SPOTIFY")
+                AgentReplyResult("Abrindo o Spotify no painel.", badge, isOffline = true)
+            }
+
+            is CopilotIntent.MusicSearch -> {
+                val badge = host.searchAndPlayMusic(intent.query)
+                AgentReplyResult("Buscando ${intent.query} no Spotify.", badge, isOffline = true)
+            }
+
+            CopilotIntent.MusicNext -> {
+                val badge = host.controlMusic("MUSIC_NEXT")
+                AgentReplyResult("Passando para a próxima música.", badge, isOffline = true)
+            }
+
+            CopilotIntent.MusicPrev -> {
+                val badge = host.controlMusic("MUSIC_PREV")
+                AgentReplyResult("Voltando para a música anterior.", badge, isOffline = true)
+            }
+
+            CopilotIntent.MusicPause -> {
+                val badge = host.controlMusic("MUSIC_PAUSE")
+                AgentReplyResult("Música pausada.", badge, isOffline = true)
+            }
+
+            CopilotIntent.MusicPlay -> {
+                val badge = host.controlMusic("MUSIC_PLAY")
+                AgentReplyResult("Tocando música agora.", badge, isOffline = true)
+            }
+
+            is CopilotIntent.Volume -> {
+                val badge = host.adjustVolume(intent.direction, intent.value)
+                val msg = when (intent.direction) {
+                    VolumeDirection.UP -> "Aumentando o volume."
+                    VolumeDirection.DOWN -> "Abaixando o volume."
+                    VolumeDirection.SET -> "Volume ajustado para ${intent.value ?: 60}%."
+                    VolumeDirection.MUTE -> "Áudio silenciado."
+                    VolumeDirection.UNMUTE -> "Som reativado."
+                }
+                AgentReplyResult(msg, badge, isOffline = true)
+            }
+
+            CopilotIntent.OpenCamera -> {
+                val badge = host.openReverseCamera()
+                AgentReplyResult("Abrindo a câmera de ré.", badge, isOffline = true)
+            }
+
+            CopilotIntent.CloseCamera -> {
+                val badge = host.closeReverseCamera()
+                AgentReplyResult("Fechando a câmera de ré.", badge, isOffline = true)
+            }
+
+            CopilotIntent.Report -> {
+                AgentReplyResult(host.buildCarReport(), "Relatório do Civic", isOffline = true)
+            }
+
+            CopilotIntent.Weather -> {
                 val summary = host.getWeatherSummary()
                 AgentReplyResult(
                     summary ?: "Ainda não tenho o clima. Preciso de GPS e internet do celular.",
@@ -800,69 +1041,125 @@ class GeminiCarAgent(
                     isOffline = true
                 )
             }
-            q.contains("temperatura") || q.contains("esquentando") -> {
-                val t = snap.coolantTempC?.toInt()
-                val msg = if (t != null) {
-                    "O motor está a $t graus Celsius, status ${derived.thermalStatusLabel}."
-                } else {
-                    "Ainda não recebi a temperatura do motor pelo OBD2."
+
+            is CopilotIntent.Telemetry -> when (intent.kind) {
+                TelemetryKind.COOLANT_TEMP -> {
+                    val t = snap.coolantTempC?.toInt()
+                    val msg = if (t != null) {
+                        "O motor está a $t graus Celsius, status ${derived.thermalStatusLabel}."
+                    } else {
+                        "Ainda não recebi a temperatura do motor pelo OBD2."
+                    }
+                    AgentReplyResult(msg, "OBD2 Offline", isOffline = true)
                 }
-                AgentReplyResult(msg, "OBD2 Offline", isOffline = true)
-            }
-            q.contains("voltagem") || q.contains("bateria") || q.contains("alternador") -> {
-                val v = snap.batteryVoltageV
-                val msg = if (v != null) {
-                    "A bateria está em ${"%.1f".format(v)} volts."
-                } else {
-                    "Sem leitura de voltagem no momento."
+                TelemetryKind.BATTERY_VOLTAGE -> {
+                    val v = snap.batteryVoltageV
+                    val msg = if (v != null) {
+                        "A bateria está em ${"%.1f".format(v)} volts."
+                    } else {
+                        "Sem leitura de voltagem no momento."
+                    }
+                    AgentReplyResult(msg, "OBD2 Offline", isOffline = true)
                 }
-                AgentReplyResult(msg, "OBD2 Offline", isOffline = true)
+                TelemetryKind.FUEL_CONSUMPTION -> {
+                    val avg = snap.averageKmPerL?.let { "%.1f quilômetros por litro".format(it) } ?: "ainda calculando"
+                    val range = derived.estimatedRangeKm?.let { "${it.toInt()} quilômetros" } ?: "indisponível"
+                    AgentReplyResult(
+                        "Seu consumo médio é $avg, com cerca de ${derived.virtualTankPercent.toInt()}% no tanque e autonomia estimada de $range.",
+                        "OBD2 Offline",
+                        isOffline = true
+                    )
+                }
+                TelemetryKind.DIAGNOSTICS_DTC -> {
+                    val msg = if (hu.dtcCodes.isEmpty()) {
+                        "Nenhum código de falha registrado no Civic."
+                    } else {
+                        "Encontrei ${hu.dtcCodes.size} falhas: ${hu.dtcCodes.joinToString { it.code }}."
+                    }
+                    AgentReplyResult(msg, "Diagnóstico OBD2", isOffline = true)
+                }
+                TelemetryKind.SPEED_RPM -> {
+                    val spd = derived.correctedSpeedKmh?.toInt() ?: snap.speedKmh?.toInt() ?: 0
+                    val rpm = snap.rpm?.toInt() ?: 0
+                    AgentReplyResult(
+                        "Velocidade atual de $spd quilômetros por hora, motor a $rpm giros.",
+                        "OBD2 Offline",
+                        isOffline = true
+                    )
+                }
+                TelemetryKind.ENGINE_SUMMARY -> {
+                    val temp = snap.coolantTempC?.let { "${it.toInt()}°C" } ?: "--"
+                    val volt = snap.batteryVoltageV?.let { "%.1fV".format(it) } ?: "--"
+                    val load = snap.engineLoadPct?.let { "${it.toInt()}%" } ?: "--"
+                    val dtcs = if (hu.dtcCodes.isEmpty()) "sem códigos de falha" else "${hu.dtcCodes.size} falhas registradas"
+                    AgentReplyResult(
+                        "Resumo do Civic: motor a $temp, bateria em $volt, uso do motor em $load e $dtcs.",
+                        "Diagnóstico Local",
+                        isOffline = true
+                    )
+                }
             }
-            q.contains("consumo") || q.contains("combustivel") || q.contains("autonomia") || q.contains("tanque") -> {
-                val avg = snap.averageKmPerL?.let { "%.1f quilômetros por litro".format(it) } ?: "ainda calculando"
-                val range = derived.estimatedRangeKm?.let { "${it.toInt()} quilômetros" } ?: "indisponível"
-                AgentReplyResult(
-                    "Seu consumo médio é $avg, com cerca de ${derived.virtualTankPercent.toInt()}% no tanque e autonomia estimada de $range.",
-                    "OBD2 Offline",
-                    isOffline = true
-                )
+
+            is CopilotIntent.SwitchTab -> {
+                val mainTab = when (intent.tab) {
+                    CopilotTab.HOME -> MainTab.HOME
+                    CopilotTab.NAVIGATION -> MainTab.NAVIGATION
+                    CopilotTab.MUSIC -> MainTab.MUSIC
+                    CopilotTab.AGENT_VOICE -> MainTab.AGENT_VOICE
+                    CopilotTab.OBD_SCANNER -> MainTab.OBD_SCANNER
+                    CopilotTab.SETTINGS -> MainTab.SETTINGS
+                }
+                val badge = host.switchTab(mainTab)
+                val label = when (intent.tab) {
+                    CopilotTab.SETTINGS -> "Abrindo configurações."
+                    CopilotTab.OBD_SCANNER -> "Abrindo scanner OBD2."
+                    CopilotTab.AGENT_VOICE -> "Abrindo copiloto."
+                    CopilotTab.NAVIGATION -> "Abrindo o mapa."
+                    CopilotTab.MUSIC -> "Abrindo músicas."
+                    CopilotTab.HOME -> "Voltando para o painel principal."
+                }
+                AgentReplyResult(label, badge, isOffline = true)
             }
-            q.contains("motor") || q.contains("diagnostico") || q.contains("como esta o carro") || q.contains("scanner") || q.contains("falha") -> {
-                val temp = snap.coolantTempC?.let { "${it.toInt()}°C" } ?: "--"
-                val volt = snap.batteryVoltageV?.let { "%.1fV".format(it) } ?: "--"
-                val load = snap.engineLoadPct?.let { "${it.toInt()}%" } ?: "--"
-                val dtcs = if (hu.dtcCodes.isEmpty()) "sem códigos de falha" else "${hu.dtcCodes.size} falhas registradas"
-                AgentReplyResult(
-                    "Resumo do Civic: motor a $temp, bateria em $volt, uso do motor em $load e $dtcs.",
-                    "Diagnóstico Local",
-                    isOffline = true
-                )
-            }
-            Regex("\\bcamera\\b").containsMatchIn(q) || q.contains("camera de re") || q.contains("camera traseira") -> {
-                val badge = host.toggleReverseCamera()
-                AgentReplyResult("Alternando visualização da câmera.", badge, isOffline = true)
-            }
-            q.contains("configurac") -> {
-                val badge = host.switchTab(MainTab.SETTINGS)
-                AgentReplyResult("Abrindo configurações.", badge, isOffline = true)
-            }
-            q.contains("inicio") || q.contains("home") || q.contains("painel") -> {
-                val badge = host.switchTab(MainTab.HOME)
-                AgentReplyResult("Voltando para o painel principal.", badge, isOffline = true)
-            }
-            else -> {
+
+            CopilotIntent.Unknown -> {
                 val reason = if (!_state.value.isOnlineAvailable) {
                     "Estou sem internet do celular no momento."
                 } else {
-                    "Configure sua chave do Gemini nas Configurações para perguntas livres."
+                    "Não consegui responder online agora."
                 }
                 AgentReplyResult(
-                    "$reason No modo offline você pode pedir temperatura do motor, voltagem, consumo, músicas do Spotify, rotas ou leitura do WhatsApp.",
+                    "$reason No modo local você pode pedir temperatura do motor, voltagem, consumo, relatório do carro, músicas do Spotify, rotas, busca de lugares ou WhatsApp.",
                     "Modo Offline",
                     isOffline = true
                 )
             }
         }
+    }
+
+    private fun openExternalGeminiApp(question: String): String {
+        val bardSend = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            setPackage("com.google.android.apps.bard")
+            putExtra(Intent.EXTRA_TEXT, question)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val launchedBard = runCatching { appContext.startActivity(bardSend) }.isSuccess
+        if (launchedBard) return "Gemini"
+
+        val googleSearch = Intent(Intent.ACTION_WEB_SEARCH).apply {
+            setPackage("com.google.android.googlequicksearchbox")
+            putExtra(SearchManager.QUERY, question)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        val launchedGoogle = runCatching { appContext.startActivity(googleSearch) }.isSuccess
+        if (launchedGoogle) return "Pesquisa Google"
+
+        val genericSearch = Intent(Intent.ACTION_WEB_SEARCH).apply {
+            putExtra(SearchManager.QUERY, question)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { appContext.startActivity(genericSearch) }
+        return "Gemini"
     }
 
     private fun speak(text: String) {
@@ -891,6 +1188,7 @@ class GeminiCarAgent(
         ) == PackageManager.PERMISSION_GRANTED
 
     private fun hasInternetConnection(): Boolean {
+        internetCheckOverride?.let { return it() }
         val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
         val network = cm.activeNetwork ?: return false
         val caps = cm.getNetworkCapabilities(network) ?: return false

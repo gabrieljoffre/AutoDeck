@@ -156,6 +156,11 @@ class HeadUnitCoordinator(
         updateDerivedLocked { it.copy(cameraState = nextCameraState) }
     }
 
+    fun enterManualCameraPreview(): HeadUnitState = synchronized(stateLock) {
+        val nextCameraState = reverseStateMachine.enterManualPreview()
+        updateDerivedLocked { it.copy(cameraState = nextCameraState) }
+    }
+
     fun exitManualCameraPreview(): HeadUnitState = synchronized(stateLock) {
         val nextCameraState = reverseStateMachine.exitManualPreview()
         updateDerivedLocked { it.copy(cameraState = nextCameraState) }
