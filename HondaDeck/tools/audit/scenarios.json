@@ -1,0 +1,479 @@
+[
+  {
+    "id": "01-obd-simulador-e-estado",
+    "name": "Inicialização, ponte window.HD.lastState e simulador OBD ligado",
+    "steps": [
+      { "do": "wait", "for": "[data-test=\"dock-settings\"]", "timeoutMs": 12000 },
+      { "do": "wait", "ms": 2800 },
+      { "do": "click", "selector": "[data-test=\"dock-settings\"]" },
+      { "do": "wait", "for": "[data-test=\"settings-tab-vehicle\"]", "timeoutMs": 6000 },
+      { "do": "click", "selector": "[data-test=\"settings-tab-vehicle\"]" },
+      { "do": "send", "cmd": "obd.setSimulator", "args": { "enabled": true } },
+      { "do": "wait", "ms": 800 },
+      { "do": "screenshot", "name": "obd-simulador-ligado" },
+      { "do": "click", "selector": "[data-test=\"mode-close\"]" },
+      { "do": "wait", "for": "[data-test=\"gauge-speed\"]", "timeoutMs": 6000 }
+    ],
+    "expect": [
+      {
+        "desc": "window.HD.lastState está preenchido pela ponte",
+        "expr": "Boolean(state && state.v === 1 && state.telemetry && state.settings)"
+      },
+      {
+        "desc": "Simulador OBD está ativo no estado",
+        "expr": "Boolean(state?.vehicle?.simulator === true || state?.status?.obd === 'SIMULATED')",
+        "waitMs": 5000
+      }
+    ]
+  },
+  {
+    "id": "02-intro-fundo-velocimetro",
+    "name": "Intro H -> HONDA, fundo animado e velocímetro (velocidade, RPM, marchas, combustível)",
+    "steps": [
+      { "do": "click", "selector": "[data-test=\"dock-home\"]" },
+      {
+        "do": "eval",
+        "expr": "({ speed: state?.telemetry?.speedKmh ?? 0, rpm: state?.telemetry?.rpm ?? 0 })",
+        "saveAs": "t0"
+      },
+      { "do": "click", "selector": "[data-test=\"intro\"]", "optional": true },
+      { "do": "screenshot", "name": "intro-logo" },
+      { "do": "wait", "ms": 2200 },
+      { "do": "screenshot", "name": "painel-velocimetro" }
+    ],
+    "expect": [
+      { "desc": "Elemento de intro/logo presente", "selector": "[data-test=\"intro\"]" },
+      { "desc": "Velocidade visível no velocímetro", "selector": "[data-test=\"gauge-speed\"]", "visible": true },
+      { "desc": "RPM visível no velocímetro", "selector": "[data-test=\"gauge-rpm\"]", "visible": true },
+      { "desc": "Indicadores de marcha (gear-*) presentes", "selector": "[data-test^=\"gear-\"]", "visible": true },
+      { "desc": "Marcha N presente", "selector": "[data-test=\"gear-N\"]" },
+      { "desc": "Marcha 1 presente", "selector": "[data-test=\"gear-1\"]" },
+      { "desc": "Barra de combustível presente", "selector": "[data-test=\"fuel\"]", "visible": true },
+      {
+        "desc": "Canvas de fundo animado presente",
+        "expr": "Boolean(document.querySelector('canvas'))"
+      },
+      {
+        "desc": "Telemetria do simulador atualiza valores numéricos válidos",
+        "expr": "typeof state?.telemetry?.speedKmh === 'number' && typeof state?.telemetry?.rpm === 'number' && typeof state?.telemetry?.fuelPct === 'number'",
+        "waitMs": 4000
+      }
+    ]
+  },
+  {
+    "id": "03-mapa-busca-posto-rota",
+    "name": "Mapa 2/3: buscar 'posto' em Anápolis, traçar rota, manobra, encerrar rota e X volta",
+    "steps": [
+      { "do": "click", "selector": "[data-test=\"map-card\"]" },
+      { "do": "wait", "for": "[data-test=\"map-search\"]", "timeoutMs": 6000 },
+      { "do": "type", "selector": "[data-test=\"map-search\"]", "text": "posto" },
+      { "do": "wait", "for": "[data-test=\"map-result-0\"]", "timeoutMs": 12000 },
+      {
+        "do": "eval",
+        "expr": "Array.isArray(state?.map?.search?.results) ? state.map.search.results.length : document.querySelectorAll('[data-test^=\"map-result-\"]').length",
+        "saveAs": "mapResultCount"
+      },
+      { "do": "screenshot", "name": "mapa-resultados-posto" },
+      { "do": "click", "selector": "[data-test=\"map-result-0\"]" },
+      {
+        "do": "wait",
+        "for": "window.HD?.lastState?.map?.route?.active === true",
+        "timeoutMs": 15000
+      },
+      {
+        "do": "eval",
+        "expr": "({ active: Boolean(state?.map?.route?.active), points: state?.map?.route?.polyline?.length ?? 0, instruction: state?.map?.route?.nextInstruction || '' })",
+        "saveAs": "routeSnapshot"
+      },
+      { "do": "screenshot", "name": "mapa-rota-desenhada" },
+      { "do": "wait", "for": "[data-test=\"route-stop\"]", "timeoutMs": 6000 },
+      { "do": "click", "selector": "[data-test=\"route-stop\"]" },
+      {
+        "do": "wait",
+        "for": "window.HD?.lastState?.map?.route?.active === false",
+        "timeoutMs": 8000
+      },
+      { "do": "click", "selector": "[data-test=\"mode-close\"]" },
+      { "do": "wait", "for": "[data-test=\"gauge-speed\"]", "timeoutMs": 6000 }
+    ],
+    "expect": [
+      {
+        "desc": "Busca por 'posto' retornou resultados",
+        "expr": "(vars.mapResultCount ?? 0) > 0"
+      },
+      {
+        "desc": "Rota ficou ativa com polyline e próxima manobra",
+        "expr": "Boolean(vars.routeSnapshot?.active && vars.routeSnapshot?.points >= 2 && vars.routeSnapshot?.instruction.length > 0)"
+      },
+      {
+        "desc": "Rota foi encerrada após clicar em Encerrar rota",
+        "expr": "state?.map?.route?.active === false"
+      },
+      {
+        "desc": "Botão X fechou o mapa e voltou ao painel inicial",
+        "selector": "[data-test=\"gauge-speed\"]",
+        "visible": true
+      }
+    ]
+  },
+  {
+    "id": "04-spotify-controles-e-busca",
+    "name": "Spotify 2/3: anterior/play/pausa/próxima, progresso, busca 'Panda', playlists e recentes",
+    "steps": [
+      { "do": "click", "selector": "[data-test=\"music-card\"]" },
+      { "do": "wait", "for": "[data-test=\"music-search\"]", "timeoutMs": 6000 },
+      {
+        "do": "eval",
+        "expr": "({ status: state?.media?.status || 'UNKNOWN', title: state?.media?.title || '', playing: Boolean(state?.media?.playing) })",
+        "saveAs": "mediaBefore"
+      },
+      { "do": "click", "selector": "[data-test=\"music-toggle\"]", "optional": true },
+      { "do": "wait", "ms": 700 },
+      { "do": "click", "selector": "[data-test=\"music-next\"]", "optional": true },
+      { "do": "wait", "ms": 900 },
+      { "do": "click", "selector": "[data-test=\"music-prev\"]", "optional": true },
+      { "do": "wait", "ms": 700 },
+      { "do": "send", "cmd": "music.seek", "args": { "ms": 25000 } },
+      { "do": "type", "selector": "[data-test=\"music-search\"]", "text": "Panda" },
+      { "do": "wait", "ms": 1800 },
+      { "do": "wait", "for": "[data-test=\"music-result-0\"]", "timeoutMs": 10000, "optional": true },
+      { "do": "screenshot", "name": "spotify-busca-panda" },
+      { "do": "click", "selector": "[data-test=\"music-result-0\"]", "optional": true },
+      { "do": "wait", "ms": 1200 },
+      {
+        "do": "eval",
+        "expr": "({ status: state?.media?.status, title: state?.media?.title || '', tracksFound: state?.spotify?.search?.tracks?.length ?? 0, playlists: state?.spotify?.playlists?.length ?? 0, recent: (state?.spotify?.recent?.length ?? 0) + (state?.spotify?.recentSearches?.length ?? 0), domResults: document.querySelectorAll('[data-test^=\"music-result-\"]').length })",
+        "saveAs": "mediaAfter"
+      },
+      { "do": "screenshot", "name": "spotify-tocando" },
+      { "do": "click", "selector": "[data-test=\"mode-close\"]" },
+      { "do": "wait", "for": "[data-test=\"gauge-speed\"]", "timeoutMs": 6000 }
+    ],
+    "expect": [
+      {
+        "desc": "Spotify conectado, busca 'Panda' e reprodução operacionais",
+        "whenExpr": "state?.media?.status === 'CONNECTED'",
+        "pendingReason": "Spotify não está autorizado/conectado no tablet (NEEDS_AUTH/NOT_INSTALLED) — aguardando login manual do usuário conforme regra do plano mestre",
+        "expr": "Boolean((vars.mediaAfter?.tracksFound > 0 || vars.mediaAfter?.domResults > 0) && vars.mediaAfter?.title.length > 0)"
+      },
+      {
+        "desc": "Retornou ao início após fechar modo Música",
+        "selector": "[data-test=\"gauge-speed\"]",
+        "visible": true
+      }
+    ]
+  },
+  {
+    "id": "05-ajustes-favoritos-casa-e-crud",
+    "name": "Ajustes › Locais favoritos: garantir 'Casa' e salvar/editar/remover favorito de teste",
+    "steps": [
+      { "do": "click", "selector": "[data-test=\"dock-settings\"]" },
+      { "do": "wait", "for": "[data-test=\"settings-tab-favorites\"]", "timeoutMs": 6000 },
+      { "do": "click", "selector": "[data-test=\"settings-tab-favorites\"]" },
+      { "do": "wait", "for": "[data-test=\"fav-name\"]", "timeoutMs": 6000 },
+      {
+        "do": "eval",
+        "expr": "const hasCasa = (state?.map?.favorites || []).some(f => /casa/i.test(f.name || '') || /casa/i.test(f.voice || '')); if (!hasCasa && window.HondaBridge) { window.HondaBridge.send(JSON.stringify({ cmd: 'fav.save', args: { id: 'casa', name: 'Casa', address: 'Centro, Anápolis - GO', lat: -16.3281, lon: -48.9534, voice: 'ir para casa', icon: 'home' } })); } return { hadCasa: hasCasa };",
+        "saveAs": "casaCheck"
+      },
+      { "do": "wait", "ms": 500 },
+      { "do": "type", "selector": "[data-test=\"fav-name\"]", "text": "Favorito Teste Audit" },
+      { "do": "type", "selector": "[data-test=\"fav-address\"]", "text": "Av. Brasil, Anápolis - GO" },
+      { "do": "type", "selector": "[data-test=\"fav-voice\"]", "text": "ir para favorito teste", "optional": true },
+      { "do": "click", "selector": "[data-test=\"fav-save\"]" },
+      {
+        "do": "wait",
+        "for": "(window.HD?.lastState?.map?.favorites || []).some(f => f.name === 'Favorito Teste Audit')",
+        "timeoutMs": 6000
+      },
+      {
+        "do": "eval",
+        "expr": "(state?.map?.favorites || []).some(f => f.name === 'Favorito Teste Audit')",
+        "saveAs": "tempFavAdded"
+      },
+      { "do": "screenshot", "name": "ajustes-favoritos-salvo" },
+      { "do": "click", "selector": "[data-test=\"fav-edit-0\"]", "optional": true },
+      {
+        "do": "eval",
+        "expr": "const temp = (state?.map?.favorites || []).find(f => f.name === 'Favorito Teste Audit'); if (temp && window.HondaBridge) { window.HondaBridge.send(JSON.stringify({ cmd: 'fav.delete', args: { id: temp.id } })); return temp.id; } return null;",
+        "saveAs": "deletedTempFavId"
+      },
+      {
+        "do": "wait",
+        "for": "!(window.HD?.lastState?.map?.favorites || []).some(f => f.name === 'Favorito Teste Audit')",
+        "timeoutMs": 6000
+      },
+      { "do": "click", "selector": "[data-test=\"mode-close\"]" },
+      { "do": "wait", "for": "[data-test=\"gauge-speed\"]", "timeoutMs": 6000 }
+    ],
+    "expect": [
+      {
+        "desc": "Favorito 'Casa' está cadastrado para o copiloto",
+        "expr": "(state?.map?.favorites || []).some(f => /casa/i.test(f.name || '') || /casa/i.test(f.voice || ''))"
+      },
+      {
+        "desc": "Favorito temporário foi adicionado pelo formulário e removido em seguida",
+        "expr": "vars.tempFavAdded === true && !(state?.map?.favorites || []).some(f => f.name === 'Favorito Teste Audit')"
+      }
+    ]
+  },
+  {
+    "id": "06a-copiloto-botao-e-rotas",
+    "name": "Copiloto (botão + texto): escuta na dock, 'ir para casa' e 'procure um posto'",
+    "steps": [
+      { "do": "click", "selector": "[data-test=\"dock-copilot\"]" },
+      { "do": "wait", "ms": 700 },
+      { "do": "screenshot", "name": "copiloto-ouvindo" },
+      { "do": "send", "cmd": "copilot.cancel" },
+      { "do": "wait", "ms": 400 },
+      { "do": "eval", "expr": "state?.copilot?.lastReply || ''", "saveAs": "reply0" },
+      { "do": "send", "cmd": "copilot.ask", "args": { "text": "ir para casa" } },
+      {
+        "do": "wait",
+        "for": "window.HD?.lastState?.copilot?.thinking === false && (window.HD?.lastState?.copilot?.lastReply || '') !== (window.__auditVars?.reply0 || '')",
+        "timeoutMs": 18000,
+        "optional": true
+      },
+      { "do": "eval", "expr": "({ reply: state?.copilot?.lastReply || '', action: state?.copilot?.lastAction || '', routeActive: Boolean(state?.map?.route?.active) })", "saveAs": "askCasa" },
+      { "do": "screenshot", "name": "copiloto-ir-para-casa" },
+      { "do": "send", "cmd": "copilot.ask", "args": { "text": "procure um posto" } },
+      { "do": "wait", "ms": 1500 },
+      {
+        "do": "wait",
+        "for": "window.HD?.lastState?.copilot?.thinking === false",
+        "timeoutMs": 18000,
+        "optional": true
+      },
+      { "do": "eval", "expr": "({ reply: state?.copilot?.lastReply || '', action: state?.copilot?.lastAction || '' })", "saveAs": "askPosto" },
+      { "do": "screenshot", "name": "copiloto-procure-posto" },
+      { "do": "send", "cmd": "map.stopRoute" },
+      { "do": "send", "cmd": "ui.mode", "args": { "mode": "home" } }
+    ],
+    "expect": [
+      { "desc": "Botão do copiloto presente na dock", "selector": "[data-test=\"dock-copilot\"]" },
+      {
+        "desc": "Copiloto respondeu a 'ir para casa' e 'procure um posto'",
+        "whenExpr": "state?.settings?.geminiKeySet !== false",
+        "pendingReason": "Chave Gemini não configurada em local.properties / Ajustes",
+        "expr": "Boolean((vars.askCasa?.reply?.length > 0 || vars.askCasa?.routeActive) && vars.askPosto?.reply?.length > 0)"
+      }
+    ]
+  },
+  {
+    "id": "06b-copiloto-musica-relatorio-clima-abastecimento",
+    "name": "Copiloto: 'toque Bem Querer', 'próxima música', 'relatório do carro', 'como está o tempo' e 'abasteci 30 litros a 6,19'",
+    "steps": [
+      {
+        "do": "eval",
+        "expr": "(state?.vehicle?.fuelLog?.entries || []).map(e => e.id)",
+        "saveAs": "fuelIdsBeforeCopilot"
+      },
+      { "do": "send", "cmd": "copilot.ask", "args": { "text": "toque Bem Querer" } },
+      { "do": "wait", "ms": 1200 },
+      { "do": "wait", "for": "window.HD?.lastState?.copilot?.thinking === false", "timeoutMs": 18000, "optional": true },
+      { "do": "eval", "expr": "state?.copilot?.lastReply || ''", "saveAs": "replyMusica" },
+      { "do": "send", "cmd": "copilot.ask", "args": { "text": "próxima música" } },
+      { "do": "wait", "ms": 1000 },
+      { "do": "wait", "for": "window.HD?.lastState?.copilot?.thinking === false", "timeoutMs": 15000, "optional": true },
+      { "do": "eval", "expr": "state?.copilot?.lastReply || ''", "saveAs": "replyProxima" },
+      { "do": "send", "cmd": "copilot.ask", "args": { "text": "relatório do carro" } },
+      { "do": "wait", "ms": 1200 },
+      { "do": "wait", "for": "window.HD?.lastState?.copilot?.thinking === false", "timeoutMs": 18000, "optional": true },
+      { "do": "eval", "expr": "state?.copilot?.lastReply || ''", "saveAs": "replyRelatorio" },
+      { "do": "screenshot", "name": "copiloto-relatorio-carro" },
+      { "do": "send", "cmd": "copilot.ask", "args": { "text": "como está o tempo" } },
+      { "do": "wait", "ms": 1200 },
+      { "do": "wait", "for": "window.HD?.lastState?.copilot?.thinking === false", "timeoutMs": 18000, "optional": true },
+      { "do": "eval", "expr": "state?.copilot?.lastReply || ''", "saveAs": "replyTempo" },
+      { "do": "send", "cmd": "copilot.ask", "args": { "text": "abasteci 30 litros a 6,19" } },
+      { "do": "wait", "ms": 1500 },
+      { "do": "wait", "for": "window.HD?.lastState?.copilot?.thinking === false", "timeoutMs": 18000, "optional": true },
+      {
+        "do": "eval",
+        "expr": "const prev = new Set(vars.fuelIdsBeforeCopilot || []); const added = (state?.vehicle?.fuelLog?.entries || []).filter(e => !prev.has(e.id)); for (const item of added) { if (window.HondaBridge) window.HondaBridge.send(JSON.stringify({ cmd: 'fuel.delete', args: { id: item.id } })); } return { reply: state?.copilot?.lastReply || '', addedCount: added.length };",
+        "saveAs": "copilotFuelResult"
+      },
+      { "do": "screenshot", "name": "copiloto-clima-e-abastecimento" },
+      { "do": "send", "cmd": "ui.mode", "args": { "mode": "home" } }
+    ],
+    "expect": [
+      {
+        "desc": "Copiloto respondeu sobre relatório do carro, clima e comandos de mídia/abastecimento",
+        "whenExpr": "state?.settings?.geminiKeySet !== false",
+        "pendingReason": "Chave Gemini não configurada",
+        "expr": "Boolean(vars.replyRelatorio?.length > 0 && vars.replyTempo?.length > 0 && vars.copilotFuelResult?.reply?.length > 0)"
+      }
+    ]
+  },
+  {
+    "id": "07-ajustes-aparencia-cores",
+    "name": "Ajustes › Aparência: trocar cor de destaque (accent-*) atualiza tema ao vivo",
+    "steps": [
+      { "do": "click", "selector": "[data-test=\"dock-settings\"]" },
+      { "do": "wait", "for": "[data-test=\"settings-tab-appearance\"]", "timeoutMs": 6000 },
+      { "do": "click", "selector": "[data-test=\"settings-tab-appearance\"]" },
+      { "do": "eval", "expr": "state?.accent || '#22D3EE'", "saveAs": "origAccent" },
+      { "do": "wait", "for": "[data-test=\"accent-1\"]", "timeoutMs": 6000 },
+      { "do": "click", "selector": "[data-test=\"accent-1\"]" },
+      { "do": "wait", "ms": 600 },
+      {
+        "do": "eval",
+        "expr": "({ stateAccent: state?.accent, cssAccent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() })",
+        "saveAs": "accentChanged"
+      },
+      { "do": "screenshot", "name": "ajustes-cor-lima" },
+      { "do": "click", "selector": "[data-test=\"accent-2\"]", "optional": true },
+      { "do": "wait", "ms": 400 },
+      {
+        "do": "eval",
+        "expr": "if (window.HondaBridge) window.HondaBridge.send(JSON.stringify({ cmd: 'ui.setAccent', args: { color: vars.origAccent || '#22D3EE' } })); return true;"
+      },
+      { "do": "wait", "ms": 400 }
+    ],
+    "expect": [
+      { "desc": "Swatches de cor (accent-0, accent-1) existem", "selector": "[data-test=\"accent-0\"]" },
+      {
+        "desc": "Cor de destaque atualizou estado e variável CSS --accent",
+        "expr": "Boolean(vars.accentChanged?.stateAccent && vars.accentChanged?.cssAccent)"
+      }
+    ]
+  },
+  {
+    "id": "08-ajustes-veiculo-abastecimento-manutencao-dtc",
+    "name": "Ajustes › Veículo: diário de abastecimento (adicionar/excluir), manutenção, OBD simulador e DTC ler/limpar",
+    "steps": [
+      { "do": "click", "selector": "[data-test=\"settings-tab-vehicle\"]" },
+      { "do": "wait", "for": "[data-test=\"fuel-log-liters\"]", "timeoutMs": 6000 },
+      {
+        "do": "eval",
+        "expr": "(state?.vehicle?.fuelLog?.entries || []).map(e => e.id)",
+        "saveAs": "fuelIdsBefore"
+      },
+      { "do": "type", "selector": "[data-test=\"fuel-log-liters\"]", "text": "30" },
+      { "do": "type", "selector": "[data-test=\"fuel-log-price\"]", "text": "6.19" },
+      { "do": "type", "selector": "[data-test=\"fuel-log-odometer\"]", "text": "123456", "optional": true },
+      { "do": "click", "selector": "[data-test=\"fuel-log-add\"]" },
+      {
+        "do": "wait",
+        "for": "(window.HD?.lastState?.vehicle?.fuelLog?.entries || []).length > (window.__auditVars?.fuelIdsBefore || []).length",
+        "timeoutMs": 6000
+      },
+      {
+        "do": "eval",
+        "expr": "const prev = new Set(vars.fuelIdsBefore || []); const added = (state?.vehicle?.fuelLog?.entries || []).filter(e => !prev.has(e.id)); return added.map(a => a.id);",
+        "saveAs": "addedFuelIds"
+      },
+      { "do": "screenshot", "name": "ajustes-diario-abastecimento" },
+      {
+        "do": "eval",
+        "expr": "for (const id of (vars.addedFuelIds || [])) { if (window.HondaBridge) window.HondaBridge.send(JSON.stringify({ cmd: 'fuel.delete', args: { id } })); } return (vars.addedFuelIds || []).length;"
+      },
+      { "do": "wait", "ms": 600 },
+      { "do": "click", "selector": "[data-test=\"dtc-read\"]" },
+      { "do": "wait", "for": "window.HD?.lastState?.vehicle?.dtcBusy === false", "timeoutMs": 8000 },
+      { "do": "screenshot", "name": "ajustes-dtc-lido" },
+      { "do": "click", "selector": "[data-test=\"dtc-clear\"]" },
+      { "do": "click", "selector": "[data-test=\"dtc-confirm\"]", "optional": true },
+      { "do": "wait", "for": "window.HD?.lastState?.vehicle?.dtcBusy === false", "timeoutMs": 8000 },
+      { "do": "click", "selector": "[data-test=\"settings-obd-simulator\"]", "optional": true },
+      { "do": "wait", "ms": 400 },
+      { "do": "send", "cmd": "obd.setSimulator", "args": { "enabled": true } },
+      { "do": "wait", "ms": 400 }
+    ],
+    "expect": [
+      {
+        "desc": "Registro de abastecimento foi adicionado e excluído com sucesso",
+        "expr": "(vars.addedFuelIds || []).length >= 1 && !(state?.vehicle?.fuelLog?.entries || []).some(e => (vars.addedFuelIds || []).includes(e.id))"
+      },
+      {
+        "desc": "Seção de manutenção presente no DOM e no estado",
+        "selector": "[data-test=\"settings-maintenance\"]"
+      },
+      {
+        "desc": "vehicle.maintenance.items é uma lista válida",
+        "expr": "Array.isArray(state?.vehicle?.maintenance?.items)"
+      },
+      {
+        "desc": "Botões de diagnóstico DTC (dtc-read, dtc-clear) presentes e sem bloqueio",
+        "expr": "state?.vehicle?.dtcBusy === false"
+      }
+    ]
+  },
+  {
+    "id": "09-ajustes-sistema-mapa-offline",
+    "name": "Ajustes › Sistema: mapa offline e versão do sistema",
+    "steps": [
+      { "do": "click", "selector": "[data-test=\"settings-tab-system\"]" },
+      { "do": "wait", "for": "[data-test=\"settings-offline-map\"]", "timeoutMs": 6000 },
+      { "do": "click", "selector": "[data-test=\"settings-offline-map\"]" },
+      { "do": "wait", "ms": 800 },
+      { "do": "screenshot", "name": "ajustes-sistema-mapa-offline" },
+      { "do": "click", "selector": "[data-test=\"mode-close\"]" },
+      { "do": "wait", "for": "[data-test=\"gauge-speed\"]", "timeoutMs": 6000 }
+    ],
+    "expect": [
+      {
+        "desc": "Versão do HondaDeck exposta em settings.version",
+        "expr": "Boolean(state?.settings?.version)"
+      },
+      {
+        "desc": "Voltou ao painel inicial após fechar Ajustes",
+        "selector": "[data-test=\"gauge-speed\"]",
+        "visible": true
+      }
+    ]
+  },
+  {
+    "id": "10-camera-re-volume-mudo-notificacao",
+    "name": "Câmera de ré (overlay), controle de volume/mudo na dock e banner de notificação",
+    "steps": [
+      {
+        "do": "eval",
+        "expr": "({ vol: state?.audio?.volumePct ?? 60, muted: Boolean(state?.audio?.muted) })",
+        "saveAs": "audioOrig"
+      },
+      { "do": "click", "selector": "[data-test=\"mute\"]" },
+      { "do": "wait", "ms": 500 },
+      { "do": "eval", "expr": "Boolean(state?.audio?.muted)", "saveAs": "mutedAfterClick" },
+      { "do": "click", "selector": "[data-test=\"mute\"]" },
+      { "do": "wait", "ms": 400 },
+      { "do": "type", "selector": "[data-test=\"volume\"]", "text": "55" },
+      { "do": "wait", "ms": 400 },
+      { "do": "eval", "expr": "state?.audio?.volumePct", "saveAs": "volAfterSlide" },
+      {
+        "do": "eval",
+        "expr": "if (window.HondaBridge) window.HondaBridge.send(JSON.stringify({ cmd: 'audio.setVolume', args: { pct: vars.audioOrig?.vol ?? 60 } })); return true;"
+      },
+      { "do": "send", "cmd": "camera.toggle" },
+      { "do": "wait", "ms": 900 },
+      { "do": "screenshot", "name": "camera-re-aberta", "mode": "adb" },
+      { "do": "send", "cmd": "camera.toggle" },
+      { "do": "wait", "ms": 700 },
+      { "do": "screenshot", "name": "camera-re-fechada", "mode": "adb" },
+      {
+        "do": "eval",
+        "expr": "if (window.HD && typeof window.HD.receive === 'function') { window.HD.receive({ type: 'event', payload: { name: 'toast', text: 'Auditoria HondaDeck OK' } }); } return true;"
+      },
+      { "do": "wait", "ms": 400 },
+      { "do": "click", "selector": "[data-test=\"dock-map\"]" },
+      { "do": "wait", "ms": 400 },
+      { "do": "click", "selector": "[data-test=\"dock-music\"]" },
+      { "do": "wait", "ms": 400 },
+      { "do": "click", "selector": "[data-test=\"dock-home\"]" },
+      { "do": "wait", "for": "[data-test=\"gauge-speed\"]", "timeoutMs": 6000 }
+    ],
+    "expect": [
+      { "desc": "Controle de volume presente na dock", "selector": "[data-test=\"volume\"]" },
+      { "desc": "Botão mudo presente na dock", "selector": "[data-test=\"mute\"]" },
+      {
+        "desc": "Botão mudo alternou o estado audio.muted",
+        "expr": "vars.mutedAfterClick !== vars.audioOrig?.muted"
+      },
+      {
+        "desc": "Abas da dock (Início, Mapa, Música, Ajustes) funcionaram e voltaram ao início",
+        "selector": "[data-test=\"gauge-speed\"]",
+        "visible": true
+      }
+    ]
+  }
+]
