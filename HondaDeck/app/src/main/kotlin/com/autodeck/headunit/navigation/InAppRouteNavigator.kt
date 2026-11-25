@@ -85,6 +85,23 @@ class InAppRouteNavigator(private val scope: CoroutineScope) {
         }
     }
 
+    /** Inicia rota diretamente para coordenadas conhecidas (favoritos, resultados de busca). */
+    fun startNavigationToPoint(label: String, dest: RoutePoint, from: RoutePoint) {
+        val cleanLabel = label.trim().ifBlank { "Destino" }
+        routeJob?.cancel()
+        destination = dest
+        _state.value = InAppRouteState(destinationLabel = cleanLabel, isLoading = true)
+        routeJob = scope.launch {
+            val result = runCatching { fetchRoute(from, dest) }
+            result.onSuccess { applyRoute(it, from) }
+                .onFailure { err ->
+                    _state.update {
+                        it.copy(isLoading = false, error = err.message ?: "Falha ao calcular rota")
+                    }
+                }
+        }
+    }
+
     fun stopNavigation() {
         routeJob?.cancel()
         destination = null

@@ -8,16 +8,20 @@ import com.autodeck.headunit.media.WhatsAppNotificationItem
 import com.autodeck.headunit.service.CameraDebugState
 import com.autodeck.headunit.service.HeadUnitRuntime
 import com.autodeck.headunit.service.HeadUnitUiState
+import com.autodeck.headunit.service.WebBridgeEvent
+import com.autodeck.headunit.web.WebResourceRouter
 import com.autodeck.protocol.coordinator.MainTab
 import com.autodeck.protocol.obd2.TransmissionType
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import org.osmdroid.views.MapView
 
 class HeadUnitViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val runtime = HeadUnitRuntime.get(application)
+    val runtime: HeadUnitRuntime = HeadUnitRuntime.get(application)
 
     val uiState: StateFlow<HeadUnitUiState> = runtime.uiState
+    val webEvents: SharedFlow<WebBridgeEvent> = runtime.webEvents
+    val tileRouter: WebResourceRouter = runtime.tileRouter
     val cameraDebug: StateFlow<CameraDebugState> = runtime.cameraDebug
 
     fun setAppForeground(inForeground: Boolean) = runtime.setAppForeground(inForeground)
@@ -40,14 +44,30 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
     fun seekMusicTo(posMs: Long) = runtime.seekMusicTo(posMs)
     fun openPreferredMusicApp(): Boolean = runtime.openPreferredMusicApp()
     fun setMasterVolumePct(pct: Int) = runtime.setMasterVolumePct(pct)
+    fun toggleAudioMute() = runtime.toggleAudioMute()
 
     // Navegação & Mapa Offline
     fun openPreferredMapApp(): Boolean = runtime.openPreferredMapApp()
     fun navigateToDestination(destination: String): Boolean = runtime.navigateToDestination(destination)
+    fun searchPlaces(query: String) = runtime.searchPlaces(query)
+    fun routeToPlace(name: String, lat: Double?, lon: Double?): Boolean = runtime.routeToPlace(name, lat, lon)
+    fun saveFavoritePlace(
+        id: String?,
+        name: String,
+        address: String,
+        lat: Double?,
+        lon: Double?,
+        voice: String?,
+        icon: String?
+    ) = runtime.saveFavoritePlace(id, name, address, lat, lon, voice, icon)
+    fun deleteFavoritePlace(id: String) = runtime.deleteFavoritePlace(id)
+    fun saveCurrentLocationAsFavorite(name: String, voice: String?, icon: String?) =
+        runtime.saveCurrentLocationAsFavorite(name, voice, icon)
     fun stopInAppNavigation() = runtime.stopInAppNavigation()
     fun navigateExternally(destination: String): Boolean = runtime.navigateExternally(destination)
     fun connectSpotify(activityContext: android.content.Context) = runtime.connectSpotify(activityContext)
     fun spotifyToggleShuffle() { runtime.spotifyToggleShuffle() }
+    fun spotifyToggleLike() { runtime.spotifyToggleLike() }
     fun onSpotifyToken(token: String, expiresInSec: Int) = runtime.onSpotifyToken(token, expiresInSec)
     fun requestSpotifyWebAuth() = runtime.requestSpotifyWebAuth()
     fun refreshSpotifyPlaylists() = runtime.refreshSpotifyPlaylists()
@@ -57,8 +77,7 @@ class HeadUnitViewModel(application: Application) : AndroidViewModel(application
     fun onSpotifyAuthorized(activityContext: android.content.Context) = runtime.onSpotifyAuthorized(activityContext)
     fun onSpotifyAuthFailed(reason: String) = runtime.onSpotifyAuthFailed(reason)
     fun spotifyToggleRepeat() { runtime.spotifyToggleRepeat() }
-    fun downloadOfflineMap(mapView: MapView, radiusKm: Double = 8.0) =
-        runtime.downloadOfflineMap(mapView, radiusKm)
+    fun downloadOfflineMap(radiusKm: Double = 12.0) = runtime.downloadOfflineMap(radiusKm)
 
     // Agente Gemini & WhatsApp
     fun triggerVoiceAgent() = runtime.triggerVoiceAgent()

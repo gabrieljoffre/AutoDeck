@@ -11,6 +11,7 @@ import com.spotify.android.appremote.api.SpotifyAppRemote
 import com.spotify.android.appremote.api.error.UserNotAuthorizedException
 import com.spotify.protocol.types.Image
 import com.spotify.protocol.types.PlayerState
+import com.spotify.protocol.types.Repeat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +37,7 @@ class SpotifyRemoteBridge(
     private var remote: SpotifyAppRemote? = null
     private var lastImageUri: String? = null
     private var lastCover: Bitmap? = null
+    private var lastTrackUri: String? = null
 
     private val _status = MutableStateFlow(
         if (isConfigured) SpotifyLinkStatus.CONNECTING else SpotifyLinkStatus.NOT_CONFIGURED
@@ -72,6 +74,12 @@ class SpotifyRemoteBridge(
                 remote = appRemote
                 _status.value = SpotifyLinkStatus.CONNECTED
                 appRemote.playerApi.subscribeToPlayerState().setEventCallback { ps -> apply(ps) }
+                appRemote.playerApi.subscribeToPlayerContext().setEventCallback { ctx ->
+                    val title = ctx.title.orEmpty()
+                    if (title.isNotBlank()) {
+                        onState { copy(contextLabel = title) }
+                    }
+                }
             }
 
             override fun onFailure(throwable: Throwable) {
@@ -117,19 +125,42 @@ class SpotifyRemoteBridge(
     fun toggleShuffle() = remote?.playerApi?.toggleShuffle()
     fun toggleRepeat() = remote?.playerApi?.toggleRepeat()
 
+    fun toggleLike(trackUri: String, currentlyLiked: Boolean) {
+        val uri = trackUri.takeIf { it.isNotBlank() } ?: lastTrackUri ?: return
+        val userApi = remote?.userApi ?: return
+        val call = if (currentlyLiked) userApi.removeFromLibrary(uri) else userApi.addToLibrary(uri)
+        call.setResultCallback {
+            onState { copy(liked = !currentlyLiked) }
+        }
+    }
+
     private fun apply(ps: PlayerState) {
         val track = ps.track ?: return
         val imageUri = track.imageUri?.raw
         val cover = if (imageUri == lastImageUri) lastCover else null
+        val uri = track.uri.orEmpty()
+        val repeatStr = when (ps.playbackOptions?.repeatMode) {
+            Repeat.ONE -> "one"
+            Repeat.ALL -> "all"
+            else -> "off"
+        }
+        val shuffling = ps.playbackOptions?.isShuffling == true
         onState {
+            val coverChanged = (cover != null) != hasCover || (cover != null && uri != trackUri)
+            val nextCoverVer = if (coverChanged) coverVersion + 1 else coverVersion
             copy(
                 title = track.name.orEmpty(),
                 artist = track.artist?.name.orEmpty(),
                 album = track.album?.name.orEmpty(),
                 coverBitmap = cover,
+                hasCover = cover != null,
+                coverVersion = nextCoverVer,
                 isPlaying = !ps.isPaused,
                 positionMs = ps.playbackPosition,
                 durationMs = track.duration,
+                shuffle = shuffling,
+                repeatMode = repeatStr,
+                trackUri = uri,
                 activePackage = "com.spotify.music",
                 appLabel = "Spotify",
                 hasActiveTrack = true,
@@ -137,11 +168,17 @@ class SpotifyRemoteBridge(
                 lastUpdatedAtElapsedMs = SystemClock.elapsedRealtime()
             )
         }
+        if (uri.isNotBlank() && uri != lastTrackUri) {
+            lastTrackUri = uri
+            remote?.userApi?.getLibraryState(uri)?.setResultCallback { ls ->
+                onState { copy(liked = ls.isAdded) }
+            }
+        }
         if (imageUri != null && imageUri != lastImageUri) {
             lastImageUri = imageUri
             remote?.imagesApi?.getImage(track.imageUri, Image.Dimension.LARGE)?.setResultCallback { bmp ->
                 lastCover = bmp
-                onState { copy(coverBitmap = bmp) }
+                onState { copy(coverBitmap = bmp, hasCover = bmp != null, coverVersion = coverVersion + 1) }
             }
         }
     }

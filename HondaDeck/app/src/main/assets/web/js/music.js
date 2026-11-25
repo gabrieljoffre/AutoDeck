@@ -266,13 +266,14 @@ function renderHomeDropdown() {
     dropdown.appendChild(el('div', { className: 'dropdown-item' }, el('span', { className: 'dropdown-item-texts' }, el('span', { className: 'dropdown-item-title' }, 'Nada encontrado'))));
   }
   if (searchMatches(q) && !s.loading) {
-    for (const item of items) {
+    items.forEach((item, idx) => {
       dropdown.appendChild(
         el(
           'button',
           {
             className: 'dropdown-item',
             type: 'button',
+            'data-test': `music-result-${idx}`,
             onClick: () => {
               input.value = '';
               homeFocused = false;
@@ -290,15 +291,17 @@ function renderHomeDropdown() {
           el('span', { className: 'dropdown-item-meta' }, KIND_LABEL[String(item.kind || '').toUpperCase()] || '')
         )
       );
-    }
+    });
   }
   dropdown.classList.remove('hidden');
 }
 
-function sectionBox(title, list) {
+function sectionBox(title, list, nextIdx) {
   const box = el('div', { className: 'search-sec-box' }, el('span', { className: 'section-kicker' }, title));
   for (const item of list.slice(0, 5)) {
-    box.appendChild(recentRow(item));
+    const row = recentRow(item);
+    if (nextIdx) row.setAttribute('data-test', `music-result-${nextIdx()}`);
+    box.appendChild(row);
   }
   return box;
 }
@@ -373,10 +376,12 @@ function renderFullSearch() {
     ['PLAYLISTS', s.playlists]
   ];
   let any = false;
+  let resultIdx = 0;
+  const nextIdx = () => resultIdx++;
   for (const [title, list] of defs) {
     if (Array.isArray(list) && list.length) {
       any = true;
-      sections.appendChild(sectionBox(title, list));
+      sections.appendChild(sectionBox(title, list, nextIdx));
     }
   }
   if (!any) sections.appendChild(el('span', { className: 'settings-sub' }, 'Nada encontrado para essa busca.'));

@@ -188,6 +188,15 @@ class GpsNavigationTracker(
         }
     }
 
+    fun updateOfflineStatus(downloading: Boolean, status: String) {
+        _state.update {
+            it.copy(
+                offlineDownloading = downloading,
+                offlineDownloadStatus = status
+            )
+        }
+    }
+
     fun downloadOfflineRegionAroundCurrentPosition(mapView: MapView, radiusKm: Double = 6.0) {
         if (_state.value.offlineDownloading) return
         val cur = _state.value

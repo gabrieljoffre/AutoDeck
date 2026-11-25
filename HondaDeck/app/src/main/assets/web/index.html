@@ -38,7 +38,7 @@
         </div>
       </div>
 
-      <button id="top-logo-btn" class="top-logo-btn" type="button" aria-label="Logo da marca (tocar animação)">
+      <button id="top-logo-btn" class="top-logo-btn" type="button" data-test="intro" aria-label="Logo da marca (tocar animação)">
         <span id="top-emblem" class="top-emblem">H</span>
         <span id="top-brand-letters" class="top-brand-letters"></span>
       </button>
@@ -73,7 +73,7 @@
         <div class="card map-home-card">
           <div class="map-home-viewport-wrap">
             <div id="home-map-slot" class="leaflet-slot"></div>
-            <button id="home-map-tap" class="map-tap-shield" type="button" aria-label="Abrir navegação em tela grande"></button>
+            <button id="home-map-tap" class="map-tap-shield" type="button" data-test="map-card" aria-label="Abrir navegação em tela grande"></button>
 
             <!-- Barra de busca rápida no cartão -->
             <div class="map-home-searchbar">
@@ -83,7 +83,7 @@
                   <path d="M20 20l-4-4"></path>
                 </svg>
                 <span class="sr-only">Buscar local</span>
-                <input id="home-map-input" type="text" autocomplete="off" spellcheck="false" placeholder="Buscar local">
+                <input id="home-map-input" type="text" data-test="map-search" autocomplete="off" spellcheck="false" placeholder="Buscar local">
                 <button id="home-map-clear" class="icon-clear-btn hidden" type="button" aria-label="Limpar busca">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
                 </button>
@@ -137,16 +137,16 @@
             <div id="gauge-rpm-labels" class="gauge-labels-layer" aria-hidden="true"></div>
 
             <div class="gauge-center-readout">
-              <span id="gauge-speed-text" class="gauge-speed-num">0</span>
+              <span id="gauge-speed-text" class="gauge-speed-num" data-test="gauge-speed">0</span>
               <span class="gauge-speed-unit">KM/H</span>
-              <span id="gauge-rpm-text" class="gauge-rpm-num">0.0 ×1000 RPM</span>
+              <span id="gauge-rpm-text" class="gauge-rpm-num" data-test="gauge-rpm">0.0 ×1000 RPM</span>
             </div>
 
             <div id="gauge-gears" class="gauge-gears" aria-label="Marcha atual"></div>
           </div>
 
           <!-- Combustível -->
-          <div class="fuel-bar-row" aria-label="Nível de combustível">
+          <div class="fuel-bar-row" data-test="fuel" aria-label="Nível de combustível">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#F43F5E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Tanque vazio">
               <path d="M4 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16M3 21h12M14 8l3 2v8a1.5 1.5 0 0 0 3 0V9l-3-3"></path>
               <path d="M7 7h4"></path>
@@ -169,7 +169,7 @@
               <label class="search-field music-card-search-label">
                 <span class="spotify-dot" aria-hidden="true"></span>
                 <span class="sr-only">Buscar música no Spotify</span>
-                <input id="home-music-input" type="text" autocomplete="off" spellcheck="false" placeholder="Buscar no Spotify">
+                <input id="home-music-input" type="text" data-test="music-search" autocomplete="off" spellcheck="false" placeholder="Buscar no Spotify">
                 <button id="home-music-clear" class="icon-clear-btn hidden" type="button" aria-label="Limpar busca">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
                 </button>
@@ -178,7 +178,7 @@
                   <path d="M20 20l-4-4"></path>
                 </svg>
               </label>
-              <button id="home-music-expand-btn" class="square-icon-btn subtle" type="button" aria-label="Abrir Spotify">
+              <button id="home-music-expand-btn" class="square-icon-btn subtle" type="button" data-test="music-card" aria-label="Abrir Spotify">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#E8EEF6" stroke-width="2" stroke-linecap="round" aria-hidden="true">
                   <path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"></path>
                 </svg>
@@ -219,13 +219,13 @@
               </div>
 
               <div class="transport-row-home">
-                <button id="home-prev-btn" class="transport-circle-btn" type="button" aria-label="Faixa anterior">
+                <button id="home-prev-btn" class="transport-circle-btn" type="button" data-test="music-prev" aria-label="Faixa anterior">
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="#E8EEF6" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"></path></svg>
                 </button>
-                <button id="home-play-btn" class="transport-play-btn" type="button" aria-label="Tocar ou pausar">
+                <button id="home-play-btn" class="transport-play-btn" type="button" data-test="music-toggle" aria-label="Tocar ou pausar">
                   <svg id="home-play-icon" width="24" height="24" viewBox="0 0 24 24" fill="#06090F" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
                 </button>
-                <button id="home-next-btn" class="transport-circle-btn" type="button" aria-label="Próxima faixa">
+                <button id="home-next-btn" class="transport-circle-btn" type="button" data-test="music-next" aria-label="Próxima faixa">
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="#E8EEF6" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"></path></svg>
                 </button>
               </div>
@@ -274,12 +274,12 @@
                 <path d="M20 20l-4-4"></path>
               </svg>
               <span class="sr-only">Para onde vamos?</span>
-              <input id="full-map-input" type="text" autocomplete="off" spellcheck="false" placeholder="Para onde vamos?">
+              <input id="full-map-input" type="text" data-test="map-search" autocomplete="off" spellcheck="false" placeholder="Para onde vamos?">
               <button id="full-map-clear" class="icon-clear-btn hidden" type="button" aria-label="Limpar busca">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
               </button>
             </label>
-            <button id="map-close-btn" class="close-hero-btn large" type="button" aria-label="Fechar e voltar ao painel">
+            <button id="map-close-btn" class="close-hero-btn large" type="button" data-test="mode-close" aria-label="Fechar e voltar ao painel">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E8EEF6" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
                 <path d="M6 6l12 12M18 6L6 18"></path>
               </svg>
@@ -335,7 +335,7 @@
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7M10 14L21 3M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6"></path></svg>
                 Google Maps
               </button>
-              <button id="map-stop-route-btn" class="hud-action-btn danger" type="button" aria-label="Encerrar rota">
+              <button id="map-stop-route-btn" class="hud-action-btn danger" type="button" data-test="route-stop" aria-label="Encerrar rota">
                 Encerrar rota
               </button>
             </div>
@@ -450,12 +450,12 @@
                 <path d="M20 20l-4-4"></path>
               </svg>
               <span class="sr-only">Buscar no Spotify</span>
-              <input id="full-music-input" type="text" autocomplete="off" spellcheck="false" placeholder="Músicas, artistas, podcasts">
+              <input id="full-music-input" type="text" data-test="music-search" autocomplete="off" spellcheck="false" placeholder="Músicas, artistas, podcasts">
               <button id="full-music-clear" class="icon-clear-btn hidden" type="button" aria-label="Limpar busca">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
               </button>
             </label>
-            <button id="music-close-btn" class="close-hero-btn" type="button" aria-label="Fechar e voltar ao painel">
+            <button id="music-close-btn" class="close-hero-btn" type="button" data-test="mode-close" aria-label="Fechar e voltar ao painel">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E8EEF6" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
                 <path d="M6 6l12 12M18 6L6 18"></path>
               </svg>
@@ -496,13 +496,13 @@
                     <button id="full-shuffle-btn" class="aux-media-btn" type="button" aria-label="Aleatório" title="Aleatório">
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"></path></svg>
                     </button>
-                    <button id="full-prev-btn" class="transport-circle-btn sm" type="button" aria-label="Faixa anterior">
+                    <button id="full-prev-btn" class="transport-circle-btn sm" type="button" data-test="music-prev" aria-label="Faixa anterior">
                       <svg width="24" height="24" viewBox="0 0 24 24" fill="#E8EEF6"><path d="M6 5h2v14H6zM20 5v14L9 12z"></path></svg>
                     </button>
-                    <button id="full-play-btn" class="transport-play-btn md" type="button" aria-label="Tocar ou pausar">
+                    <button id="full-play-btn" class="transport-play-btn md" type="button" data-test="music-toggle" aria-label="Tocar ou pausar">
                       <svg id="full-play-icon" width="24" height="24" viewBox="0 0 24 24" fill="#06090F"><path d="M8 5v14l11-7z"></path></svg>
                     </button>
-                    <button id="full-next-btn" class="transport-circle-btn sm" type="button" aria-label="Próxima faixa">
+                    <button id="full-next-btn" class="transport-circle-btn sm" type="button" data-test="music-next" aria-label="Próxima faixa">
                       <svg width="24" height="24" viewBox="0 0 24 24" fill="#E8EEF6"><path d="M16 5h2v14h-2zM4 5v14l11-7z"></path></svg>
                     </button>
                     <button id="full-like-btn" class="aux-media-btn" type="button" aria-label="Curtir" title="Curtir">
@@ -534,10 +534,10 @@
       </section>
 
       <!-- ===================== MODO AJUSTES (TELA CHEIA) ===================== -->
-      <section id="view-settings" class="mode-view settings-layout hidden" aria-label="Ajustes do sistema">
+      <section id="view-settings" class="mode-view settings-layout hidden" data-test="settings-panel" aria-label="Ajustes do sistema">
         <nav class="settings-nav" aria-label="Seções de ajustes">
           <div class="settings-nav-header">
-            <button id="settings-back-btn" class="close-hero-btn" type="button" aria-label="Voltar ao painel">
+            <button id="settings-back-btn" class="close-hero-btn" type="button" data-test="mode-close" aria-label="Voltar ao painel">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#E8EEF6" stroke-width="2.2" stroke-linecap="round">
                 <path d="M6 6l12 12M18 6L6 18"></path>
               </svg>
@@ -545,27 +545,27 @@
             <span class="settings-nav-title">AJUSTES</span>
           </div>
 
-          <button class="settings-tab-btn" type="button" data-settings-tab="appearance">
+          <button class="settings-tab-btn" type="button" data-settings-tab="appearance" data-test="settings-tab-appearance">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"></path></svg>
             Aparência
           </button>
-          <button class="settings-tab-btn active" type="button" data-settings-tab="favorites">
+          <button class="settings-tab-btn active" type="button" data-settings-tab="favorites" data-test="settings-tab-favorites">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6-7-11a7 7 0 0 1 14 0c0 5-7 11-7 11z"></path><circle cx="12" cy="10" r="2.5"></circle></svg>
             Locais favoritos
           </button>
-          <button class="settings-tab-btn" type="button" data-settings-tab="spotify">
+          <button class="settings-tab-btn" type="button" data-settings-tab="spotify" data-test="settings-tab-spotify">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
             Spotify
           </button>
-          <button class="settings-tab-btn" type="button" data-settings-tab="copilot">
+          <button class="settings-tab-btn" type="button" data-settings-tab="copilot" data-test="settings-tab-copilot">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>
             Copiloto (voz)
           </button>
-          <button class="settings-tab-btn" type="button" data-settings-tab="vehicle">
+          <button class="settings-tab-btn" type="button" data-settings-tab="vehicle" data-test="settings-tab-vehicle">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H3v-5l2-5h14l2 5v5h-2M5 12h14"></path><circle cx="7.5" cy="17" r="2"></circle><circle cx="16.5" cy="17" r="2"></circle></svg>
             Veículo
           </button>
-          <button class="settings-tab-btn" type="button" data-settings-tab="system">
+          <button class="settings-tab-btn" type="button" data-settings-tab="system" data-test="settings-tab-system">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>
             Sistema
           </button>
@@ -580,7 +580,7 @@
     <!-- DOCK INFERIOR (visível em home, map, music) -->
     <footer id="dock-bar" class="dock-bar">
       <div class="dock-left">
-        <button id="dock-copilot-btn" class="copilot-pill-btn" type="button" aria-label="Falar com o copiloto">
+        <button id="dock-copilot-btn" class="copilot-pill-btn" type="button" data-test="dock-copilot" aria-label="Falar com o copiloto">
           <span class="copilot-mic-circle">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#06090F" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
               <rect x="9" y="3" width="6" height="11" rx="3"></rect>
@@ -593,16 +593,16 @@
 
       <div class="dock-center">
         <div class="dock-tabs" role="tablist" aria-label="Modos do painel">
-          <button id="dock-tab-home" class="dock-tab active" type="button" role="tab" aria-selected="true" aria-label="Início" data-mode-tab="home">
+          <button id="dock-tab-home" class="dock-tab active" type="button" role="tab" aria-selected="true" aria-label="Início" data-mode-tab="home" data-test="dock-home">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7M5 10v10h14V10"></path></svg>
           </button>
-          <button id="dock-tab-map" class="dock-tab" type="button" role="tab" aria-selected="false" aria-label="Mapa" data-mode-tab="map">
+          <button id="dock-tab-map" class="dock-tab" type="button" role="tab" aria-selected="false" aria-label="Mapa" data-mode-tab="map" data-test="dock-map">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14"></path></svg>
           </button>
-          <button id="dock-tab-music" class="dock-tab" type="button" role="tab" aria-selected="false" aria-label="Música" data-mode-tab="music">
+          <button id="dock-tab-music" class="dock-tab" type="button" role="tab" aria-selected="false" aria-label="Música" data-mode-tab="music" data-test="dock-music">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
           </button>
-          <button id="dock-tab-settings" class="dock-tab" type="button" role="tab" aria-selected="false" aria-label="Ajustes" data-mode-tab="settings">
+          <button id="dock-tab-settings" class="dock-tab" type="button" role="tab" aria-selected="false" aria-label="Ajustes" data-mode-tab="settings" data-test="dock-settings">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"></path></svg>
           </button>
         </div>
@@ -610,7 +610,7 @@
 
       <div class="dock-right">
         <div class="volume-capsule">
-          <button id="dock-mute-btn" class="mute-circle-btn" type="button" aria-label="Silenciar ou reativar o som">
+          <button id="dock-mute-btn" class="mute-circle-btn" type="button" data-test="mute" aria-label="Silenciar ou reativar o som">
             <svg id="dock-vol-svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 9h4l5-4v14l-5-4H4z"></path>
               <path d="M16.5 8.5a5 5 0 0 1 0 7M19.5 5.5a9 9 0 0 1 0 13"></path>
@@ -618,7 +618,7 @@
           </button>
           <label id="dock-vol-wrap" class="volume-slider-label">
             <span class="sr-only">Volume</span>
-            <input id="dock-vol-slider" type="range" min="0" max="100" value="60">
+            <input id="dock-vol-slider" type="range" min="0" max="100" value="60" data-test="volume">
           </label>
           <span id="dock-vol-label" class="volume-pct-label">60</span>
         </div>

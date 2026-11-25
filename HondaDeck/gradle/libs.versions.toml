@@ -8,6 +8,8 @@ activityCompose = "1.10.1"
 composeBom = "2025.05.00"
 junit = "4.13.2"
 osmdroid = "6.1.18"
+webkit = "1.12.1"
+orgJson = "20240303"
 
 [libraries]
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -25,6 +27,8 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -48,10 +48,17 @@ data class MediaPlaybackState(
     val title: String = "Toque para tocar no Spotify",
     val artist: String = "Nenhuma faixa ativa",
     val album: String = "",
+    val contextLabel: String = "",
     val coverBitmap: Bitmap? = null,
+    val hasCover: Boolean = false,
+    val coverVersion: Long = 0L,
     val isPlaying: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
+    val shuffle: Boolean = false,
+    val repeatMode: String = "off",
+    val liked: Boolean = false,
+    val trackUri: String = "",
     val activePackage: String = "com.spotify.music",
     val appLabel: String = "Spotify",
     val hasNotificationAccess: Boolean = false,
@@ -146,11 +153,16 @@ class MediaAndNotificationController private constructor(private val appContext:
                             _mediaState.value.artist == artist.ifBlank { preferredMusicLabel }
                         val cachedArt = artworkCache[artCacheKey(track, artist)]
                         _mediaState.update {
+                            val nextCover = if (isSameTrack) (it.coverBitmap ?: cachedArt) else cachedArt
+                            val coverChanged = (nextCover != null) != it.hasCover || (nextCover != null && !isSameTrack)
+                            val nextCoverVer = if (coverChanged) it.coverVersion + 1 else it.coverVersion
                             it.copy(
                                 title = track,
                                 artist = artist.ifBlank { preferredMusicLabel },
                                 album = album,
-                                coverBitmap = if (isSameTrack) (it.coverBitmap ?: cachedArt) else cachedArt,
+                                coverBitmap = nextCover,
+                                hasCover = nextCover != null,
+                                coverVersion = nextCoverVer,
                                 durationMs = if (lengthMs > 0L) lengthMs else it.durationMs,
                                 activePackage = if (intent.action?.startsWith("com.spotify") == true) {
                                     "com.spotify.music"
@@ -568,11 +580,16 @@ class MediaAndNotificationController private constructor(private val appContext:
         val label = resolveAppLabel(pkg)
 
         _mediaState.update {
+            val sameTrack = it.title == title && it.artist == artist && it.album == album
+            val coverChanged = (cover != null) != it.hasCover || (cover != null && !sameTrack)
+            val nextCoverVer = if (coverChanged) it.coverVersion + 1 else it.coverVersion
             it.copy(
                 title = title,
                 artist = artist,
                 album = album,
                 coverBitmap = cover,
+                hasCover = cover != null,
+                coverVersion = nextCoverVer,
                 isPlaying = isPlaying,
                 positionMs = position,
                 durationMs = duration,
@@ -619,7 +636,7 @@ class MediaAndNotificationController private constructor(private val appContext:
             artworkCache[key] = bmp
             _mediaState.update { cur ->
                 if (cur.title == track && cur.coverBitmap == null) {
-                    cur.copy(coverBitmap = bmp)
+                    cur.copy(coverBitmap = bmp, hasCover = true, coverVersion = cur.coverVersion + 1)
                 } else {
                     cur
                 }

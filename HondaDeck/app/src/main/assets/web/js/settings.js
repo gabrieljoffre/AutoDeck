@@ -125,13 +125,16 @@ function textInput(attrs = {}) {
 }
 
 /** Botão com confirmação inline em dois toques. */
-function confirmButton(label, confirmLabel, className, onConfirm) {
+function confirmButton(label, confirmLabel, className, onConfirm, testIds = null) {
   let timer = null;
-  const btn = el('button', { className, type: 'button' }, label);
+  const attrs = { className, type: 'button' };
+  if (testIds?.idle) attrs['data-test'] = testIds.idle;
+  const btn = el('button', attrs, label);
   const reset = () => {
     clearTimeout(timer);
     btn.textContent = label;
     btn.classList.remove('confirming');
+    if (testIds?.idle) btn.setAttribute('data-test', testIds.idle);
   };
   btn.addEventListener('click', () => {
     if (btn.classList.contains('confirming')) {
@@ -141,6 +144,7 @@ function confirmButton(label, confirmLabel, className, onConfirm) {
     }
     btn.classList.add('confirming');
     btn.textContent = confirmLabel;
+    if (testIds?.confirm) btn.setAttribute('data-test', testIds.confirm);
     timer = setTimeout(reset, 3500);
   });
   btn.resetConfirm = reset;
@@ -175,11 +179,12 @@ function buildAppearance(root) {
 
   reg(tabUpdaters, (s) => `${s.accent}|${jsonSig(s.settings.accentOptions)}`, (s) => {
     swatches.replaceChildren();
-    for (const c of s.settings.accentOptions) {
+    s.settings.accentOptions.forEach((c, idx) => {
       const selected = String(c).toLowerCase() === String(s.accent).toLowerCase();
       const btn = el('button', {
         className: 'swatch-btn',
         type: 'button',
+        'data-test': `accent-${idx}`,
         'aria-label': `Cor ${SWATCH_NAMES[String(c).toUpperCase()] || c}`,
         'aria-pressed': selected ? 'true' : 'false',
         onClick: () => onAccent && onAccent(c)
@@ -187,7 +192,7 @@ function buildAppearance(root) {
       btn.style.background = c;
       btn.style.boxShadow = selected ? `0 0 0 3px #06090F, 0 0 0 5px ${c}` : 'none';
       swatches.appendChild(btn);
-    }
+    });
   });
   reg(tabUpdaters, (s) => s.settings.introMode, (s) => {
     const video = String(s.settings.introMode).toUpperCase() === 'VIDEO';
@@ -202,13 +207,13 @@ function buildAppearance(root) {
 
 function buildFavorites(root) {
   const countLabel = el('span', { className: 'settings-sub', style: "font-family:'Chakra Petch',sans-serif" }, '');
-  const list = el('div', { style: 'display:flex;flex-direction:column;gap:10px' });
+  const list = el('div', { 'data-test': 'fav-list', style: 'display:flex;flex-direction:column;gap:10px' });
   let editing = null; // favorito em edição
   let icon = 'star';
 
-  const nameIn = textInput({ placeholder: 'Ex.: Academia' });
-  const addrIn = textInput({ placeholder: 'Buscar endereço ou usar posição atual' });
-  const voiceIn = textInput({ placeholder: 'Ex.: ir para a academia' });
+  const nameIn = textInput({ placeholder: 'Ex.: Academia', 'data-test': 'fav-name' });
+  const addrIn = textInput({ placeholder: 'Buscar endereço ou usar posição atual', 'data-test': 'fav-address' });
+  const voiceIn = textInput({ placeholder: 'Ex.: ir para a academia', 'data-test': 'fav-voice' });
   const formTitle = kicker('ADICIONAR NOVO LOCAL');
   const iconRow = el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' });
   const cancelBtn = el('button', { className: 'btn-outline hidden', type: 'button' }, 'Cancelar edição');
@@ -302,8 +307,8 @@ function buildFavorites(root) {
         'div',
         { style: 'display:flex;gap:10px;justify-content:flex-end' },
         cancelBtn,
-        el('button', { className: 'btn-outline', type: 'button', onClick: useCurrent }, 'Usar local atual'),
-        el('button', { className: 'btn-accent-sm', type: 'button', style: 'padding:0 22px', onClick: save }, 'Salvar favorito')
+        el('button', { className: 'btn-outline', type: 'button', 'data-test': 'fav-use-current', onClick: useCurrent }, 'Usar local atual'),
+        el('button', { className: 'btn-accent-sm', type: 'button', 'data-test': 'fav-save', style: 'padding:0 22px', onClick: save }, 'Salvar favorito')
       )
     )
   );
@@ -315,12 +320,12 @@ function buildFavorites(root) {
     if (!favs.length) {
       list.appendChild(el('span', { className: 'settings-sub', style: 'padding:10px 4px' }, 'Nenhum local favorito ainda. Adicione abaixo.'));
     }
-    for (const fav of favs) {
+    favs.forEach((fav, idx) => {
       const ini = String(fav.name || '?').trim().charAt(0).toUpperCase() || '?';
       list.appendChild(
         el(
           'div',
-          { className: 'fav-list-row' },
+          { className: 'fav-list-row', 'data-test': `fav-item-${idx}` },
           el('span', { className: 'fav-ini-box' }, ini),
           el(
             'span',
@@ -329,14 +334,14 @@ function buildFavorites(root) {
             el('span', { className: 'settings-sub', style: 'font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, fav.address || 'Endereço não informado')
           ),
           fav.voice ? el('span', { className: 'settings-sub', style: 'font-size:12px;letter-spacing:1px;white-space:nowrap' }, `“${fav.voice}”`) : null,
-          el('button', { className: 'icon-action-48', type: 'button', 'aria-label': 'Editar local', onClick: () => startEdit(fav) }, iconSvg(ICON_EDIT)),
-          el('button', { className: 'icon-action-48 danger', type: 'button', 'aria-label': 'Remover local', onClick: () => {
+          el('button', { className: 'icon-action-48', type: 'button', 'data-test': `fav-edit-${idx}`, 'aria-label': 'Editar local', onClick: () => startEdit(fav) }, iconSvg(ICON_EDIT)),
+          el('button', { className: 'icon-action-48 danger', type: 'button', 'data-test': `fav-delete-${idx}`, 'aria-label': 'Remover local', onClick: () => {
             if (editing && editing.id === fav.id) resetForm();
             sendCommand('fav.delete', { id: fav.id });
           } }, iconSvg(ICON_TRASH))
         )
       );
-    }
+    });
   });
 }
 
@@ -516,6 +521,7 @@ function buildVehicle(root) {
   const connectBtn = el('button', { className: 'btn-accent-sm', type: 'button', onClick: () => sendCommand('obd.connect') }, 'Conectar');
   const disconnectBtn = el('button', { className: 'btn-outline', type: 'button', onClick: () => sendCommand('obd.disconnect') }, 'Desconectar');
   const simToggle = toggleRow('Modo simulador (sem adaptador)', () => sendCommand('obd.setSimulator', { enabled: !lastState?.vehicle.simulator }));
+  simToggle.node.setAttribute('data-test', 'settings-obd-simulator');
   const deviceSel = el('select', { className: 'hd-select', 'aria-label': 'Adaptador OBD pareado' });
   deviceSel.addEventListener('change', () => {
     if (deviceSel.value) sendCommand('obd.selectDevice', { address: deviceSel.value });
@@ -523,9 +529,9 @@ function buildVehicle(root) {
   const pidsGrid = el('div', { className: 'pids-grid' });
 
   // Falhas
-  const dtcList = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
-  const readBtn = el('button', { className: 'btn-outline', type: 'button', onClick: () => sendCommand('obd.readDtc') }, 'Ler falhas');
-  const clearBtn = confirmButton('Limpar falhas', 'Confirmar limpeza?', 'btn-danger', () => sendCommand('obd.clearDtc'));
+  const dtcList = el('div', { 'data-test': 'dtc-list', style: 'display:flex;flex-direction:column;gap:8px' });
+  const readBtn = el('button', { className: 'btn-outline', type: 'button', 'data-test': 'dtc-read', onClick: () => sendCommand('obd.readDtc') }, 'Ler falhas');
+  const clearBtn = confirmButton('Limpar falhas', 'Confirmar limpeza?', 'btn-danger', () => sendCommand('obd.clearDtc'), { idle: 'dtc-clear', confirm: 'dtc-confirm' });
 
   // Tanque
   const tankInfo = el('span', { style: "font-family:'Chakra Petch',sans-serif;font-size:20px;font-weight:600" }, '');
@@ -539,15 +545,16 @@ function buildVehicle(root) {
 
   // Diário de abastecimento
   const kpiGrid = el('div', { className: 'summary-kpi-grid' });
-  const fuelList = el('div', { style: 'display:flex;flex-direction:column;gap:8px;max-height:230px;overflow-y:auto' });
-  const litersIn = textInput({ inputmode: 'decimal', placeholder: 'Litros' });
-  const priceIn = textInput({ inputmode: 'decimal', placeholder: 'R$/L (opcional)' });
-  const kmIn = textInput({ inputmode: 'numeric', placeholder: 'Km do painel (opcional)' });
+  const fuelList = el('div', { 'data-test': 'fuel-log-list', style: 'display:flex;flex-direction:column;gap:8px;max-height:230px;overflow-y:auto' });
+  const litersIn = textInput({ inputmode: 'decimal', placeholder: 'Litros', 'data-test': 'fuel-log-liters' });
+  const priceIn = textInput({ inputmode: 'decimal', placeholder: 'R$/L (opcional)', 'data-test': 'fuel-log-price' });
+  const kmIn = textInput({ inputmode: 'numeric', placeholder: 'Km do painel (opcional)', 'data-test': 'fuel-log-odometer' });
   let fullTank = true;
   const fullToggle = toggleRow('Tanque cheio', () => {
     fullTank = !fullTank;
     fullToggle.set(fullTank);
   });
+  fullToggle.node.setAttribute('data-test', 'fuel-log-full');
   fullToggle.set(true);
   const logFuel = () => {
     const liters = parseDecimal(litersIn.value);
@@ -568,7 +575,7 @@ function buildVehicle(root) {
   };
 
   // Manutenção
-  const maintList = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
+  const maintList = el('div', { 'data-test': 'settings-maintenance', style: 'display:flex;flex-direction:column;gap:8px' });
 
   root.append(
     header('Veículo', 'Adaptador OBD-II, diagnóstico, tanque, diário de abastecimento e manutenção.'),
@@ -599,7 +606,7 @@ function buildVehicle(root) {
       fuelList,
       el('div', { className: 'form-grid-equal' }, field('Litros', litersIn), field('Preço por litro', priceIn)),
       el('div', { className: 'form-grid-equal' }, field('Quilometragem', kmIn), el('div', { style: 'display:flex;align-items:flex-end' }, fullToggle.node)),
-      el('div', { style: 'display:flex;justify-content:flex-end' }, el('button', { className: 'btn-accent-sm', type: 'button', onClick: logFuel }, 'Registrar abastecimento'))
+      el('div', { style: 'display:flex;justify-content:flex-end' }, el('button', { className: 'btn-accent-sm', type: 'button', 'data-test': 'fuel-log-add', onClick: logFuel }, 'Registrar abastecimento'))
     ),
     el('div', { className: 'settings-card-block' }, kicker('MANUTENÇÃO'), maintList)
   );
@@ -662,7 +669,7 @@ function buildVehicle(root) {
     fuelList.replaceChildren();
     const entries = s.vehicle.fuelLog.entries;
     if (!entries.length) fuelList.appendChild(el('span', { className: 'settings-sub' }, 'Nenhum abastecimento registrado.'));
-    for (const e of entries) {
+    entries.forEach((e, idx) => {
       fuelList.appendChild(
         el(
           'div',
@@ -673,10 +680,10 @@ function buildVehicle(root) {
             el('span', { style: 'font-size:15px;font-weight:600' }, `${fmtDate(e.date)} · ${fmtNum(e.liters, 1)} L${e.full ? ' · cheio' : ''}`),
             el('span', { className: 'settings-sub', style: 'font-size:13px' }, `${e.price ? `R$ ${fmtNum(e.price, 2)}/L` : 'sem preço'}${e.odometer ? ` · ${Math.round(e.odometer).toLocaleString('pt-BR')} km` : ''}`)
           ),
-          el('button', { className: 'icon-action-48 danger', type: 'button', 'aria-label': 'Excluir abastecimento', onClick: () => sendCommand('fuel.delete', { id: e.id }) }, iconSvg(ICON_TRASH))
+          el('button', { className: 'icon-action-48 danger', type: 'button', 'data-test': `fuel-log-delete-${idx}`, 'aria-label': 'Excluir abastecimento', onClick: () => sendCommand('fuel.delete', { id: e.id }) }, iconSvg(ICON_TRASH))
         )
       );
-    }
+    });
   });
   reg(tabUpdaters, (s) => jsonSig(s.vehicle.maintenance.items), (s) => {
     maintList.replaceChildren();
@@ -723,14 +730,14 @@ function buildSystem(root) {
       { className: 'settings-card-block' },
       kicker('MAPA OFFLINE'),
       el('span', { className: 'settings-sub' }, 'Baixa o mapa da região de Anápolis para uso sem internet.'),
-      el('div', { style: 'display:flex' }, el('button', { className: 'btn-outline', type: 'button', onClick: () => sendCommand('system.downloadOfflineMap') }, 'Baixar mapa offline'))
+      el('div', { style: 'display:flex' }, el('button', { className: 'btn-outline', type: 'button', 'data-test': 'settings-offline-map', onClick: () => sendCommand('system.downloadOfflineMap') }, 'Baixar mapa offline'))
     ),
     el(
       'div',
       { className: 'settings-card-block' },
       kicker('CÂMERA DE RÉ'),
       el('span', { className: 'settings-sub' }, 'Abre/fecha a câmera de ré para teste.'),
-      el('div', { style: 'display:flex' }, el('button', { className: 'btn-outline', type: 'button', onClick: () => sendCommand('camera.toggle') }, 'Testar câmera'))
+      el('div', { style: 'display:flex' }, el('button', { className: 'btn-outline', type: 'button', 'data-test': 'settings-camera-test', onClick: () => sendCommand('camera.toggle') }, 'Testar câmera'))
     ),
     el('div', { className: 'settings-card-block' }, kicker('VERSÃO'), version)
   );

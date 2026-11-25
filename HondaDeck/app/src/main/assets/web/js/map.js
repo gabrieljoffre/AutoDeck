@@ -161,7 +161,7 @@ function renderHomeDropdown() {
 
   // 2) Resultados de map.search.results
   const results = mp.search?.results || [];
-  for (const r of results.slice(0, 4)) {
+  results.slice(0, 4).forEach((r, idx) => {
     const dist = r.distanceKm != null
       ? formatKm(r.distanceKm)
       : (() => {
@@ -173,6 +173,7 @@ function renderHomeDropdown() {
       {
         className: 'dropdown-item',
         type: 'button',
+        'data-test': `map-result-${idx}`,
         onClick: () => {
           input.value = '';
           renderHomeDropdown();
@@ -189,7 +190,7 @@ function renderHomeDropdown() {
       el('span', { className: 'dropdown-item-meta' }, dist)
     );
     dropdown.appendChild(btn);
-  }
+  });
 
   // 3) Fallback: Buscar "x" no mapa -> map.route
   dropdown.appendChild(
@@ -270,7 +271,7 @@ function renderFullSearchResults() {
     listEl.appendChild(el('div', { className: 'settings-sub', style: 'padding: 12px 4px' }, 'Buscando locais próximos…'));
   }
 
-  for (const r of mp.search?.results || []) {
+  (mp.search?.results || []).forEach((r, idx) => {
     const dist = r.distanceKm != null
       ? formatKm(r.distanceKm)
       : (() => {
@@ -283,6 +284,7 @@ function renderFullSearchResults() {
         {
           className: 'place-row-btn',
           type: 'button',
+          'data-test': `map-result-${idx}`,
           onClick: () => {
             input.value = '';
             renderFullSearchResults();
@@ -299,7 +301,7 @@ function renderFullSearchResults() {
         el('span', { className: 'place-row-dist' }, dist)
       )
     );
-  }
+  });
 
   // Ação direta para rotear pelo texto digitado
   listEl.appendChild(

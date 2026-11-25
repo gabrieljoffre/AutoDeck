@@ -13,13 +13,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -32,9 +35,12 @@ import com.spotify.sdk.android.auth.AuthorizationRequest
 import com.spotify.sdk.android.auth.AuthorizationResponse
 import com.autodeck.headunit.ui.HeadUnitViewModel
 import com.autodeck.headunit.ui.screens.BootSplashOverlay
-import com.autodeck.headunit.ui.screens.HeadUnitScreen
+import com.autodeck.headunit.ui.screens.CriticalAlertBanner
+import com.autodeck.headunit.ui.screens.ReverseCameraOverlay
 import com.autodeck.headunit.ui.screens.SetupWizardScreen
+import com.autodeck.headunit.ui.screens.StandbyBlackOverlay
 import com.autodeck.headunit.ui.theme.AutoDeckTheme
+import com.autodeck.headunit.web.WebUiHost
 
 class MainActivity : ComponentActivity() {
 
@@ -84,10 +90,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             AutoDeckTheme {
                 val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-                var showBootSplash by rememberSaveable { mutableStateOf(true) }
+                var showBootSplash by rememberSaveable {
+                    mutableStateOf(uiState.config.introMode.equals("VIDEO", ignoreCase = true))
+                }
                 var lastHandledBootTrigger by rememberSaveable { mutableIntStateOf(0) }
 
                 val standbyActive = uiState.ignitionStatus.standbyActive
+                val isVideoIntro = uiState.config.introMode.equals("VIDEO", ignoreCase = true)
 
                 // Mantém tela acesa enquanto ligado e reduz brilho ao mínimo no Standby do Taramps
                 LaunchedEffect(standbyActive, uiState.headUnit.powerConnected) {
@@ -101,11 +110,11 @@ class MainActivity : ComponentActivity() {
                     window.attributes = attrs
                 }
 
-                // Ao ligar o Taramps novamente após standby, exibe splash Honda se configurado
-                LaunchedEffect(uiState.bootSplashTrigger) {
+                // Ao ligar o Taramps novamente após standby, exibe splash de vídeo só quando introMode == "VIDEO"
+                LaunchedEffect(uiState.bootSplashTrigger, isVideoIntro) {
                     if (uiState.bootSplashTrigger > lastHandledBootTrigger) {
                         lastHandledBootTrigger = uiState.bootSplashTrigger
-                        if (uiState.config.showBootSplashOnIgnition && !uiState.headUnit.isReverseOverlayVisible) {
+                        if (isVideoIntro && uiState.config.showBootSplashOnIgnition && !uiState.headUnit.isReverseOverlayVisible) {
                             showBootSplash = true
                         }
                     }
@@ -130,13 +139,54 @@ class MainActivity : ComponentActivity() {
                             onFinishSetup = { updated -> viewModel.completeSetup(updated) }
                         )
                     } else {
-                        HeadUnitScreen(
-                            uiState = uiState,
-                            viewModel = viewModel
+                        WebUiHost(
+                            runtime = viewModel.runtime,
+                            modifier = Modifier.fillMaxSize()
                         )
                     }
 
-                    if (showBootSplash && !uiState.headUnit.isReverseOverlayVisible && !standbyActive) {
+                    // Banner de alerta crítico OBD-II por cima da WebView
+                    val visibleAlert = uiState.headUnit.obdAlerts.firstOrNull {
+                        it.title != uiState.headUnit.dismissedAlertTitle
+                    }
+                    if (visibleAlert != null && !uiState.headUnit.isReverseOverlayVisible && !standbyActive) {
+                        CriticalAlertBanner(
+                            alert = visibleAlert,
+                            onDismiss = { viewModel.dismissCurrentAlert(visibleAlert.title) },
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 10.dp)
+                        )
+                    }
+
+                    // Overlay 100% tela cheia da Câmera de Ré (prioridade máxima)
+                    if (uiState.headUnit.isReverseOverlayVisible) {
+                        ReverseCameraOverlay(
+                            uiState = uiState,
+                            onAttachCameraSurface = { viewModel.attachCameraSurface(it) },
+                            onSelectCameraChannel = { viewModel.selectCameraChannel(it) },
+                            onSetCameraStandardNtsc = { viewModel.setCameraStandardNtsc(it) },
+                            onToggleMirror = {
+                                viewModel.updateConfig {
+                                    it.copy(guidelines = it.guidelines.copy(mirrorHorizontal = !it.guidelines.mirrorHorizontal))
+                                }
+                            },
+                            onToggleGuidelines = {
+                                viewModel.updateConfig {
+                                    it.copy(guidelines = it.guidelines.copy(enabled = !it.guidelines.enabled))
+                                }
+                            },
+                            onToggleSimulatedReverse = { viewModel.toggleSimulatedReverse() },
+                            onCloseManual = { viewModel.exitManualCameraPreview() }
+                        )
+                    } else if (standbyActive) {
+                        StandbyBlackOverlay(
+                            statusLabel = uiState.ignitionStatus.triggerDeviceLabel,
+                            onWakeUp = { viewModel.wakeFromStandbyManually() }
+                        )
+                    }
+
+                    if (isVideoIntro && showBootSplash && !uiState.headUnit.isReverseOverlayVisible && !standbyActive) {
                         BootSplashOverlay(
                             onFinished = { showBootSplash = false }
                         )
@@ -154,6 +204,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         viewModel.setAppForeground(true)
+        viewModel.connectSpotify(this)
     }
 
     override fun onResume() {

@@ -10,8 +10,11 @@ import com.autodeck.headunit.MainActivity
 import com.autodeck.headunit.agent.AgentUiState
 import com.autodeck.headunit.agent.CarAgentHostBridge
 import com.autodeck.headunit.agent.GeminiCarAgent
+import com.autodeck.headunit.data.FavoritePlace
+import com.autodeck.headunit.data.FavoritePlacesStore
 import com.autodeck.headunit.data.HeadUnitConfig
 import com.autodeck.headunit.data.HeadUnitPreferences
+import com.autodeck.headunit.data.RecentPlace
 import com.autodeck.headunit.hardware.AudioBtMonitor
 import com.autodeck.headunit.hardware.AudioRouteStatus
 import com.autodeck.headunit.hardware.BluetoothClassicObdTransport
@@ -39,7 +42,10 @@ import com.autodeck.headunit.navigation.GpsLocationState
 import com.autodeck.headunit.navigation.GpsNavigationTracker
 import com.autodeck.headunit.navigation.InAppRouteNavigator
 import com.autodeck.headunit.navigation.InAppRouteState
+import com.autodeck.headunit.navigation.PlaceSearch
+import com.autodeck.headunit.navigation.PlaceSearchState
 import com.autodeck.headunit.navigation.RoutePoint
+import com.autodeck.headunit.web.WebResourceRouter
 import com.autodeck.protocol.camera.LumaGrid
 import com.autodeck.protocol.camera.ReverseStateMachine
 import com.autodeck.protocol.camera.ReverseTimingConfig
@@ -75,14 +81,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.osmdroid.views.MapView
+import org.json.JSONArray
+
+data class WebBridgeEvent(
+    val name: String,
+    val text: String = "",
+    val mode: String = ""
+)
 
 data class CameraDebugState(
     val analysis: SignalAnalysis? = null,
@@ -117,12 +132,17 @@ data class HeadUnitUiState(
     val installedMapApps: List<InstalledAppOption> = emptyList(),
     val obdCycleHz: Double = 0.0,
     val masterVolumePct: Int = 70,
+    val isAudioMuted: Boolean = false,
     val bootSplashTrigger: Int = 0,
     val obdMessage: String = "OBD-II aguardando conexão",
     val simulatedReverseActive: Boolean = false,
     val dtcBusy: Boolean = false,
     val dtcActionFeedback: String? = null,
-    val isAppInForeground: Boolean = true
+    val isAppInForeground: Boolean = true,
+    val spotifyRecentSearches: List<String> = emptyList(),
+    val favoritePlaces: List<FavoritePlace> = emptyList(),
+    val recentPlaces: List<RecentPlace> = emptyList(),
+    val placeSearch: PlaceSearchState = PlaceSearchState()
 )
 
 /**
@@ -136,6 +156,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     private val preferences = HeadUnitPreferences(appContext)
     // Declarado aqui no topo: o init abaixo já lança corrotinas que leem o diário.
     private val fuelLogStore = FuelLogStore(appContext)
+    private val placesStore = FavoritePlacesStore(appContext)
+    private val spotifySearchPrefs = appContext.getSharedPreferences("hondadeck_spotify", Context.MODE_PRIVATE)
     private val fuelCalculator = FuelConsumptionCalculator()
     private val signalDetector = VideoSignalDetector()
     private val coordinator = HeadUnitCoordinator(
@@ -147,6 +169,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     private val _uiState = MutableStateFlow(HeadUnitUiState())
     val uiState: StateFlow<HeadUnitUiState> = _uiState.asStateFlow()
 
+    private val _webEvents = MutableSharedFlow<WebBridgeEvent>(extraBufferCapacity = 32)
+    val webEvents: SharedFlow<WebBridgeEvent> = _webEvents.asSharedFlow()
+
+    val tileRouter = WebResourceRouter(appContext) { _uiState.value.mediaState.coverBitmap }
+
     private val _cameraDebug = MutableStateFlow(CameraDebugState())
     val cameraDebug: StateFlow<CameraDebugState> = _cameraDebug.asStateFlow()
 
@@ -155,9 +182,15 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     private val mediaController = MediaAndNotificationController.get(appContext)
     private val gpsTracker = GpsNavigationTracker(appContext, scope)
     private val routeNavigator = InAppRouteNavigator(scope)
+    private val placeSearch = PlaceSearch()
     private val spotifyWeb = SpotifyWebApi(appContext)
     private var spotifyWebAuthAskedAtMs = 0L
     private var spotifySearchJob: Job? = null
+    private var placeSearchJob: Job? = null
+    private var offlineMapJob: Job? = null
+    private var volumeBeforeMutePct: Int = 60
+    private var lastObservedAgentMsgId: Long = 0L
+    private var lastObservedRouteArrived: Boolean = false
 
     private val ignitionMonitor = IgnitionBluetoothMonitor(
         appContext = appContext,
@@ -215,6 +248,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
             )
         )
 
+        val initialVol = readCurrentVolumePct()
+        if (initialVol > 0) volumeBeforeMutePct = initialVol
+        val initialMuted = runCatching { audioManager?.isStreamMute(AudioManager.STREAM_MUSIC) == true }.getOrDefault(false)
+        lastObservedAgentMsgId = carAgent.state.value.messages.lastOrNull()?.id ?: 0L
+
         _uiState.update {
             it.copy(
                 config = loadedConfig,
@@ -222,7 +260,11 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
                 pairedBluetoothDevices = BluetoothDirectory.listBondedDevices(appContext),
                 installedMusicApps = mediaController.listInstalledMusicApps(),
                 installedMapApps = mediaController.listInstalledMapApps(),
-                masterVolumePct = readCurrentVolumePct()
+                masterVolumePct = initialVol,
+                isAudioMuted = initialMuted,
+                favoritePlaces = placesStore.loadFavorites(),
+                recentPlaces = placesStore.loadRecentPlaces(),
+                spotifyRecentSearches = loadSpotifyRecentSearches()
             )
         }
 
@@ -386,16 +428,38 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
 
     fun openPreferredMusicApp(): Boolean = mediaController.launchPreferredMusicApp()
 
+    fun emitWebEvent(name: String, text: String = "", mode: String = "") {
+        _webEvents.tryEmit(WebBridgeEvent(name = name, text = text, mode = mode))
+    }
+
     fun setMasterVolumePct(pct: Int) {
         val mgr = audioManager ?: return
         val max = mgr.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val clampedPct = pct.coerceIn(0, 100)
         val target = ((clampedPct / 100f) * max).toInt().coerceIn(0, max)
         runCatching { mgr.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0) }
-        _uiState.update { it.copy(masterVolumePct = clampedPct) }
+        if (clampedPct > 0) volumeBeforeMutePct = clampedPct
+        _uiState.update { it.copy(masterVolumePct = clampedPct, isAudioMuted = clampedPct == 0) }
     }
 
-    // --- Navegação & Mapa Offline ---
+    fun toggleAudioMute() {
+        val mgr = audioManager ?: return
+        val max = mgr.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val currentlyMuted = _uiState.value.isAudioMuted
+        if (!currentlyMuted) {
+            val curPct = _uiState.value.masterVolumePct
+            if (curPct > 0) volumeBeforeMutePct = curPct
+            runCatching { mgr.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0) }
+            _uiState.update { it.copy(isAudioMuted = true) }
+        } else {
+            val restorePct = volumeBeforeMutePct.coerceIn(10, 100)
+            val target = ((restorePct / 100f) * max).toInt().coerceIn(1, max)
+            runCatching { mgr.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0) }
+            _uiState.update { it.copy(isAudioMuted = false, masterVolumePct = restorePct) }
+        }
+    }
+
+    // --- Navegação, Lugares & Mapa Offline ---
     fun openPreferredMapApp(): Boolean {
         val pkg = _uiState.value.config.preferredMapPackage
         if (pkg == "INTERNAL_MAP") {
@@ -407,10 +471,117 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
 
     /** Navegação curva-a-curva dentro do próprio HondaDeck (mapa + OSRM). */
     fun navigateToDestination(destination: String): Boolean {
-        if (destination.isBlank()) return false
+        return routeToPlace(destination, lat = null, lon = null)
+    }
+
+    /** Busca lugares via Nominatim ordenados por distância da posição atual. */
+    fun searchPlaces(query: String) {
+        val q = query.trim()
+        placeSearchJob?.cancel()
+        if (q.length < 2) {
+            _uiState.update { it.copy(placeSearch = PlaceSearchState(query = q, loading = false, results = emptyList())) }
+            return
+        }
+        _uiState.update { it.copy(placeSearch = it.placeSearch.copy(query = q, loading = true)) }
+        placeSearchJob = scope.launch {
+            val gps = _uiState.value.gpsState
+            val results = runCatching {
+                placeSearch.search(q, gps.latitude, gps.longitude)
+            }.getOrDefault(emptyList())
+            _uiState.update {
+                it.copy(placeSearch = PlaceSearchState(query = q, loading = false, results = results))
+            }
+        }
+    }
+
+    /**
+     * Inicia rota interna: com lat/lon roteia direto no InAppRouteNavigator;
+     * sem coordenadas, geocodifica pelo nome. Salva o destino nos lugares recentes.
+     */
+    fun routeToPlace(name: String, lat: Double?, lon: Double?): Boolean {
+        val cleanName = name.trim()
         val gps = _uiState.value.gpsState
-        routeNavigator.startNavigation(destination, RoutePoint(gps.latitude, gps.longitude))
+        val from = RoutePoint(gps.latitude, gps.longitude)
+        val hasCoords = lat != null && lon != null && lat.isFinite() && lon.isFinite() && (lat != 0.0 || lon != 0.0)
+        if (!hasCoords && cleanName.isBlank()) return false
+
+        val label = cleanName.ifBlank { "Destino" }
+        val knownAddress = _uiState.value.placeSearch.results
+            .firstOrNull { it.name.equals(label, ignoreCase = true) }?.address
+            ?: _uiState.value.favoritePlaces.firstOrNull { it.name.equals(label, ignoreCase = true) }?.address
+            ?: ""
+
+        if (hasCoords) {
+            routeNavigator.startNavigationToPoint(label, RoutePoint(lat!!, lon!!), from)
+            val recents = placesStore.addRecentPlace(RecentPlace(label, knownAddress, lat, lon))
+            _uiState.update { it.copy(recentPlaces = recents) }
+        } else {
+            routeNavigator.startNavigation(label, from)
+            val recents = placesStore.addRecentPlace(RecentPlace(label, knownAddress))
+            _uiState.update { it.copy(recentPlaces = recents) }
+        }
         return true
+    }
+
+    fun saveFavoritePlace(
+        id: String?,
+        name: String,
+        address: String,
+        lat: Double?,
+        lon: Double?,
+        voice: String?,
+        icon: String?
+    ) {
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) return
+        val hasCoords = lat != null && lon != null && lat.isFinite() && lon.isFinite() && (lat != 0.0 || lon != 0.0)
+        val item = FavoritePlace(
+            id = id?.trim().orEmpty().ifBlank { FavoritePlacesStore.generateId(cleanName) },
+            name = cleanName,
+            address = address.trim(),
+            lat = if (hasCoords) lat!! else 0.0,
+            lon = if (hasCoords) lon!! else 0.0,
+            voice = voice?.trim().orEmpty(),
+            icon = FavoritePlacesStore.normalizeIcon(icon)
+        )
+        val updated = placesStore.upsertFavorite(item)
+        _uiState.update { it.copy(favoritePlaces = updated) }
+        emitWebEvent("toast", "Favorito \"$cleanName\" salvo")
+
+        if (!hasCoords && item.address.isNotBlank()) {
+            scope.launch {
+                val gps = _uiState.value.gpsState
+                val hit = runCatching {
+                    placeSearch.search(item.address, gps.latitude, gps.longitude).firstOrNull()
+                }.getOrNull()
+                if (hit != null) {
+                    val geocoded = placesStore.upsertFavorite(item.copy(lat = hit.lat, lon = hit.lon))
+                    _uiState.update { it.copy(favoritePlaces = geocoded) }
+                }
+            }
+        }
+    }
+
+    fun deleteFavoritePlace(id: String) {
+        if (id.isBlank()) return
+        val updated = placesStore.deleteFavorite(id)
+        _uiState.update { it.copy(favoritePlaces = updated) }
+        emitWebEvent("toast", "Favorito removido")
+    }
+
+    fun saveCurrentLocationAsFavorite(name: String, voice: String?, icon: String?) {
+        val gps = _uiState.value.gpsState
+        val cleanName = name.trim().ifBlank { "Local atual" }
+        val addr = String.format(java.util.Locale.US, "%.5f, %.5f", gps.latitude, gps.longitude)
+        saveFavoritePlace(
+            id = null,
+            name = cleanName,
+            address = addr,
+            lat = gps.latitude,
+            lon = gps.longitude,
+            voice = voice,
+            icon = icon
+        )
     }
 
     fun stopInAppNavigation() = routeNavigator.stopNavigation()
@@ -428,6 +599,10 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     fun onSpotifyAuthFailed(reason: String) = mediaController.spotify.onAuthFailed(reason)
     fun spotifyToggleShuffle() { mediaController.spotify.toggleShuffle() }
     fun spotifyToggleRepeat() { mediaController.spotify.toggleRepeat() }
+    fun spotifyToggleLike() {
+        val ms = _uiState.value.mediaState
+        mediaController.spotify.toggleLike(ms.trackUri, ms.liked)
+    }
 
     // --- Spotify Web API: busca, playlists "Honda" e tocadas recentemente ---
     fun onSpotifyToken(token: String, expiresInSec: Int) {
@@ -485,6 +660,7 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
         spotifySearchJob = scope.launch {
             delay(350L) // espera o usuário parar de digitar
+            recordSpotifyRecentSearch(q)
             _uiState.update { it.copy(spotifySearchLoading = true) }
             runCatching { spotifyWeb.search(q) }
                 .onSuccess { res -> _uiState.update { it.copy(spotifySearchLoading = false, spotifySearchResults = res) } }
@@ -503,6 +679,26 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
     }
 
+    private fun loadSpotifyRecentSearches(): List<String> {
+        val raw = spotifySearchPrefs.getString(KEY_SPOTIFY_RECENT_SEARCHES, null) ?: return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            (0 until arr.length()).mapNotNull { i -> arr.optString(i).trim().takeIf { it.isNotBlank() } }
+                .take(MAX_SPOTIFY_RECENT_SEARCHES)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun recordSpotifyRecentSearch(query: String) {
+        val clean = query.trim()
+        if (clean.length < 2) return
+        val next = (listOf(clean) + _uiState.value.spotifyRecentSearches.filterNot { it.equals(clean, ignoreCase = true) })
+            .take(MAX_SPOTIFY_RECENT_SEARCHES)
+        val arr = JSONArray()
+        next.forEach { arr.put(it) }
+        spotifySearchPrefs.edit().putString(KEY_SPOTIFY_RECENT_SEARCHES, arr.toString()).apply()
+        _uiState.update { it.copy(spotifyRecentSearches = next) }
+    }
+
     fun playSpotifyUri(uri: String) {
         if (mediaController.spotify.isConnected) {
             mediaController.spotify.play(uri)
@@ -511,8 +707,40 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
     }
 
-    fun downloadOfflineMap(mapView: MapView, radiusKm: Double = 8.0) {
-        gpsTracker.downloadOfflineRegionAroundCurrentPosition(mapView, radiusKm)
+    fun downloadOfflineMap(radiusKm: Double = 12.0) {
+        if (offlineMapJob?.isActive == true) {
+            emitWebEvent("toast", "Download do mapa offline já está em andamento")
+            return
+        }
+        val gps = _uiState.value.gpsState
+        emitWebEvent("toast", "Baixando mapa offline (~${radiusKm.toInt()} km)...")
+        offlineMapJob = scope.launch {
+            gpsTracker.updateOfflineStatus(true, "Baixando mapa offline (~${radiusKm.toInt()} km)...")
+            val result = runCatching {
+                tileRouter.downloadOfflineRegion(
+                    lat = gps.latitude,
+                    lon = gps.longitude,
+                    radiusKm = radiusKm,
+                    minZoom = 11,
+                    maxZoom = 16
+                ) { _, _, status ->
+                    gpsTracker.updateOfflineStatus(true, status)
+                }
+            }
+            result.onSuccess { r ->
+                val msg = if (r.failedTiles > 0) {
+                    "Mapa offline salvo (${r.downloadedTiles} novos, ${r.failedTiles} pendentes)"
+                } else {
+                    "Mapa offline salvo (${r.totalTiles} blocos em cache)"
+                }
+                gpsTracker.updateOfflineStatus(false, msg)
+                emitWebEvent("toast", msg)
+            }.onFailure { err ->
+                val msg = "Falha no mapa offline: ${err.message ?: "sem conexão"}"
+                gpsTracker.updateOfflineStatus(false, msg)
+                emitWebEvent("error", msg)
+            }
+        }
     }
 
     // --- Agente Gemini & WhatsApp ---
@@ -567,15 +795,24 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
     override fun navigateTo(destination: String?): String {
         return if (!destination.isNullOrBlank()) {
             navigateToDestination(destination)
+            emitWebEvent("openMode", mode = "map")
             "Rota: $destination"
         } else {
-            openPreferredMapApp()
-            _uiState.value.config.preferredMapLabel
+            emitWebEvent("openMode", mode = "map")
+            "Mapa"
         }
     }
 
     override fun switchTab(tab: MainTab): String {
         selectTab(tab)
+        val webMode = when (tab) {
+            MainTab.HOME -> "home"
+            MainTab.NAVIGATION -> "map"
+            MainTab.MUSIC -> "music"
+            MainTab.SETTINGS, MainTab.OBD_SCANNER -> "settings"
+            MainTab.AGENT_VOICE -> "home"
+        }
+        emitWebEvent("openMode", mode = webMode)
         return "Tela ${tab.name}"
     }
 
@@ -906,7 +1143,12 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
         scope.launch {
             routeNavigator.state.collect { route ->
+                val justArrived = route.arrived && !lastObservedRouteArrived
+                lastObservedRouteArrived = route.arrived
                 _uiState.update { it.copy(route = route) }
+                if (justArrived) {
+                    emitWebEvent("routeArrived", "Você chegou ao destino")
+                }
             }
         }
         scope.launch {
@@ -924,7 +1166,15 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         }
         scope.launch {
             carAgent.state.collect { agent ->
+                val latestBot = agent.messages.lastOrNull { !it.isUser }
+                val isNewReply = latestBot != null && latestBot.id != lastObservedAgentMsgId
+                if (latestBot != null) {
+                    lastObservedAgentMsgId = latestBot.id
+                }
                 _uiState.update { it.copy(agentState = agent) }
+                if (isNewReply && latestBot.text.isNotBlank()) {
+                    emitWebEvent("agentReply", latestBot.text)
+                }
             }
         }
     }
@@ -1337,6 +1587,8 @@ class HeadUnitRuntime private constructor(private val appContext: Context) : Car
         private const val WEATHER_REFRESH_MS = 15 * 60_000L
         private const val WEATHER_RETRY_MS = 2 * 60_000L
         private const val WEATHER_TICK_MS = 30_000L
+        private const val KEY_SPOTIFY_RECENT_SEARCHES = "recent_searches_json"
+        private const val MAX_SPOTIFY_RECENT_SEARCHES = 8
 
         @SuppressLint("StaticFieldLeak")
         @Volatile

@@ -297,15 +297,22 @@ export async function setupBridge(callbacks) {
   handlers = { ...handlers, ...callbacks };
 
   window.HD = {
+    lastState: null,
     receive(rawMsg) {
       try {
         const msg = typeof rawMsg === 'string' ? JSON.parse(rawMsg) : rawMsg;
         if (!msg || typeof msg !== 'object') return;
         const { type, payload } = msg;
-        if (type === 'state' && handlers.onState) {
-          handlers.onState(normalizeState(payload));
-        } else if (type === 'telemetry' && handlers.onTelemetry) {
-          handlers.onTelemetry(asObj(payload));
+        if (type === 'state') {
+          const normalized = normalizeState(payload);
+          window.HD.lastState = normalized;
+          if (handlers.onState) handlers.onState(normalized);
+        } else if (type === 'telemetry') {
+          const t = asObj(payload);
+          if (window.HD.lastState && window.HD.lastState.telemetry) {
+            Object.assign(window.HD.lastState.telemetry, t);
+          }
+          if (handlers.onTelemetry) handlers.onTelemetry(t);
         } else if (type === 'event' && handlers.onEvent) {
           handlers.onEvent(asObj(payload));
         }

@@ -113,7 +113,7 @@ fun HeadUnitScreen(
                             uiState = uiState,
                             onOpenPreferredMap = { viewModel.openPreferredMapApp() },
                             onNavigateDestination = { viewModel.navigateToDestination(it) },
-                            onDownloadOfflineRegion = { mapView -> viewModel.downloadOfflineMap(mapView) }
+                            onDownloadOfflineRegion = { _ -> viewModel.downloadOfflineMap() }
                         )
 
                         MainTab.MUSIC -> MusicCenterPanel(
@@ -491,7 +491,7 @@ fun CameraInputControlRow(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReverseCameraOverlay(
+internal fun ReverseCameraOverlay(
     uiState: HeadUnitUiState,
     onAttachCameraSurface: (Surface?) -> Unit,
     onSelectCameraChannel: (Int) -> Unit,
@@ -691,7 +691,7 @@ private fun ParkingGuidelinesCanvas(
 }
 
 @Composable
-private fun CriticalAlertBanner(
+internal fun CriticalAlertBanner(
     alert: ObdAlert,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier

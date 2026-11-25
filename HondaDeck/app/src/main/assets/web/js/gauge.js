@@ -255,7 +255,7 @@ export function initGauge() {
   refs.gearsWrap.replaceChildren();
   gearNodes.clear();
   for (const g of GEARS_ORDER) {
-    const sp = el('span', { className: 'gear-item' }, g);
+    const sp = el('span', { className: 'gear-item', 'data-test': `gear-${g}` }, g);
     refs.gearsWrap.appendChild(sp);
     gearNodes.set(g, sp);
   }

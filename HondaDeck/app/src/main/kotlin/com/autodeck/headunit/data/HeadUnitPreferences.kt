@@ -81,7 +81,12 @@ data class HeadUnitConfig(
     val alertThresholds: AlertThresholds = AlertThresholds(),
     val tripDistanceKm: Double = 0.0,
     val tripFuelLiters: Double = 0.0,
-    val debugReferenceOverlay: Boolean = false
+    val debugReferenceOverlay: Boolean = false,
+    // Interface Web (Órbita)
+    val accentColor: String = "#22D3EE",
+    val introMode: String = "ANIMATION",
+    val spotifyShowPlaylists: Boolean = true,
+    val spotifyShowRecent: Boolean = true
 )
 
 class HeadUnitPreferences(context: Context) {
@@ -170,7 +175,14 @@ class HeadUnitPreferences(context: Context) {
             ),
             tripDistanceKm = prefs.getFloat(KEY_TRIP_DIST_KM, 0f).toDouble(),
             tripFuelLiters = prefs.getFloat(KEY_TRIP_FUEL_L, 0f).toDouble(),
-            debugReferenceOverlay = prefs.getBoolean(KEY_DEBUG_REF_OVERLAY, false)
+            debugReferenceOverlay = prefs.getBoolean(KEY_DEBUG_REF_OVERLAY, false),
+            accentColor = (prefs.getString(KEY_ACCENT_COLOR, "#22D3EE") ?: "#22D3EE").ifBlank { "#22D3EE" },
+            introMode = when ((prefs.getString(KEY_INTRO_MODE, "ANIMATION") ?: "ANIMATION").uppercase()) {
+                "VIDEO" -> "VIDEO"
+                else -> "ANIMATION"
+            },
+            spotifyShowPlaylists = prefs.getBoolean(KEY_SPOTIFY_SHOW_PLAYLISTS, true),
+            spotifyShowRecent = prefs.getBoolean(KEY_SPOTIFY_SHOW_RECENT, true)
         )
     }
 
@@ -259,6 +271,10 @@ class HeadUnitPreferences(context: Context) {
             putFloat(KEY_TRIP_DIST_KM, config.tripDistanceKm.toFloat())
             putFloat(KEY_TRIP_FUEL_L, config.tripFuelLiters.toFloat())
             putBoolean(KEY_DEBUG_REF_OVERLAY, config.debugReferenceOverlay)
+            putString(KEY_ACCENT_COLOR, config.accentColor)
+            putString(KEY_INTRO_MODE, config.introMode)
+            putBoolean(KEY_SPOTIFY_SHOW_PLAYLISTS, config.spotifyShowPlaylists)
+            putBoolean(KEY_SPOTIFY_SHOW_RECENT, config.spotifyShowRecent)
         }
     }
 
@@ -337,5 +353,9 @@ class HeadUnitPreferences(context: Context) {
         const val KEY_VIRTUAL_TANK_CAP_L = "virtual_tank_cap_l"
         const val KEY_VIRTUAL_TANK_REM_L = "virtual_tank_rem_l"
         const val KEY_DEBUG_REF_OVERLAY = "debug_ref_overlay"
+        const val KEY_ACCENT_COLOR = "accent_color"
+        const val KEY_INTRO_MODE = "intro_mode"
+        const val KEY_SPOTIFY_SHOW_PLAYLISTS = "spotify_show_playlists"
+        const val KEY_SPOTIFY_SHOW_RECENT = "spotify_show_recent"
     }
 }
