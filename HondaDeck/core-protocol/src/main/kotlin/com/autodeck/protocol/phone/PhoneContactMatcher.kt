@@ -45,7 +45,9 @@ object PhoneContactMatcher {
 
     /** Remove artigos iniciais falados ("a mãe", "meu amor", "o joão"). */
     fun cleanQuery(raw: String): String {
-        val norm = normalize(raw)
+        // "meu pai? só consulte, não ligue" -> "pai": corta na 1ª pontuação e tira possessivos.
+        val firstClause = raw.split('?', '!', ',', ';', '.').firstOrNull { it.isNotBlank() } ?: raw
+        val norm = normalize(firstClause).replaceFirst(Regex("^(?:(?:do|da|de)\s+)?(?:meu|minha|meus|minhas)\s+"), "").trim()
         val stripped = norm.replaceFirst(LEADING_ARTICLES, "").trim()
         return stripped.ifEmpty { norm }
     }
@@ -54,7 +56,7 @@ object PhoneContactMatcher {
      * Retorna lista ordenada dos contatos que casam com `query` (melhor score primeiro).
      */
     fun search(contacts: List<PhoneContact>, query: String, limit: Int = 10): List<PhoneContact> {
-        val raw = query.trim()
+        val raw = cleanQuery(query)
         if (raw.isEmpty() || contacts.isEmpty()) return emptyList()
 
         val normFull = normalize(raw)
