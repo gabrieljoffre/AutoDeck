@@ -47,7 +47,7 @@ object PhoneContactMatcher {
     fun cleanQuery(raw: String): String {
         // "meu pai? só consulte, não ligue" -> "pai": corta na 1ª pontuação e tira possessivos.
         val firstClause = raw.split('?', '!', ',', ';', '.').firstOrNull { it.isNotBlank() } ?: raw
-        val norm = normalize(firstClause).replaceFirst(Regex("^(?:(?:do|da|de)\s+)?(?:meu|minha|meus|minhas)\s+"), "").trim()
+        val norm = normalize(firstClause).replaceFirst(Regex("""^(?:(?:do|da|de)\s+)?(?:meu|minha|meus|minhas)\s+"""), "").trim()
         val stripped = norm.replaceFirst(LEADING_ARTICLES, "").trim()
         return stripped.ifEmpty { norm }
     }
