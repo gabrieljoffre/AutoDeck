@@ -104,6 +104,7 @@ class PonteAccessibilityService : AccessibilityService() {
     /** Ação de áudio para a qual o contato já foi tocado no seletor (evita desmarcar com um 2º toque). */
     @Volatile
     private var tappedPickerFor: PonteAccessibilityController.PendingAction? = null
+    private var tappedPickerAtMs: Long = 0L
     private var lastActionClickAtMs: Long = 0L
 
     override fun onServiceConnected() {
@@ -161,13 +162,18 @@ class PonteAccessibilityService : AccessibilityService() {
                         if (still === pending) {
                             val r2 = rootInActiveWindow
                             val pickedMenu = r2 != null && tryClickVoiceMenuItem(r2)
-                            mainHandler.postDelayed({
-                                if (PonteAccessibilityController.currentActive() === pending) {
-                                    rootInActiveWindow?.let { tryClickCallConfirm(it) }
+                            // A confirmação ("Fazer chamada?" ou a folha "Ligar") pode demorar: tenta algumas vezes.
+                            fun confirmAttempt(left: Int) {
+                                if (PonteAccessibilityController.currentActive() !== pending) return
+                                val confirmed = rootInActiveWindow?.let { tryClickCallConfirm(it) } == true
+                                if (confirmed || left <= 0) {
                                     PonteAccessibilityController.markCompleted(pending, true)
-                                    Log.i(TAG, "Ligação de voz do WhatsApp iniciada (menu=$pickedMenu).")
+                                    Log.i(TAG, "Ligação de voz do WhatsApp iniciada (menu=$pickedMenu, confirmada=$confirmed).")
+                                } else {
+                                    mainHandler.postDelayed({ confirmAttempt(left - 1) }, 600L)
                                 }
-                            }, if (pickedMenu) 900L else 100L)
+                            }
+                            mainHandler.postDelayed({ confirmAttempt(4) }, if (pickedMenu) 900L else 300L)
                         }
                     }, 700L)
                 }
@@ -284,12 +290,20 @@ class PonteAccessibilityService : AccessibilityService() {
         }
         Log.i(TAG, "Seletor: texto=\"$current\" linhas=${rows.size} (${rows.joinToString { it.text?.toString().orEmpty() }})")
         val norm = { t: String -> t.lowercase().filter { it.isLetterOrDigit() } }
-        val target = rows.firstOrNull { norm(it.text?.toString().orEmpty()).contains(norm(query)) } ?: rows.firstOrNull()
+        // Enquanto a busca carrega, o WhatsApp mostra uma linha "Nenhum resultado encontrado…": nunca tocar nela.
+        val realRows = rows.filterNot {
+            val t = it.text?.toString().orEmpty().lowercase()
+            t.startsWith("nenhum resultado") || t.startsWith("no results") || t.startsWith("sem resultado")
+        }
+        val target = realRows.firstOrNull { norm(it.text?.toString().orEmpty()).contains(norm(query)) } ?: realRows.firstOrNull()
         // A linha clicável do WhatsApp fica ~6 níveis acima do nome do contato.
         val action = PonteAccessibilityController.currentActive()
-        if (action != null && tappedPickerFor === action) return false // já selecionou; aguarda o botão Enviar
+        val now = android.os.SystemClock.uptimeMillis()
+        // Já selecionou: aguarda o botão Enviar. Se o seletor continuar na tela por 2,5 s, o toque não pegou e tenta de novo.
+        if (action != null && tappedPickerFor === action && now - tappedPickerAtMs < 2_500L) return false
         if (target != null && !target.isSelected && (clickNodeOrParent(target, maxHops = 8) || tapOnNode(target))) {
             tappedPickerFor = action
+            tappedPickerAtMs = now
             Log.i(TAG, "Seletor de contatos: selecionado \"${target.text}\".")
             return true
         }
@@ -390,6 +404,15 @@ class PonteAccessibilityService : AccessibilityService() {
     }
 
     private fun tryClickCallConfirm(root: AccessibilityNodeInfo): Boolean {
+        // Número fora da agenda: o WhatsApp mostra uma folha inferior com o botão "Ligar".
+        for (id in listOf("com.whatsapp:id/start_group_call_button", "com.whatsapp.w4b:id/start_group_call_button")) {
+            for (btn in root.findAccessibilityNodeInfosByViewId(id)) {
+                if (clickNodeOrParent(btn) || tapOnNode(btn)) {
+                    Log.i(TAG, "Folha de confirmação da ligação: \"${btn.text}\" clicado.")
+                    return true
+                }
+            }
+        }
         val okButtons = root.findAccessibilityNodeInfosByViewId("android:id/button1")
         for (btn in okButtons) {
             val txt = btn.text?.toString()?.trim()?.lowercase(Locale.ROOT).orEmpty()

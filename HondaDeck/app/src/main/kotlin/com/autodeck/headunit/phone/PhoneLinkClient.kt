@@ -142,6 +142,11 @@ class PhoneLinkClient(
     private var started = false
 
     private var connectionLoopJob: Job? = null
+    private var loopWatchdogJob: Job? = null
+
+    /** Última volta completa do laço de reconexão (o watchdog recria o laço se ele travar). */
+    @Volatile
+    private var lastLoopTickMs: Long = 0L
     private var udpListenerJob: Job? = null
     private var nsdDiscoveryListener: NsdManager.DiscoveryListener? = null
 
@@ -151,12 +156,34 @@ class PhoneLinkClient(
         startNsdDiscovery()
         startUdpDiscoveryListener()
         startAutoReconnectLoop()
+        startLoopWatchdog()
         triggerDiscoveryProbe()
+    }
+
+    /** Recria o laço de reconexão se ele morrer ou ficar preso (ex.: E/S bloqueada depois que a Ponte reiniciou). */
+    private fun startLoopWatchdog() {
+        loopWatchdogJob?.cancel()
+        loopWatchdogJob = scope.launch(Dispatchers.Default) {
+            while (isActive && started) {
+                delay(15_000L)
+                restartLoopIfStale("watchdog")
+            }
+        }
+    }
+
+    private fun restartLoopIfStale(reason: String) {
+        val stale = System.currentTimeMillis() - lastLoopTickMs > LOOP_STALE_MS
+        if (started && (connectionLoopJob?.isActive != true || stale)) {
+            android.util.Log.w("PhoneLinkClient", "Laço de reconexão parado ($reason); recriando.")
+            runCatching { closeActiveSocket() }
+            startAutoReconnectLoop()
+        }
     }
 
     fun stop() {
         started = false
         connectionLoopJob?.cancel()
+        loopWatchdogJob?.cancel()
         udpListenerJob?.cancel()
         stopNsdDiscovery()
         closeActiveSocket()
@@ -183,6 +210,7 @@ class PhoneLinkClient(
     fun requestReconnect() {
         scope.launch(Dispatchers.IO) {
             closeActiveSocket()
+            restartLoopIfStale("pedido manual")
             sendUdpDiscoveryProbes()
         }
     }
@@ -611,9 +639,11 @@ class PhoneLinkClient(
 
     private fun startAutoReconnectLoop() {
         connectionLoopJob?.cancel()
+        lastLoopTickMs = System.currentTimeMillis()
         connectionLoopJob = scope.launch(Dispatchers.IO) {
             var backoffMs = 2_000L
             while (isActive && started) {
+              lastLoopTickMs = System.currentTimeMillis()
               try {
                 val token = prefs.getString(KEY_TOKEN, null).orEmpty()
                 if (token.isBlank()) {
@@ -1215,6 +1245,7 @@ class PhoneLinkClient(
         private const val KEY_ICON_HASHES = "icon_hashes"
         private const val KEY_APP_ROLES = "app_roles"
         private const val CONNECT_TIMEOUT_MS = 4_000
+        private const val LOOP_STALE_MS = 45_000L
         private const val HEARTBEAT_INTERVAL_MS = 15_000L
     }
 }

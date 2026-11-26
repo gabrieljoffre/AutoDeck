@@ -185,7 +185,8 @@ class PonteWhatsAppManager(
             )
         }
 
-        val resolvedMime = mimeType.trim().ifBlank { "audio/mp4" }
+        // Sem parâmetros ("audio/ogg; codecs=opus" -> "audio/ogg"): o WhatsApp descarta o compartilhamento com parâmetros.
+        val resolvedMime = mimeType.substringBefore(';').trim().ifBlank { "audio/mp4" }
         // Se o WhatsApp abrir o seletor "Enviar para...", a acessibilidade busca por este nome/número.
         val searchQuery = contactName.ifBlank { contactsManager.resolveDisplayNameByNumber(number).orEmpty() }
             .ifBlank { number.filter { it.isDigit() }.takeLast(11) }

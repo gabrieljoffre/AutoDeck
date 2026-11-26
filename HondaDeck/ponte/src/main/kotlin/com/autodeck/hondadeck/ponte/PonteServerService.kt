@@ -55,6 +55,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - Repassa em tempo real estado de chamadas e notificações de mensagens (WhatsApp/SMS) ao tablet.
  */
 class PonteServerService : Service() {
+    @Volatile
+    private var lastWhatsAppEndMs: Long = 0L
+
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var storage: PonteStorage
@@ -677,7 +680,12 @@ class PonteServerService : Service() {
                     PonteAccessibilityService.instance?.endWhatsAppCall() == true
                 }
                 if (endedWhatsApp) {
+                    lastWhatsAppEndMs = System.currentTimeMillis()
                     PonteStateHub.logActivity("Chamada do WhatsApp encerrada pelo tablet.")
+                    return PhoneLinkMessage.Response(id = req.id, ok = true, result = linkedMapOf("message" to "Chamada do WhatsApp encerrada."))
+                }
+                // O Gemini às vezes repete o pedido: se a chamada do WhatsApp acabou de ser encerrada, confirma de novo.
+                if (System.currentTimeMillis() - lastWhatsAppEndMs < 15_000L) {
                     return PhoneLinkMessage.Response(id = req.id, ok = true, result = linkedMapOf("message" to "Chamada do WhatsApp encerrada."))
                 }
                 callManager.end().fold(
