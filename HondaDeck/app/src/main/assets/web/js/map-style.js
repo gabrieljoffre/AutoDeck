@@ -207,6 +207,8 @@ export function buildMapStyle(theme, accent, routeData = EMPTY_FC, destData = EM
         type: 'symbol',
         source: 'openmaptiles',
         'source-layer': 'place',
+        // Só aparece com o mapa mais afastado; no drone de perto os bairros do horizonte invadiam a barra superior
+        maxzoom: 15.2,
         filter: ['in', ['get', 'class'], ['literal', ['city', 'town', 'suburb', 'neighbourhood']]],
         layout: {
           'text-field': ['coalesce', ['get', 'name:pt'], ['get', 'name']],

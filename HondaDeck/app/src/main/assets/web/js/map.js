@@ -378,7 +378,8 @@ function mlFollowCamera({ immediate = false, duration = 700, linear = false } = 
     padding: { left: 0, right: 0, top: 0, bottom: 0 },
     offset: t.offset
   };
-  if (immediate) mlMap.jumpTo(opts);
+  // jumpTo ignora "offset"; easeTo com duração 0 posiciona na hora respeitando o deslocamento
+  if (immediate) mlMap.easeTo({ ...opts, duration: 0 });
   else if (linear) mlMap.easeTo({ ...opts, duration, easing: (k) => k, essential: true });
   else mlMap.easeTo({ ...opts, duration, essential: true });
 }

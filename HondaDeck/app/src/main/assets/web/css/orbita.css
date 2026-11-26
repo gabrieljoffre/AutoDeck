@@ -617,19 +617,6 @@ button:active {
   will-change: transform, opacity;
 }
 
-.app-shell.mode-map-active .home-left-col {
-  transform: translateX(-92px) scale(0.92);
-  opacity: 0.14;
-  filter: blur(1.2px);
-  pointer-events: none;
-}
-
-.app-shell.mode-map-active .home-right-col {
-  transform: translateX(92px) scale(0.92);
-  opacity: 0.14;
-  filter: blur(1.2px);
-  pointer-events: none;
-}
 
 .app-shell.mode-map-active .home-map-center {
   display: none;
@@ -637,6 +624,7 @@ button:active {
 
 /* Mapa em tela cheia, Música e Veículo: velocímetro sai pela esquerda e o
    Spotify pela direita; ao voltar, a mesma transição acontece ao contrário. */
+.app-shell.mode-map-active .home-left-col,
 .app-shell.mode-map-full .home-left-col,
 .app-shell.mode-music-active .home-left-col,
 .app-shell.mode-vehicle-active .home-left-col {
@@ -645,6 +633,7 @@ button:active {
   pointer-events: none;
 }
 
+.app-shell.mode-map-active .home-right-col,
 .app-shell.mode-map-full .home-right-col,
 .app-shell.mode-music-active .home-right-col,
 .app-shell.mode-vehicle-active .home-right-col {
