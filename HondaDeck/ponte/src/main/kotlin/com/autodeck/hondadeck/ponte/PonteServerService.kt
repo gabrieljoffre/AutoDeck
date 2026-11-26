@@ -118,7 +118,15 @@ class PonteServerService : Service() {
         }
 
         storage.setServiceEnabled(true)
-        startForeground(NOTIFICATION_ID, buildNotification("Aguardando tablet HondaDeck…"))
+        // Tipo connectedDevice (sem limite diário). Se o sistema recusar, segue sem derrubar o app.
+        runCatching {
+            val notif = buildNotification("Aguardando tablet HondaDeck…")
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notif, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            } else {
+                startForeground(NOTIFICATION_ID, notif)
+            }
+        }.onFailure { android.util.Log.w("PonteServerService", "startForeground recusado: ${it.message}") }
 
         if (running.compareAndSet(false, true)) {
             startServerLoops()
