@@ -73,6 +73,18 @@ jobs:
           fi
           echo "Manifestos OK: QR sem listener, completo com listener."
 
+      # Lido pelo botão "Atualizar app" do tablet (AppUpdater.kt): só atualiza se o
+      # versionCode daqui for maior que o instalado e o tamanho bater.
+      - name: version.json
+        run: |
+          AA="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          CODE=$("$AA" manifest version-code dist/HondaDeck-completo.apk)
+          NAME=$("$AA" manifest version-name dist/HondaDeck-completo.apk)
+          BYTES=$(stat -c %s dist/HondaDeck-completo.apk)
+          printf '{"versionCode":%s,"versionName":"%s","builtAt":"%s","commit":"%s","branch":"%s","completoBytes":%s}\n' \
+            "$CODE" "$NAME" "$(date -u +%Y-%m-%dT%H:%MZ)" "${GITHUB_SHA::7}" "$GITHUB_REF_NAME" "$BYTES" > dist/version.json
+          cat dist/version.json
+
       - name: Publicar APKs
         uses: actions/upload-artifact@v4
         with:
@@ -101,6 +113,7 @@ jobs:
           files: |
             HondaDeck/dist/HondaDeck.apk
             HondaDeck/dist/HondaDeck-completo.apk
+            HondaDeck/dist/version.json
 
       # Os testes do app rodam depois do APK publicado: uma falha aqui aparece
       # em vermelho, mas não impede baixar o APK para testar no carro.

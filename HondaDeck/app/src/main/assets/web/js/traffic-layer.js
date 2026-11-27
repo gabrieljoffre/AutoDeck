@@ -42,7 +42,7 @@ export function createTrafficLayer({ map, getKey, getPosition, beforeLayerId = '
 
   function addLayers() {
     const k = key();
-    if (!k || !map.getStyle()?.layers || !map.getSource('openmaptiles')) return;
+    if (!k || !map.getStyle()?.layers || !(map.getSource('openmaptiles') || map.getSource('offline'))) return;
     try {
       addLayersUnsafe(k);
     } catch (err) {

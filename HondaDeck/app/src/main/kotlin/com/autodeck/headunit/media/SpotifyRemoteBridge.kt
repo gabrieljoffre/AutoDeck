@@ -142,7 +142,7 @@ class SpotifyRemoteBridge(
         }
         _status.value = SpotifyLinkStatus.CONNECTING
         connectStartedAtMs = SystemClock.elapsedRealtime()
-        val params = ConnectionParams.Builder(BuildConfig.SPOTIFY_CLIENT_ID)
+        val params = ConnectionParams.Builder(com.autodeck.headunit.data.BakedKeys.spotifyClientId)
             .setRedirectUri(BuildConfig.SPOTIFY_REDIRECT_URI)
             // Tentativas automáticas em segundo plano não devem abrir a tela de autorização sozinhas
             .showAuthView(interactive)
@@ -298,6 +298,6 @@ class SpotifyRemoteBridge(
         private const val WATCHDOG_INTERVAL_MS = 15_000L
         private const val CONNECT_TIMEOUT_MS = 20_000L
         private val RETRY_DELAYS_MS = longArrayOf(2_000L, 5_000L, 10_000L, 20_000L, 30_000L)
-        val isConfigured: Boolean get() = BuildConfig.SPOTIFY_CLIENT_ID.isNotBlank()
+        val isConfigured: Boolean get() = com.autodeck.headunit.data.BakedKeys.spotifyClientId.isNotBlank()
     }
 }

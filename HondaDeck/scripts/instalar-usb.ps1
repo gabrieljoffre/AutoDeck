@@ -7,12 +7,21 @@
     .\scripts\instalar-usb.ps1 -DoGitHub    # baixa o HondaDeck-completo.apk mais novo e instala
     .\scripts\instalar-usb.ps1 -AbrirNotificacoes   # depois de instalar, abre "Acesso a notificações" no tablet
 
+    .\scripts\instalar-usb.ps1 -Mapa         # também copia o mapa offline de Goiás + DF (go-df.pmtiles)
+    .\scripts\instalar-usb.ps1 -SoMapa       # só copia o mapa (app já instalado)
+
   Atualizar mantém configurações, chave do Gemini e diário de abastecimento
-  (mesmo pacote e mesma assinatura).
+  (mesmo pacote e mesma assinatura). A instalação pelo USB também guarda as chaves
+  dentro do app, para o botão "Atualizar app" (APK do GitHub, sem chaves) não apagá-las.
+
+  O arquivo do mapa não vai para o Git (359 MB). Para gerar/atualizar, veja INSTALACAO.md.
 #>
 param(
     [switch]$DoGitHub,
-    [switch]$AbrirNotificacoes
+    [switch]$AbrirNotificacoes,
+    [switch]$Mapa,
+    [switch]$SoMapa,
+    [string]$ArquivoMapa = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,6 +61,38 @@ if ($devices -match 'unauthorized') {
 }
 Write-Host "Tablet: $($devices -join '; ')"
 
+function Copy-OfflineMap {
+    $file = $ArquivoMapa
+    if (-not $file) {
+        $repoParent = Split-Path -Parent (Split-Path -Parent $root)   # pasta que contém o clone
+        $file = Join-Path $repoParent '_mapas\go-df.pmtiles'
+    }
+    if (-not (Test-Path $file)) {
+        throw "Mapa offline não encontrado em '$file'. Gere com o go-pmtiles (INSTALACAO.md) ou passe -ArquivoMapa <caminho>."
+    }
+    $mb = [math]::Round((Get-Item $file).Length / 1MB)
+    $dest = "/sdcard/Android/data/$package/files/maps/go-df.pmtiles"
+    Write-Host "Copiando mapa offline de Goiás + DF ($mb MB) para o tablet... (1 a 3 min)"
+    & $adb shell mkdir -p "/sdcard/Android/data/$package/files/maps" | Out-Null
+    & $adb push $file $dest
+    if ($LASTEXITCODE -ne 0) {
+        # Alguns Androids bloqueiam o ADB em Android/data: copia pela pasta interna do app (build debug)
+        Write-Host "Pasta Android/data bloqueada; usando a pasta interna do app..." -ForegroundColor Yellow
+        & $adb push $file /data/local/tmp/go-df.pmtiles
+        if ($LASTEXITCODE -ne 0) { throw "Não consegui copiar o mapa (código $LASTEXITCODE)." }
+        & $adb shell run-as $package mkdir -p files/maps
+        & $adb shell run-as $package cp /data/local/tmp/go-df.pmtiles files/maps/go-df.pmtiles
+        if ($LASTEXITCODE -ne 0) { throw "Não consegui mover o mapa para o app (código $LASTEXITCODE)." }
+        & $adb shell rm /data/local/tmp/go-df.pmtiles | Out-Null
+    }
+    Write-Host "Mapa offline copiado. O app passa a usá-lo em até 30 s." -ForegroundColor Green
+}
+
+if ($SoMapa) {
+    Copy-OfflineMap
+    return
+}
+
 if ($DoGitHub) {
     $apk = Join-Path $env:TEMP 'HondaDeck-completo.apk'
     Write-Host "Baixando a versão mais nova do GitHub..."
@@ -75,6 +116,8 @@ if ($DoGitHub) {
         Pop-Location
     }
 }
+
+if ($Mapa) { Copy-OfflineMap }
 
 # Abre o app no tablet
 & $adb shell monkey -p $package -c android.intent.category.LAUNCHER 1 | Out-Null

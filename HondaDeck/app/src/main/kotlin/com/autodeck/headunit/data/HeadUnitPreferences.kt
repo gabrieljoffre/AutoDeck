@@ -2,7 +2,6 @@ package com.autodeck.headunit.data
 
 import android.content.Context
 import androidx.core.content.edit
-import com.autodeck.headunit.BuildConfig
 import com.autodeck.protocol.camera.CameraImageAdjustments
 import com.autodeck.protocol.camera.CameraVideoStandardMode
 import com.autodeck.protocol.camera.GuidelineCalibration
@@ -103,6 +102,10 @@ class HeadUnitPreferences(context: Context) {
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    init {
+        BakedKeys.init(context)
+    }
+
     fun load(): HeadUnitConfig {
         val fuelName = prefs.getString(KEY_FUEL_TYPE, FuelType.GASOLINE_E27.name)
         val fuelType = FuelType.entries.firstOrNull { it.name == fuelName } ?: FuelType.GASOLINE_E27
@@ -154,7 +157,7 @@ class HeadUnitPreferences(context: Context) {
             ignitionOffStandbyDelaySec = prefs.getInt(KEY_IGNITION_STANDBY_DELAY_SEC, 8).coerceIn(3, 60),
             showBootSplashOnIgnition = prefs.getBoolean(KEY_SHOW_BOOT_ON_IGNITION, true),
             // Vazio nas Configurações = usa a chave embutida no build (local.properties).
-            geminiApiKey = (prefs.getString(KEY_GEMINI_API_KEY, "") ?: "").ifBlank { BuildConfig.GEMINI_API_KEY },
+            geminiApiKey = (prefs.getString(KEY_GEMINI_API_KEY, "") ?: "").ifBlank { BakedKeys.gemini },
             // Os modelos 2.x de texto foram desativados pelo Google: quem ainda tiver um salvo passa para o atual.
             geminiModel = (prefs.getString(KEY_GEMINI_MODEL, null) ?: "")
                 .takeIf { it.isNotBlank() && !it.startsWith("gemini-2.") } ?: DEFAULT_GEMINI_MODEL,

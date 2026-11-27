@@ -1063,6 +1063,27 @@ function buildSystem(root) {
   const defaultMusicRow = el('div', { className: 'default-apps-row', 'data-test': 'settings-default-music' });
   const tabletAppsGrid = el('div', { className: 'apps-launcher-grid', 'data-test': 'settings-tablet-apps' });
   const version = el('span', { className: 'settings-sub' }, '');
+  const offlineMapSub = el('span', { className: 'settings-sub', 'data-test': 'settings-offline-status' }, '');
+
+  // Atualização do app (só na versão completo, instalada pelo USB)
+  const updateMsg = el('span', { className: 'settings-sub', 'data-test': 'settings-update-status' }, '');
+  const updateCheckBtn = el(
+    'button',
+    { className: 'btn-outline', type: 'button', 'data-test': 'settings-update-check', onClick: () => sendCommand('system.update.check') },
+    'Procurar atualização'
+  );
+  const updateInstallBtn = el(
+    'button',
+    { className: 'btn-outline', type: 'button', 'data-test': 'settings-update-install', onClick: () => sendCommand('system.update.install') },
+    'Atualizar agora'
+  );
+  const updateBlock = el(
+    'div',
+    { className: 'settings-card-block', 'data-test': 'settings-update' },
+    kicker('ATUALIZAR APP'),
+    updateMsg,
+    el('div', { style: 'display:flex;gap:10px;flex-wrap:wrap' }, updateCheckBtn, updateInstallBtn)
+  );
 
   // Controles da Câmera de Ré (padrão de vídeo + qualidade no SAA7113)
   const camStdButtons = [
@@ -1170,7 +1191,8 @@ function buildSystem(root) {
       'div',
       { className: 'settings-card-block' },
       kicker('MAPA OFFLINE'),
-      el('span', { className: 'settings-sub' }, 'Baixa o mapa da região de Anápolis para uso sem internet.'),
+      offlineMapSub,
+      el('span', { className: 'settings-sub' }, 'Fora de Goiás/DF o mapa usa a internet. O botão abaixo guarda também a região de Anápolis do mapa antigo (sem o 3D).'),
       el('div', { style: 'display:flex' }, el('button', { className: 'btn-outline', type: 'button', 'data-test': 'settings-offline-map', onClick: () => sendCommand('system.downloadOfflineMap') }, 'Baixar mapa offline'))
     ),
     el(
@@ -1189,8 +1211,28 @@ function buildSystem(root) {
         camResetBtn
       )
     ),
+    updateBlock,
     el('div', { className: 'settings-card-block' }, kicker('VERSÃO'), version)
   );
+
+  reg(tabUpdaters, (s) => jsonSig(s.map?.offline || {}), (s) => {
+    const o = s.map?.offline || {};
+    offlineMapSub.textContent = o.available
+      ? `Mapa de Goiás e DF instalado no tablet (${o.sizeMb || '?'} MB): ruas e nomes funcionam sem internet.`
+      : 'Mapa de Goiás e DF não instalado. Em casa, rode: .\\scripts\\instalar-usb.ps1 -Mapa (veja INSTALACAO.md).';
+  });
+
+  reg(tabUpdaters, (s) => jsonSig(s.settings?.update || {}), (s) => {
+    const u = s.settings?.update || {};
+    updateBlock.style.display = u.supported ? '' : 'none';
+    const busy = u.status === 'CHECKING' || u.status === 'DOWNLOADING';
+    updateCheckBtn.disabled = busy;
+    updateInstallBtn.disabled = busy || !(u.status === 'AVAILABLE' || u.status === 'NEEDS_PERMISSION' || u.status === 'READY' || u.status === 'ERROR');
+    updateInstallBtn.textContent = u.status === 'DOWNLOADING' ? `Baixando ${u.progressPct || 0}%` : 'Atualizar agora';
+    const base = `Instalada: ${u.currentName || s.settings?.version || ''}`;
+    const latest = u.latestName ? ` · No GitHub: ${u.latestName}` : '';
+    updateMsg.textContent = `${base}${latest}${u.message ? ` — ${u.message}` : ''}`;
+  });
 
   reg(tabUpdaters, (s) => `${jsonSig(s.apps?.mapApps || [])}|${s.apps?.preferredMapPackage || ''}`, (s) => {
     defaultMapsRow.replaceChildren();

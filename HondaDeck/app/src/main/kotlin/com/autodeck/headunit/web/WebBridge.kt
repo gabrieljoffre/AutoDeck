@@ -77,7 +77,14 @@ class WebBridge(
             }
         }
 
-        // 3) Eventos pontuais (toasts, respostas do copiloto, chegada de rota, openMode)
+        // 3) Botão "Atualizar app": cada mudança (procurando, baixando %, pronto) vai para a tela
+        scope.launch {
+            com.autodeck.headunit.update.AppUpdater.state.collect {
+                if (attached && uiReady) pushFullState(runtime.uiState.value)
+            }
+        }
+
+        // 4) Eventos pontuais (toasts, respostas do copiloto, chegada de rota, openMode)
         scope.launch {
             runtime.webEvents.collect { ev ->
                 if (!attached || !uiReady) return@collect
@@ -122,6 +129,9 @@ class WebBridge(
                 uiReady = true
                 pushFullState(runtime.uiState.value)
                 runtime.connectSpotify(activityContext)
+                // Checagem silenciosa de versão nova e letras do mapa (nomes de rua offline)
+                com.autodeck.headunit.update.AppUpdater.check(quiet = true)
+                scope.launch(Dispatchers.IO) { runtime.tileRouter.prefetchGlyphs() }
                 if (runtime.uiState.value.spotifyStatus == com.autodeck.headunit.media.SpotifyLinkStatus.CONNECTED) {
                     runtime.refreshSpotifyPlaylists()
                 }
@@ -302,6 +312,8 @@ class WebBridge(
 
             "settings.set" -> handleSettingsSet(args)
             "system.downloadOfflineMap" -> runtime.downloadOfflineMap()
+            "system.update.check" -> com.autodeck.headunit.update.AppUpdater.check()
+            "system.update.install" -> com.autodeck.headunit.update.AppUpdater.downloadAndInstall(activityContext)
             "camera.toggle" -> runtime.toggleManualCameraPreview()
             "calendar.refresh" -> runtime.refreshCalendar(force = true)
             "calendar.requestPermission" -> runtime.requestCalendarPermission()
@@ -415,7 +427,9 @@ class WebBridge(
             nowEpochMs = System.currentTimeMillis(),
             wifiConnected = isWifiConnected(),
             appVersion = BuildConfig.VERSION_NAME,
-            mapsJsApiKey = BuildConfig.MAPS_JS_API_KEY
+            mapsJsApiKey = com.autodeck.headunit.data.BakedKeys.mapsJs,
+            offlineMap = runtime.tileRouter.offlineMapInfo(),
+            update = com.autodeck.headunit.update.AppUpdater.state.value
         )
         val stateJson = StateDto.buildStateJson(ui, extras)
         deliverToJs(StateDto.wrapMessage("state", stateJson))
@@ -511,6 +525,8 @@ class WebBridge(
             "fuel.tank",
             "settings.set",
             "system.downloadOfflineMap",
+            "system.update.check",
+            "system.update.install",
             "camera.toggle",
             "calendar.refresh",
             "calendar.requestPermission"

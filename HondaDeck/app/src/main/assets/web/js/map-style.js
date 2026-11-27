@@ -225,6 +225,64 @@ export function buildMapStyle(theme, accent, routeData = EMPTY_FC, destData = EM
   };
 }
 
+// Mapa offline de Goiás + DF (arquivo PMTiles no tablet, esquema Protomaps Basemap v4).
+// Mesmo visual e mesmos ids de camada do estilo online; só troca a fonte e os filtros.
+const OFFLINE_LAYERS = {
+  landuse: { sl: 'landuse', filter: ['in', ['get', 'kind'], ['literal', ['residential', 'commercial', 'industrial', 'retail', 'school', 'university', 'hospital', 'military', 'railway', 'parking']]] },
+  park: { sl: 'landuse', filter: ['in', ['get', 'kind'], ['literal', ['park', 'nature_reserve', 'golf_course', 'cemetery', 'garden', 'playground', 'pitch', 'protected_area', 'national_park']]] },
+  landcover: { sl: 'landuse', filter: ['in', ['get', 'kind'], ['literal', ['wood', 'forest', 'farmland', 'meadow', 'grassland', 'grass', 'scrub']]] },
+  water: { sl: 'water', filter: ['==', ['geometry-type'], 'Polygon'] },
+  waterway: { sl: 'water', filter: ['==', ['geometry-type'], 'LineString'] },
+  'road-minor': { sl: 'roads', filter: ['in', ['get', 'kind'], ['literal', ['minor_road', 'other']]] },
+  'road-secondary': { sl: 'roads', filter: ['==', ['get', 'kind'], 'medium_road'] },
+  'road-primary': { sl: 'roads', filter: ['==', ['get', 'kind'], 'major_road'] },
+  'road-motorway': { sl: 'roads', filter: ['==', ['get', 'kind'], 'highway'] },
+  'building-3d': { sl: 'buildings' },
+  'road-label': { sl: 'roads', filter: ['has', 'name'] },
+  'place-label': { sl: 'places', filter: ['in', ['get', 'kind'], ['literal', ['locality', 'neighbourhood', 'macrohood']]] }
+};
+
+/**
+ * Converte o estilo online (OpenFreeMap) para o arquivo offline.
+ * offline = { tiles: '<origem>/offline/{z}/{x}/{y}.pbf', maxzoom, bounds: [minLon, minLat, maxLon, maxLat] }
+ */
+export function toOfflineStyle(style, offline) {
+  const s = JSON.parse(JSON.stringify(style));
+  s.sources = {
+    offline: {
+      type: 'vector',
+      tiles: [offline.tiles],
+      minzoom: 0,
+      maxzoom: offline.maxzoom || 15,
+      bounds: offline.bounds,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Protomaps'
+    },
+    'hd-route': s.sources['hd-route'],
+    'hd-dest': s.sources['hd-dest']
+  };
+  s.layers = s.layers.map((l) => {
+    if (l.source !== 'openmaptiles') return l;
+    const m = OFFLINE_LAYERS[l.id];
+    if (!m) return null;
+    const out = { ...l, source: 'offline', 'source-layer': m.sl };
+    if (m.filter) out.filter = m.filter;
+    else delete out.filter;
+    if (l.id === 'building-3d') {
+      out.paint = {
+        ...l.paint,
+        'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'height'], 6], 0, l.paint['fill-extrusion-color'][4], 40, l.paint['fill-extrusion-color'][6]],
+        'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 14, 0, 15.2, ['coalesce', ['get', 'height'], 6]],
+        'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0]
+      };
+    }
+    if (l.id === 'place-label') {
+      out.layout = { ...l.layout, 'text-size': ['match', ['get', 'kind'], 'locality', 16, 12] };
+    }
+    return out;
+  }).filter(Boolean);
+  return s;
+}
+
 export function routeToGeoJSON(points) {
   if (!Array.isArray(points) || points.length < 2) return EMPTY_FC;
   return {

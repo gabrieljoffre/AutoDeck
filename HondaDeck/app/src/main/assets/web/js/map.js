@@ -20,7 +20,7 @@ import {
   createPinSvg,
   createClockSvg
 } from './util.js';
-import { buildMapStyle, routeToGeoJSON, destToGeoJSON, webglAvailable } from './map-style.js';
+import { buildMapStyle, toOfflineStyle, routeToGeoJSON, destToGeoJSON, webglAvailable } from './map-style.js';
 import { createTrafficLayer } from './traffic-layer.js';
 
 // Trânsito ao vivo TomTom sobre o mapa 3D (criado junto com o MapLibre)
@@ -130,6 +130,30 @@ function normalizeStr(s) {
     .trim();
 }
 
+// Mapa offline (Goiás + DF): usado quando o arquivo está no tablet e o carro está dentro da área.
+let mlUseOffline = false;
+function wantOffline(ms) {
+  const o = ms?.offline;
+  if (!o?.available || isMockBackend()) return false;
+  const lat = Number(ms.lat), lon = Number(ms.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return mlUseOffline;
+  const inside = (m) => lon > o.minLon + m && lon < o.maxLon - m && lat > o.minLat + m && lat < o.maxLat - m;
+  if (inside(0.05)) return true;
+  if (!inside(-0.05)) return false;
+  return mlUseOffline; // faixa de 5 km na borda: mantém o que já está
+}
+function currentMlStyle(theme) {
+  const style = buildMapStyle(theme, lastAccent, mlRouteData, mlDestData);
+  if (!isMockBackend()) style.glyphs = location.origin + '/glyphs/{fontstack}/{range}.pbf';
+  if (!mlUseOffline) return style;
+  const o = lastMapState.offline;
+  return toOfflineStyle(style, {
+    tiles: location.origin + '/offline/{z}/{x}/{y}.pbf',
+    maxzoom: o.maxZoom,
+    bounds: [o.minLon, o.minLat, o.maxLon, o.maxLat]
+  });
+}
+
 function resolveEffectiveTheme(setting, clockEpochMs) {
   const mode = String(setting || 'AUTO').toUpperCase();
   if (mode === 'LIGHT') return 'light';
@@ -170,7 +194,7 @@ function applyEffectiveTheme(nextTheme) {
 
   // MapLibre: troca o estilo vetorial (claro/escuro) mantendo rota e destino
   if (mlMap) {
-    mlMap.setStyle(buildMapStyle(effectiveTheme, lastAccent, mlRouteData, mlDestData));
+    mlMap.setStyle(currentMlStyle(effectiveTheme), { diff: false });
   }
 
   // Atualiza estilo Google Maps se ativo
@@ -365,9 +389,10 @@ function initMapLibreStage() {
   try {
     const theme = resolveEffectiveTheme(configuredMapTheme, lastClockMs);
     effectiveTheme = theme;
+    mlUseOffline = wantOffline(lastMapState);
     mlMap = new window.maplibregl.Map({
       container: stage,
-      style: buildMapStyle(theme, lastAccent, mlRouteData, mlDestData),
+      style: currentMlStyle(theme),
       center: [ANAPOLIS_DEFAULT.lon, ANAPOLIS_DEFAULT.lat],
       zoom: 16.4,
       pitch: 62,
@@ -408,6 +433,10 @@ function initMapLibreStage() {
     }
   });
   mlMap.on('error', (e) => console.warn('[HondaDeck] MapLibre:', e?.error?.message || e));
+  // Se o mapa abriu sem internet ou travou no carregamento, tenta de novo (antes ficava só o fundo)
+  const reloadStyle = () => mlMap && mlMap.setStyle(currentMlStyle(effectiveTheme), { diff: false });
+  window.addEventListener('online', reloadStyle);
+  setTimeout(() => { if (mlMap && !mlMap.isStyleLoaded()) reloadStyle(); }, 15000);
   // A rota pode chegar antes do estilo carregar: reaplica ao ficar pronto (e após trocar claro/escuro)
   mlMap.on('style.load', () => {
     mlMap.getSource('hd-route')?.setData(mlRouteData);
@@ -1664,6 +1693,11 @@ export function updateMapState(mapState, clockEpochMs, options = {}) {
   }
 
   if (mlMap) {
+    const off = wantOffline(mapState);
+    if (off !== mlUseOffline) {
+      mlUseOffline = off;
+      mlMap.setStyle(currentMlStyle(effectiveTheme), { diff: false });
+    }
     trafficLayer?.sync();
     updateTrafficBtnUi();
     mlCarMarker?.setLngLat([lon, lat]).setRotation(bearing);

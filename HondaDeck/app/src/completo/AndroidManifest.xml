@@ -8,6 +8,10 @@
   NectarLinkAndMobileAgentTest garante que src/main continue sem ele.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Botão "Atualizar app": baixa o APK novo do GitHub e abre o instalador do Android.
+         Também fica fora de src/main pelo mesmo motivo do listener (Play Protect). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <application>
         <!-- Sessão de mídia (capa, título, controles de qualquer app de música)
              e notificações do WhatsApp. Precisa ser liberado em "Acesso a notificações". -->

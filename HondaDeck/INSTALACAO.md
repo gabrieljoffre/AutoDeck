@@ -63,6 +63,45 @@ Pelo Gradle direto: `.\gradlew.bat :app:installCompletoDebug`.
    e tentar o passo 1 de novo.
 3. No app, **Ajustes → Copiloto (voz)**: colar a chave do Gemini (se o build não tiver uma, veja abaixo).
 
+## Atualizar pelo próprio tablet (botão "Atualizar app")
+
+Só na versão **completo**. Depois de uma instalação pelo USB com este recurso, as próximas
+atualizações podem ser feitas no tablet: **Ajustes → Sistema → Atualizar app → Atualizar agora**.
+
+- O app lê `version.json` da release `hondadeck-latest`, baixa o `HondaDeck-completo.apk` e abre o
+  instalador do Android (você só toca em **Atualizar**).
+- Na primeira vez o Android pede para liberar **"Permitir desta fonte"** para o HondaDeck.
+- O número da versão é o minuto do build (desde 01/01/2026): sempre cresce, no PC de casa e no GitHub.
+- O APK do GitHub não tem chaves. A instalação pelo USB (com `local.properties`) guarda as chaves
+  dentro do app, e o APK baixado pelo botão continua usando essas chaves salvas.
+- Se algo der errado, o USB continua funcionando como sempre.
+
+## Mapa offline de Goiás + DF
+
+O mapa 3D lê as ruas de um arquivo no tablet (`go-df.pmtiles`, ~360 MB, OpenStreetMap via
+[Protomaps](https://protomaps.com)), sem depender de internet dentro de GO e DF. Fora dessa área,
+usa o mapa online normal. Busca de endereço, rota, trânsito e clima continuam precisando de internet.
+
+O arquivo **não vai para o Git** (tamanho). Fica em `Documents\Mult\_mapas\go-df.pmtiles` e é copiado pelo USB:
+
+```powershell
+.\scripts\instalar-usb.ps1 -Mapa       # instala o app e copia o mapa
+.\scripts\instalar-usb.ps1 -SoMapa     # só copia o mapa
+```
+
+No tablet ele fica em `Android/data/com.autodeck.hondadeck/files/maps/`. Em **Ajustes → Sistema →
+Mapa offline** aparece se está instalado. Os nomes de rua usam letras baixadas uma vez com internet
+(automático ao abrir o app em casa).
+
+**Gerar ou atualizar o arquivo** (ruas novas; uma vez por ano já basta), com o
+[go-pmtiles](https://github.com/protomaps/go-pmtiles/releases):
+
+```powershell
+pmtiles extract https://build.protomaps.com/AAAAMMDD.pmtiles go-df.pmtiles --bbox=-53.4,-19.6,-45.8,-12.3 --maxzoom=15
+```
+
+(`AAAAMMDD` = data de um build recente, lista em https://maps.protomaps.com/builds/.) Baixa só a região (~360 MB).
+
 ## Instalar pelo QR code (alternativa)
 
 Ler o QR code da página de instalação, ou abrir no tablet:

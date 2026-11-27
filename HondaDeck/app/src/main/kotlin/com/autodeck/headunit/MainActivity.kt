@@ -68,9 +68,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun launchSpotifyAuth() {
-        if (BuildConfig.SPOTIFY_CLIENT_ID.isBlank()) return
+        if (com.autodeck.headunit.data.BakedKeys.spotifyClientId.isBlank()) return
         val request = AuthorizationRequest.Builder(
-            BuildConfig.SPOTIFY_CLIENT_ID,
+            com.autodeck.headunit.data.BakedKeys.spotifyClientId,
             AuthorizationResponse.Type.TOKEN,
             BuildConfig.SPOTIFY_REDIRECT_URI
         ).setScopes(SpotifyWebApi.SCOPES)
@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.autodeck.headunit.data.BakedKeys.init(this)
         super.onCreate(savedInstanceState)
         viewModel.setSpotifyAuthRequester { launchSpotifyAuth() }
         viewModel.setCalendarPermissionRequester { requestCalendarPermission() }

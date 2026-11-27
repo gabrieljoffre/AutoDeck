@@ -82,6 +82,146 @@ class WebResourceRouter(
         handlePhoneAppIcon(path)
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Mapa offline (Goiás + DF): arquivo PMTiles copiado pelo USB (scripts/instalar-usb.ps1 -Mapa)
+    // ---------------------------------------------------------------------------------------
+
+    /** `/offline/{z}/{x}/{y}.pbf`: tile vetorial do arquivo offline (204 se não houver). */
+    val offlineTilesHandler = WebViewAssetLoader.PathHandler { path ->
+        handleOfflineTile(path)
+    }
+
+    /** `/glyphs/{fonte}/{faixa}.pbf`: letras dos nomes de rua; baixa uma vez e guarda em disco. */
+    val glyphsHandler = WebViewAssetLoader.PathHandler { path ->
+        handleGlyphs(path)
+    }
+
+    data class OfflineMapInfo(
+        val available: Boolean,
+        val minLon: Double = 0.0,
+        val minLat: Double = 0.0,
+        val maxLon: Double = 0.0,
+        val maxLat: Double = 0.0,
+        val maxZoom: Int = 0,
+        val sizeMb: Int = 0
+    )
+
+    private val glyphsDir = File(appContext.filesDir, "glyphs").apply { mkdirs() }
+    private val offlineLock = Any()
+
+    @Volatile
+    private var offlineArchive: PmtilesArchive? = null
+    private var offlineSig: String = ""
+    private var offlineCheckedAtMs = 0L
+
+    /** Onde o arquivo pode estar (o primeiro que existir vale). */
+    fun offlineMapCandidates(): List<File> = listOfNotNull(
+        appContext.getExternalFilesDir("maps")?.let { File(it, OFFLINE_MAP_FILE) },
+        File(File(appContext.filesDir, "maps"), OFFLINE_MAP_FILE)
+    )
+
+    /** Abre (ou reabre, se o arquivo foi trocado) o mapa offline. Checa o disco no máximo a cada 30 s. */
+    private fun offline(): PmtilesArchive? {
+        val now = System.currentTimeMillis()
+        if (now - offlineCheckedAtMs < OFFLINE_RECHECK_MS) return offlineArchive
+        synchronized(offlineLock) {
+            if (now - offlineCheckedAtMs < OFFLINE_RECHECK_MS) return offlineArchive
+            offlineCheckedAtMs = now
+            val f = offlineMapCandidates().firstOrNull { it.isFile && it.length() > 1024 }
+            val sig = f?.let { "${it.absolutePath}|${it.length()}|${it.lastModified()}" }.orEmpty()
+            if (sig != offlineSig) {
+                offlineArchive?.close()
+                offlineArchive = f?.let { file ->
+                    runCatching { PmtilesArchive(file) }
+                        .onFailure { Log.w(TAG, "Mapa offline inválido (${file.name}): ${it.message}") }
+                        .getOrNull()
+                }
+                offlineSig = sig
+                if (offlineArchive != null) Log.i(TAG, "Mapa offline carregado: ${f?.absolutePath}")
+            }
+            return offlineArchive
+        }
+    }
+
+    fun offlineMapInfo(): OfflineMapInfo {
+        val a = offline() ?: return OfflineMapInfo(available = false)
+        val h = a.header
+        val size = offlineMapCandidates().firstOrNull { it.isFile }?.length() ?: 0L
+        return OfflineMapInfo(
+            available = true,
+            minLon = h.minLon,
+            minLat = h.minLat,
+            maxLon = h.maxLon,
+            maxLat = h.maxLat,
+            maxZoom = h.maxZoom,
+            sizeMb = (size / (1024 * 1024)).toInt()
+        )
+    }
+
+    private fun handleOfflineTile(path: String): WebResourceResponse {
+        val m = OFFLINE_TILE_REGEX.matchEntire(path.substringBefore('?')) ?: return notFound()
+        val z = m.groupValues[1].toInt()
+        val x = m.groupValues[2].toInt()
+        val y = m.groupValues[3].toInt()
+        val archive = offline() ?: return noContent()
+        val bytes = runCatching { archive.getTile(z, x, y) }
+            .onFailure { Log.w(TAG, "Tile offline $z/$x/$y falhou: ${it.message}") }
+            .getOrNull() ?: return noContent()
+        return WebResourceResponse(
+            "application/x-protobuf",
+            null,
+            200,
+            "OK",
+            mapOf("Cache-Control" to "public, max-age=86400", "Access-Control-Allow-Origin" to "*"),
+            ByteArrayInputStream(bytes)
+        )
+    }
+
+    private fun handleGlyphs(path: String): WebResourceResponse {
+        val m = GLYPH_PATH_REGEX.matchEntire(path.substringBefore('?')) ?: return notFound()
+        val font = m.groupValues[1]
+        val range = m.groupValues[2]
+        val file = File(glyphsDir, "${font.replace("%20", " ").replace(' ', '_')}_$range.pbf")
+        val cached = if (file.isFile && file.length() > 0) runCatching { file.readBytes() }.getOrNull() else null
+        val bytes = cached ?: runCatching {
+            val remoteFont = font.replace("%20", " ").replace(" ", "%20")
+            val conn = (URL("$GLYPHS_URL$remoteFont/$range.pbf").openConnection() as HttpURLConnection).apply {
+                connectTimeout = 6_000
+                readTimeout = 8_000
+                setRequestProperty("User-Agent", USER_AGENT)
+            }
+            try {
+                if (conn.responseCode !in 200..299) return@runCatching null
+                conn.inputStream.use { it.readBytes() }.takeIf { it.isNotEmpty() }
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrNull()?.also { downloaded ->
+            runCatching {
+                val tmp = File(glyphsDir, "${file.name}.tmp")
+                tmp.writeBytes(downloaded)
+                if (!tmp.renameTo(file)) tmp.delete()
+            }
+        } ?: return notFound()
+        return WebResourceResponse(
+            "application/x-protobuf",
+            null,
+            200,
+            "OK",
+            mapOf("Cache-Control" to "public, max-age=604800", "Access-Control-Allow-Origin" to "*"),
+            ByteArrayInputStream(bytes)
+        )
+    }
+
+    /** Baixa as letras usadas pelo mapa enquanto há internet (em casa), para os nomes aparecerem offline. */
+    fun prefetchGlyphs() {
+        for (font in MAP_FONTS) {
+            for (range in GLYPH_RANGES) {
+                runCatching { handleGlyphs("$font/$range.pbf") }
+            }
+        }
+    }
+
     private fun handleCover(path: String): WebResourceResponse {
         val cleanPath = path.trimStart('/').substringBefore('?')
         if (cleanPath != "current.jpg") {
@@ -341,6 +481,15 @@ class WebResourceRouter(
         ByteArrayInputStream(ByteArray(0))
     )
 
+    private fun noContent(): WebResourceResponse = WebResourceResponse(
+        "application/x-protobuf",
+        null,
+        204,
+        "No Content",
+        mapOf("Cache-Control" to "no-store", "Access-Control-Allow-Origin" to "*"),
+        ByteArrayInputStream(ByteArray(0))
+    )
+
     data class TileBounds(val minX: Int, val maxX: Int, val minY: Int, val maxY: Int)
 
     data class OfflineDownloadResult(
@@ -372,6 +521,15 @@ class WebResourceRouter(
             }
             return "$baseUrl$z/$y/$x"
         }
+
+        const val OFFLINE_MAP_FILE = "go-df.pmtiles"
+        private const val OFFLINE_RECHECK_MS = 30_000L
+        private const val GLYPHS_URL = "https://tiles.openfreemap.org/fonts/"
+        // Fontes do map-style.js e faixas que cobrem português (Latin-1, Latin Extended-A, pontuação)
+        private val MAP_FONTS = listOf("Noto%20Sans%20Regular")
+        private val GLYPH_RANGES = listOf("0-255", "256-511", "8192-8447")
+        private val OFFLINE_TILE_REGEX = Regex("""^/?(\d{1,2})/(\d+)/(\d+)\.pbf$""")
+        private val GLYPH_PATH_REGEX = Regex("""^/?([A-Za-z0-9%_\- ]{1,80})/(\d{1,5}-\d{1,5})\.pbf$""")
 
         private const val MAX_CACHE_BYTES = 300L * 1024L * 1024L
         private const val TRIM_TARGET_BYTES = 260L * 1024L * 1024L

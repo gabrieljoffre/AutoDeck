@@ -52,6 +52,8 @@ fun WebUiHost(
             .addPathHandler("/labels/", runtime.tileRouter.labelsHandler)
             .addPathHandler("/appicon/", runtime.tileRouter.appIconHandler)
             .addPathHandler("/phoneicon/", runtime.tileRouter.phoneIconHandler)
+            .addPathHandler("/offline/", runtime.tileRouter.offlineTilesHandler)
+            .addPathHandler("/glyphs/", runtime.tileRouter.glyphsHandler)
             .build()
 
         val webView = WebView(context).apply {

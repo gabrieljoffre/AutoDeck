@@ -181,4 +181,30 @@ class PlaceSearchTest {
         assertTrue(results.indexOfFirst { it.name == "Posto de Saúde" } > results.indexOfFirst { it.name == "Posto Alé" })
         assertTrue(results.indexOfFirst { it.address.contains("Aparecida") } > results.indexOfFirst { it.name == "Posto Alé" })
     }
+
+    // Casos reais do Photon (27/11/2026, saindo do centro de Anápolis)
+    @Test
+    fun `nome exato vem antes de resultado perto que bate so com parte da busca`() = runBlocking {
+        val photonJson = """
+            {"type":"FeatureCollection","features":[
+              {"type":"Feature","geometry":{"type":"Point","coordinates":[-49.2600,-16.8100]},"properties":{"name":"Supermercado Canaã Aeroporto Sul","city":"Aparecida de Goiânia","state":"Goiás"}},
+              {"type":"Feature","geometry":{"type":"Point","coordinates":[-48.0650,-16.2600]},"properties":{"name":"Hangar do Aeroclube de Brasília","city":"Luziânia","state":"Goiás"}},
+              {"type":"Feature","geometry":{"type":"Point","coordinates":[-47.9180,-15.8710]},"properties":{"name":"Aeroporto Internacional de Brasília","district":"Lago Sul","city":"Brasília","state":"Distrito Federal"}}
+            ]}
+        """.trimIndent()
+        val engine = PlaceSearch(httpFetcher = { url -> if (url.contains("photon")) photonJson else "[]" }, minIntervalMs = 0L)
+
+        val results = engine.search("Aeroporto de Brasilia", -16.3281, -48.9527)
+        assertEquals("Aeroporto Internacional de Brasília", results[0].name)
+        assertTrue(results.indexOfFirst { it.name.startsWith("Supermercado") } > 0)
+    }
+
+    @Test
+    fun `busca generica continua pela distancia e numero da casa nao atrapalha`() {
+        val perto = PlaceSearchResult("Supermercado Reis", "Anápolis - GO", -16.33, -48.95, 2.3)
+        val longe = PlaceSearchResult("Supermercado", "Abadia de Goiás - GO", -16.75, -49.43, 70.8)
+        val sorted = PlaceSearch.sortPlaces(listOf(longe, perto), "supermercado")
+        assertEquals("Supermercado Reis", sorted[0].name)
+        assertEquals(listOf("rua", "engenheiro", "portela"), PlaceSearch.queryTokens("Rua Engenheiro Portela, 123"))
+    }
 }

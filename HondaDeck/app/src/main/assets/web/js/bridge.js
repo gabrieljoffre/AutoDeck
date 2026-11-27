@@ -57,6 +57,8 @@ const VALID_COMMANDS = new Set([
   'fuel.tank',
   'settings.set',
   'system.downloadOfflineMap',
+  'system.update.check',
+  'system.update.install',
   'camera.toggle',
   'calendar.refresh',
   'calendar.requestPermission'
@@ -138,6 +140,7 @@ export const DEFAULT_STATE = {
     lon: -48.9534,
     bearing: 0,
     hasFix: false,
+    offline: { available: false, minLon: 0, minLat: 0, maxLon: 0, maxLat: 0, maxZoom: 0, sizeMb: 0 },
     favorites: [],
     recentPlaces: [],
     search: { query: '', loading: false, results: [] },
@@ -252,7 +255,8 @@ export const DEFAULT_STATE = {
     cameraBrightness: 50,
     cameraContrast: 50,
     cameraSaturation: 50,
-    version: '3.0.0'
+    version: '3.0.0',
+    update: { supported: false, status: 'IDLE', currentName: '', latestName: '', latestDate: '', progressPct: 0, message: '' }
   }
 };
 
@@ -326,6 +330,7 @@ export function normalizeState(raw) {
     map: {
       ...DEFAULT_STATE.map,
       ...mp,
+      offline: { ...DEFAULT_STATE.map.offline, ...asObj(mp.offline) },
       favorites: asArr(mp.favorites),
       recentPlaces: asArr(mp.recentPlaces),
       search: {
@@ -378,7 +383,8 @@ export function normalizeState(raw) {
       accentOptions: asArr(st.accentOptions, DEFAULT_STATE.settings.accentOptions).length
         ? asArr(st.accentOptions)
         : DEFAULT_STATE.settings.accentOptions,
-      pairedDevices: asArr(st.pairedDevices)
+      pairedDevices: asArr(st.pairedDevices),
+      update: { ...DEFAULT_STATE.settings.update, ...asObj(st.update) }
     }
   };
 }

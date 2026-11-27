@@ -28,7 +28,9 @@ data class WebExtras(
     val favoritePlacesOverride: List<FavoritePlace>? = null,
     val recentPlacesOverride: List<RecentPlace>? = null,
     val recentSearchesOverride: List<String>? = null,
-    val mapsJsApiKey: String = ""
+    val mapsJsApiKey: String = "",
+    val offlineMap: WebResourceRouter.OfflineMapInfo = WebResourceRouter.OfflineMapInfo(available = false),
+    val update: com.autodeck.headunit.update.AppUpdater.UpdateState? = null
 )
 
 /**
@@ -193,7 +195,17 @@ object StateDto {
         val mapObj = JSONObject().apply {
             put("provider", if (mapsKey.isNotEmpty()) "google" else "esri")
             put("jsKey", mapsKey)
-            put("trafficKey", com.autodeck.headunit.BuildConfig.TOMTOM_API_KEY)
+            put("trafficKey", com.autodeck.headunit.data.BakedKeys.tomtom)
+            put("offline", JSONObject().apply {
+                val o = extras.offlineMap
+                put("available", o.available)
+                put("minLon", o.minLon)
+                put("minLat", o.minLat)
+                put("maxLon", o.maxLon)
+                put("maxLat", o.maxLat)
+                put("maxZoom", o.maxZoom)
+                put("sizeMb", o.sizeMb)
+            })
             put("lat", safeNum(ui.gpsState.latitude, -16.3281))
             put("lon", safeNum(ui.gpsState.longitude, -48.9534))
             put("bearing", round1(safeNum(ui.gpsState.bearingDeg.toDouble())))
@@ -437,6 +449,16 @@ object StateDto {
             put("cameraContrast", ui.config.cameraContrast.coerceIn(0, 100))
             put("cameraSaturation", ui.config.cameraSaturation.coerceIn(0, 100))
             put("version", extras.appVersion)
+            put("update", JSONObject().apply {
+                val u = extras.update
+                put("supported", u?.supported ?: false)
+                put("status", u?.status?.name ?: "IDLE")
+                put("currentName", u?.currentName ?: extras.appVersion)
+                put("latestName", u?.latestName ?: "")
+                put("latestDate", u?.latestDate ?: "")
+                put("progressPct", u?.progressPct ?: 0)
+                put("message", u?.message ?: "")
+            })
         }
 
         val appsObj = JSONObject().apply {

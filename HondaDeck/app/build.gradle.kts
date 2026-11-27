@@ -9,6 +9,12 @@ val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
+// Número da versão = minutos desde 01/01/2026 (UTC) na hora do build. Sempre cresce, tanto no
+// build de casa quanto no do GitHub, e é o que o botão "Atualizar app" compara.
+// A variável de ambiente HONDADECK_VERSION_CODE força um valor fixo.
+val hondaVersionCode: Int = System.getenv("HONDADECK_VERSION_CODE")?.toIntOrNull()
+    ?: ((System.currentTimeMillis() - 1_767_225_600_000L) / 60_000L).toInt().coerceAtLeast(2)
+
 fun localKey(name: String): String =
     (localProps.getProperty(name) ?: "").trim().replace("\\", "\\\\").replace("\"", "\\\"")
 
@@ -26,8 +32,8 @@ android {
         applicationId = "com.autodeck.hondadeck"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "3.0.0"
+        versionCode = hondaVersionCode
+        versionName = "3.1.$hondaVersionCode"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
@@ -86,10 +92,13 @@ android {
             dimension = "instalacao"
             isDefault = true // variante que o Android Studio abre por padrão
             buildConfigField("boolean", "HAS_NOTIFICATION_LISTENER", "true")
+            // Botão "Atualizar app" (REQUEST_INSTALL_PACKAGES fica só em src/completo)
+            buildConfigField("boolean", "HAS_SELF_UPDATE", "true")
         }
         create("qr") {
             dimension = "instalacao"
             buildConfigField("boolean", "HAS_NOTIFICATION_LISTENER", "false")
+            buildConfigField("boolean", "HAS_SELF_UPDATE", "false")
         }
     }
 

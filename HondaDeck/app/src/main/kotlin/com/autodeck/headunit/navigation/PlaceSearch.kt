@@ -89,13 +89,13 @@ class PlaceSearch(
             if (hit != null && now - hit.savedAtMs <= CACHE_TTL_MS) {
                 hit.results.map { r ->
                     r.copy(distanceKm = calcDistanceKm(originLat, originLon, r.lat, r.lon))
-                }.let { sortPlaces(it, effectiveQuery) }
+                }.let { sortPlaces(it, effectiveQuery, raw) }
             } else {
                 null
             }
         }
         if (cachedRemote != null) {
-            return mergeResults(localPriority.map { it.result }, sortPlaces(cachedRemote + localDistantRecents, effectiveQuery))
+            return mergeResults(localPriority.map { it.result }, sortPlaces(cachedRemote + localDistantRecents, effectiveQuery, raw))
         }
 
         // 1) Photon (rápido, tolerante a typos/incompletos, com viés na posição atual)
@@ -158,7 +158,7 @@ class PlaceSearch(
         }
         return mergeResults(
             localPriority.map { it.result },
-            sortPlaces(remote + localDistantRecents, effectiveQuery)
+            sortPlaces(remote + localDistantRecents, effectiveQuery, raw)
         )
     }
 
@@ -380,18 +380,68 @@ class PlaceSearch(
                 n.contains("posto medico")
         }
 
-        private fun sortPlaces(list: List<PlaceSearchResult>, effectiveQuery: String): List<PlaceSearchResult> {
+        /**
+         * Ordena: primeiro o quanto o nome bate com o que foi pedido ([relevanceTier]), depois a distância.
+         * Assim "Aeroporto de Brasília" traz o aeroporto antes de um "Supermercado Aeroporto" perto,
+         * e buscas genéricas ("supermercado", "posto") continuam pela distância, porque todos empatam.
+         * [rawQuery] é o texto digitado/falado: a expansão ("posto de combustível") não entra no cálculo.
+         */
+        internal fun sortPlaces(
+            list: List<PlaceSearchResult>,
+            effectiveQuery: String,
+            rawQuery: String = effectiveQuery
+        ): List<PlaceSearchResult> {
             val fuelSearch = effectiveQuery == "posto de combustível"
-            // Se existe resultado na região, esconde os de outros estados (ex.: "Posto Shell" em SP/PE)
-            val hasRegional = list.any { it.distanceKm <= REGIONAL_KM }
-            val filtered = if (hasRegional) list.filter { it.distanceKm <= FAR_CUTOFF_KM } else list
-            return filtered.distinctBy { dedupKey(it) }
+            val tokens = queryTokens(rawQuery)
+            val unique = list.distinctBy { dedupKey(it) }
+            val tiers = unique.associateWith { relevanceTier(it, tokens) }
+            // Resultado de outro estado (ex.: "Posto Shell" em SP/PE) só sai da lista quando já existe
+            // na região um resultado tão bom quanto ele
+            val bestRegionalTier = unique.filter { it.distanceKm <= REGIONAL_KM }
+                .maxOfOrNull { tiers.getValue(it) } ?: -1
+            return unique
+                .filter { it.distanceKm <= FAR_CUTOFF_KM || tiers.getValue(it) > bestRegionalTier }
                 .sortedWith(
                     compareBy<PlaceSearchResult> { if (fuelSearch && isNonFuelPosto(it.name)) 1 else 0 }
+                        .thenByDescending { tiers.getValue(it) }
                         .thenBy { it.distanceKm }
                 )
                 .take(MAX_RESULTS)
         }
+
+        private val QUERY_STOPWORDS = setOf(
+            "de", "da", "do", "das", "dos", "e", "a", "o", "as", "os", "em", "na", "no", "nas", "nos",
+            "para", "pra", "perto", "proximo", "mais"
+        )
+
+        /** Palavras que importam na busca (sem acento, sem "de/da/do" e sem número de casa). */
+        internal fun queryTokens(query: String): List<String> =
+            normalizeText(query).split(NON_WORD_REGEX)
+                .filter { it.length >= 2 && it !in QUERY_STOPWORDS && !it.all(Char::isDigit) }
+                .distinct()
+
+        /**
+         * 3 = todas as palavras no nome; 2 = todas no nome + endereço (ex.: cidade);
+         * 1 = pelo menos metade; 0 = quase nada em comum. Tolera um erro de digitação em palavras longas.
+         */
+        internal fun relevanceTier(r: PlaceSearchResult, tokens: List<String>): Int {
+            if (tokens.isEmpty()) return 0
+            val nameWords = normalizeText(r.name).split(NON_WORD_REGEX).filter { it.isNotBlank() }
+            val allWords = nameWords + normalizeText(r.address).split(NON_WORD_REGEX).filter { it.isNotBlank() }
+            fun hit(words: List<String>, t: String) = words.any { w ->
+                w.startsWith(t) || (t.length >= 5 && w.length >= 5 && editDistanceAtMostOne(t, w.take(t.length + 1)))
+            }
+            val inName = tokens.count { hit(nameWords, it) }
+            val inAll = tokens.count { hit(allWords, it) }
+            return when {
+                inName == tokens.size -> 3
+                inAll == tokens.size -> 2
+                inAll * 2 >= tokens.size -> 1
+                else -> 0
+            }
+        }
+
+        private val NON_WORD_REGEX = Regex("[^a-z0-9]+")
 
         private fun mergeResults(
             localHits: List<PlaceSearchResult>,
@@ -413,7 +463,7 @@ class PlaceSearch(
         private fun deduplicateAndSort(list: List<PlaceSearchResult>): List<PlaceSearchResult> =
             list.distinctBy { dedupKey(it) }
                 .sortedBy { it.distanceKm }
-                .take(MAX_RESULTS)
+                .take(MAX_RESULTS * 3) // o corte final para 8 é no sortPlaces, já por relevância
 
         private fun dedupKey(r: PlaceSearchResult): String =
             "${normalizeText(r.name)}|${(r.lat * 1000).roundToInt()}|${(r.lon * 1000).roundToInt()}"
