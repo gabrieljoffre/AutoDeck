@@ -83,6 +83,12 @@ class MainActivity : ComponentActivity() {
         if (storage.isServiceEnabled()) {
             PonteServerService.start(applicationContext)
         }
+        // Detecção do carro por BLE (liga o roteador ao chegar perto do painel).
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+            checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            permissionLauncher.launch(arrayOf(Manifest.permission.BLUETOOTH_SCAN))
+        }
 
         setContent {
             val state by PonteStateHub.uiState.collectAsState()

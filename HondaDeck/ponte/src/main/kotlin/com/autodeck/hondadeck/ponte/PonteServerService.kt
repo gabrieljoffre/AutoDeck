@@ -81,8 +81,11 @@ class PonteServerService : Service() {
     private val running = AtomicBoolean(false)
     private var monitorJob: Job? = null
 
+    private var carProximity: PonteCarProximity? = null
+
     override fun onCreate() {
         super.onCreate()
+        carProximity = PonteCarProximity(applicationContext).also { it.startAndWatch() }
         storage = PonteStorage(applicationContext)
         contactsManager = PonteContactsManager(applicationContext)
         calendarManager = PonteCalendarManager(applicationContext)
@@ -141,6 +144,7 @@ class PonteServerService : Service() {
     }
 
     override fun onDestroy() {
+        carProximity?.stopWatching()
         running.set(false)
         monitorJob?.cancel()
         contactsDebounceJob?.cancel()

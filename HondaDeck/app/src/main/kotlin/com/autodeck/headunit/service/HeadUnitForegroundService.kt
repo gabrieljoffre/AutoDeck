@@ -59,6 +59,8 @@ class HeadUnitForegroundService : Service() {
         }
     }
 
+    private var carBeacon: com.autodeck.headunit.hardware.CarPresenceBeacon? = null
+
     override fun onCreate() {
         super.onCreate()
         runtime = HeadUnitRuntime.get(applicationContext)
@@ -70,6 +72,8 @@ class HeadUnitForegroundService : Service() {
         startForegroundCompat(buildNotification("Painel HondaDeck ativo em tempo real"))
         registerPowerReceiver()
         observeBackgroundOverlays()
+        // Sinal BLE para a Ponte ligar o roteador do celular ao chegar perto do carro.
+        carBeacon = com.autodeck.headunit.hardware.CarPresenceBeacon(applicationContext).also { it.startAndWatch() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,6 +81,7 @@ class HeadUnitForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        carBeacon?.stopWatching()
         floatingHud.hide()
         removeReverseSystemOverlay()
         overlayJob?.cancel()

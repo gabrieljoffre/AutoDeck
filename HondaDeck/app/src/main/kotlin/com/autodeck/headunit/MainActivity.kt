@@ -245,6 +245,9 @@ class MainActivity : ComponentActivity() {
             if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
                 missing += Manifest.permission.BLUETOOTH_CONNECT
             }
+            if (!hasPermission(Manifest.permission.BLUETOOTH_ADVERTISE)) {
+                missing += Manifest.permission.BLUETOOTH_ADVERTISE
+            }
         }
         if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
             missing += Manifest.permission.ACCESS_FINE_LOCATION

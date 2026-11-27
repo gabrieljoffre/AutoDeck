@@ -472,6 +472,139 @@ class PonteAccessibilityService : AccessibilityService() {
         }, 1_150L)
     }
 
+    enum class ToggleResult { DONE, ALREADY, NOT_FOUND, UNAVAILABLE }
+
+    /**
+     * Liga/desliga o Roteador Wi-Fi (e, ao ligar, os Dados móveis) pelas Configurações rápidas.
+     * Bloqueante (usa sleeps curtos): chamar fora da thread principal.
+     */
+    fun setQuickSettingsToggles(on: Boolean): ToggleResult {
+        if (hotspotOn() == on && (!on || mobileDataOn() == true)) return ToggleResult.ALREADY
+        if (!performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)) return ToggleResult.UNAVAILABLE
+        try {
+            Thread.sleep(1_200)
+            if (on && mobileDataOn() != true) {
+                if (tapUntil(DATA_TILE_LABELS, true) { mobileDataOn() }) dataTurnedOnByUs = true
+            }
+            val r = if (hotspotOn() == on) ToggleResult.ALREADY
+                else if (tapUntil(HOTSPOT_TILE_LABELS, on) { hotspotOn() }) ToggleResult.DONE
+                else ToggleResult.NOT_FOUND
+            if (!on && dataTurnedOnByUs && mobileDataOn() == true) {
+                // Devolve os Dados móveis como o usuário deixava (só se fomos nós que ligamos).
+                if (tapUntil(DATA_TILE_LABELS, false) { mobileDataOn() }) dataTurnedOnByUs = false
+            }
+            return r
+        } finally {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            Thread.sleep(250)
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+    }
+
+    @Volatile private var dataTurnedOnByUs = false
+
+    @Suppress("MissingPermission")
+    private fun mobileDataOn(): Boolean? = runCatching {
+        getSystemService(android.telephony.TelephonyManager::class.java)?.isDataEnabled
+    }.getOrNull()
+
+    /** Estado real do roteador (broadcast fixo do sistema; 13 = ligado, 11 = desligado). */
+    private fun hotspotOn(): Boolean? {
+        val sticky = runCatching {
+            registerReceiver(null, android.content.IntentFilter("android.net.wifi.WIFI_AP_STATE_CHANGED"))
+        }.getOrNull()
+        val st = sticky?.getIntExtra("wifi_state", -1) ?: -1
+        if (st == 13 || st == 12) return true
+        if (st == 11 || st == 10) return false
+        // Plano B: interface do roteador com IPv4.
+        return runCatching {
+            java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().any { ni ->
+                (ni.name.startsWith("swlan") || ni.name.startsWith("ap")) && ni.isUp &&
+                    ni.inetAddresses.toList().any { it is java.net.Inet4Address }
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Toca no bloco e espera o estado REAL mudar (até 6 s). Só toca de novo se não mudou,
+     * evitando o toque duplo que desfazia a ação.
+     */
+    private fun tapUntil(labels: List<String>, want: Boolean, state: () -> Boolean?): Boolean {
+        repeat(2) { attempt ->
+            if (state() == want) return true
+            var tile: AccessibilityNodeInfo? = null
+            for (page in 0..1) {
+                tile = runCatching { windows.mapNotNull { it.root } }.getOrDefault(emptyList())
+                    .firstNotNullOfOrNull { findTile(it, labels) }
+                if (tile != null) break
+                if (page == 0) { swipeQuickSettingsPage(); Thread.sleep(700) }
+            }
+            if (tile == null) {
+                Log.w(TAG, "Bloco \"${labels.first()}\" não encontrado (tentativa ${attempt + 1}).")
+                performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
+                Thread.sleep(1_000)
+                return@repeat
+            }
+            if (!tapOnNode(tile)) clickNodeOrParent(tile, maxHops = 3)
+            var waited = 0
+            while (waited < 6_000) {
+                Thread.sleep(400); waited += 400
+                if (state() == want) {
+                    Log.i(TAG, "Bloco \"${labels.first()}\" agora ${if (want) "ligado" else "desligado"}.")
+                    return true
+                }
+            }
+        }
+        Log.w(TAG, "Bloco \"${labels.first()}\": não mudou para $want.")
+        return false
+    }
+
+    private fun findTile(root: AccessibilityNodeInfo, labels: List<String>): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 600) {
+            val n = queue.removeFirst()
+            visited++
+            val desc = n.contentDescription?.toString().orEmpty()
+            val txt = n.text?.toString().orEmpty()
+            if (labels.any { l -> desc.startsWith(l, ignoreCase = true) || txt.equals(l, ignoreCase = true) }) {
+                // Sobe até o nó clicável/checável do bloco.
+                var cur: AccessibilityNodeInfo? = n
+                var hops = 0
+                while (cur != null && hops < 3 && !(cur.isClickable || cur.isCheckable)) { cur = cur.parent; hops++ }
+                return cur ?: n
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { queue.addLast(it) }
+        }
+        return null
+    }
+
+    private fun tileState(tile: AccessibilityNodeInfo): Boolean? {
+        if (tile.isCheckable) return tile.isChecked
+        val all = buildString {
+            append(tile.contentDescription ?: ""); append(' '); append(tile.stateDescription ?: "")
+            for (i in 0 until tile.childCount) tile.getChild(i)?.let { append(' '); append(it.contentDescription ?: ""); append(' '); append(it.text ?: "") }
+        }.lowercase()
+        return when {
+            listOf("desativado", "desligado", "off").any { all.contains(it) } -> false
+            listOf("ativado", "ligado", " on").any { all.contains(it) } -> true
+            else -> null
+        }
+    }
+
+    private fun swipeQuickSettingsPage() {
+        val dm = resources.displayMetrics
+        val path = android.graphics.Path().apply {
+            moveTo(dm.widthPixels * 0.85f, dm.heightPixels * 0.28f)
+            lineTo(dm.widthPixels * 0.15f, dm.heightPixels * 0.28f)
+        }
+        val gesture = android.accessibilityservice.GestureDescription.Builder()
+            .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 300))
+            .build()
+        dispatchGesture(gesture, null, null)
+    }
+
     /** Encerra uma chamada do WhatsApp em andamento tocando em "Sair da ligação". */
     fun endWhatsAppCall(): Boolean {
         val roots = runCatching { windows.mapNotNull { it.root } }.getOrDefault(emptyList()) + listOfNotNull(rootInActiveWindow)
@@ -496,6 +629,8 @@ class PonteAccessibilityService : AccessibilityService() {
         @Volatile
         var instance: PonteAccessibilityService? = null
         private const val TAG = "PonteAccessibility"
+        private val HOTSPOT_TILE_LABELS = listOf("Roteador Wi-Fi", "Roteador", "Hotspot móvel", "Mobile Hotspot", "Hotspot")
+        private val DATA_TILE_LABELS = listOf("Dados móveis", "Mobile data")
         private const val CLICK_DEBOUNCE_MS = 650L
 
         private val WHATSAPP_PACKAGES = setOf(
