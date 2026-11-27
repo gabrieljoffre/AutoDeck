@@ -38,6 +38,8 @@ android {
         buildConfigField("String", "GEMINI_API_KEY", "\"${localKey("GEMINI_API_KEY")}\"")
         // Chave opcional do Google Maps JavaScript API (quando vazia, usa Esri + Photon sem chave).
         buildConfigField("String", "MAPS_JS_API_KEY", "\"${localKey("MAPS_JS_API_KEY")}\"")
+        // Chave TomTom (trânsito ao vivo no mapa: fluxo + ocorrências). Vazia = sem camada de trânsito.
+        buildConfigField("String", "TOMTOM_API_KEY", "\"${localKey("TOMTOM_API_KEY")}\"")
 
         manifestPlaceholders["redirectSchemeName"] = "hondadeck"
         manifestPlaceholders["redirectHostName"] = "spotify-callback"

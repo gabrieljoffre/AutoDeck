@@ -193,6 +193,7 @@ object StateDto {
         val mapObj = JSONObject().apply {
             put("provider", if (mapsKey.isNotEmpty()) "google" else "esri")
             put("jsKey", mapsKey)
+            put("trafficKey", com.autodeck.headunit.BuildConfig.TOMTOM_API_KEY)
             put("lat", safeNum(ui.gpsState.latitude, -16.3281))
             put("lon", safeNum(ui.gpsState.longitude, -48.9534))
             put("bearing", round1(safeNum(ui.gpsState.bearingDeg.toDouble())))

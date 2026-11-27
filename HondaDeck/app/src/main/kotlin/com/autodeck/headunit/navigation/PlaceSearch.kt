@@ -176,6 +176,8 @@ class PlaceSearch(
         private const val CACHE_TTL_MS = 10 * 60_000L
         private const val MAX_CACHE_ENTRIES = 64
         private const val MAX_RESULTS = 8
+        private const val REGIONAL_KM = 80.0
+        private const val FAR_CUTOFF_KM = 250.0
 
         /** Expande atalhos comuns de direção para consultas melhores. */
         fun expandQuery(raw: String): String {
@@ -198,7 +200,10 @@ class PlaceSearch(
             val encoded = URLEncoder.encode(query, "UTF-8")
             val latStr = String.format(Locale.US, "%.5f", lat)
             val lonStr = String.format(Locale.US, "%.5f", lon)
-            return "https://photon.komoot.io/api/?q=$encoded&lat=$latStr&lon=$lonStr&lang=default&limit=$limit"
+            // zoom=14 + location_bias_scale=0: prioriza o que está perto do carro em vez de lugares "famosos"
+            // de outras cidades (testado: "supermercado" passou de Senador Canedo/Abadia para Anápolis)
+            return "https://photon.komoot.io/api/?q=$encoded&lat=$latStr&lon=$lonStr&lang=default&limit=$limit" +
+                "&zoom=14&location_bias_scale=0"
         }
 
         /** URL do Nominatim (OpenStreetMap) usada como complemento/fallback. */
@@ -377,7 +382,10 @@ class PlaceSearch(
 
         private fun sortPlaces(list: List<PlaceSearchResult>, effectiveQuery: String): List<PlaceSearchResult> {
             val fuelSearch = effectiveQuery == "posto de combustível"
-            return list.distinctBy { dedupKey(it) }
+            // Se existe resultado na região, esconde os de outros estados (ex.: "Posto Shell" em SP/PE)
+            val hasRegional = list.any { it.distanceKm <= REGIONAL_KM }
+            val filtered = if (hasRegional) list.filter { it.distanceKm <= FAR_CUTOFF_KM } else list
+            return filtered.distinctBy { dedupKey(it) }
                 .sortedWith(
                     compareBy<PlaceSearchResult> { if (fuelSearch && isNonFuelPosto(it.name)) 1 else 0 }
                         .thenBy { it.distanceKm }

@@ -90,8 +90,10 @@ class BluetoothClassicObdTransport(
 
         runCatching {
             disconnect()
-            if (adapter.isDiscovering) {
-                adapter.cancelDiscovery()
+            // No Android 12+ isDiscovering/cancelDiscovery exigem BLUETOOTH_SCAN (o app não tem).
+            // A falha não pode impedir a conexão: o app nunca inicia busca, então só tentamos.
+            runCatching {
+                if (adapter.isDiscovering) adapter.cancelDiscovery()
             }
             val device = adapter.getRemoteDevice(macAddress)
             val rfcomm = openRfcommWithFallback(device)

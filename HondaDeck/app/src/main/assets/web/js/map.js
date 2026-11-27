@@ -21,6 +21,24 @@ import {
   createClockSvg
 } from './util.js';
 import { buildMapStyle, routeToGeoJSON, destToGeoJSON, webglAvailable } from './map-style.js';
+import { createTrafficLayer } from './traffic-layer.js';
+
+// Trânsito ao vivo TomTom sobre o mapa 3D (criado junto com o MapLibre)
+let trafficLayer = null;
+
+function trafficKey() {
+  // No PC (mock) dá para testar com localStorage 'hd.dev.tomtomKey'; no app vem do BuildConfig
+  return lastMapState?.trafficKey || (isMockBackend() ? localStorage.getItem('hd.dev.tomtomKey') : '') || '';
+}
+
+function updateTrafficBtnUi() {
+  const btn = document.getElementById('map-traffic-btn');
+  if (!btn) return;
+  const available = Boolean(trafficLayer?.available);
+  btn.classList.toggle('hidden', !available);
+  btn.classList.toggle('active', Boolean(available && trafficLayer.enabled));
+  btn.setAttribute('aria-pressed', String(Boolean(available && trafficLayer.enabled)));
+}
 
 const ESRI_DARK_BASE = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}';
 const ESRI_DARK_REF = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}';
@@ -267,15 +285,76 @@ function initLeafletStage() {
 // MapLibre GL + OpenFreeMap (vetorial, 3D real, gratuito e sem chave)
 // ---------------------------------------------------------------------------
 
+// Honda Civic sedã 2005 (7ª geração) visto de cima, frente para cima. Fica "deitado" no asfalto
+// (pitchAlignment 'map'): com a câmera drone inclinada ganha perspectiva como um carro 3D.
+// Cor da lataria via CSS (--car-paint-hi / --car-paint / --car-paint-lo), padrão prata.
 function buildMlCarElement() {
   const node = document.createElement('div');
   node.className = 'hd-ml-car';
   node.innerHTML = `
-    <svg width="92" height="92" viewBox="0 0 58 58" fill="none" aria-hidden="true">
-      <circle cx="29" cy="31" r="24" fill="var(--a20)"></circle>
-      <circle cx="29" cy="31" r="14" fill="var(--a35)"></circle>
-      <path d="M29 9 L43 43 L29 35.5 L15 43 Z" fill="var(--accent)" stroke="#06090F" stroke-width="2.4" stroke-linejoin="round"></path>
-      <path d="M29 12.5 L29 34 L18 40 Z" fill="rgba(255,255,255,0.28)"></path>
+    <svg width="104" height="160" viewBox="-35 -30 130 200" fill="none" aria-hidden="true">
+      <defs>
+        <linearGradient id="hdCarPaint" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="var(--car-paint-lo)"/>
+          <stop offset="0.28" stop-color="var(--car-paint)"/>
+          <stop offset="0.5" stop-color="var(--car-paint-hi)"/>
+          <stop offset="0.72" stop-color="var(--car-paint)"/>
+          <stop offset="1" stop-color="var(--car-paint-lo)"/>
+        </linearGradient>
+        <linearGradient id="hdCarGlass" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#2B3C52"/>
+          <stop offset="1" stop-color="#0B121C"/>
+        </linearGradient>
+        <linearGradient id="hdCarBeam" x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0" stop-color="#EAF6FF" stop-opacity="0.55"/>
+          <stop offset="1" stop-color="#EAF6FF" stop-opacity="0"/>
+        </linearGradient>
+        <radialGradient id="hdCarShadow" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0.55" stop-color="#000" stop-opacity="0.55"/>
+          <stop offset="1" stop-color="#000" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <!-- halo da cor de destaque (identidade do app no mapa) -->
+      <ellipse cx="30" cy="72" rx="44" ry="62" fill="var(--a20)"/>
+      <!-- facho dos faróis -->
+      <path d="M18 14 L-6 -24 L22 -24 L25 14 Z" fill="url(#hdCarBeam)"/>
+      <path d="M42 14 L66 -24 L38 -24 L35 14 Z" fill="url(#hdCarBeam)"/>
+      <!-- sombra no asfalto -->
+      <ellipse cx="30" cy="72" rx="24" ry="64" fill="url(#hdCarShadow)"/>
+      <!-- rodas aparecendo nas laterais -->
+      <rect x="11.5" y="27" width="4" height="15" rx="1.6" fill="#0A0D12"/>
+      <rect x="44.5" y="27" width="4" height="15" rx="1.6" fill="#0A0D12"/>
+      <rect x="11.5" y="101" width="4" height="15" rx="1.6" fill="#0A0D12"/>
+      <rect x="44.5" y="101" width="4" height="15" rx="1.6" fill="#0A0D12"/>
+      <!-- lataria (sedã: frente arredondada, porta-malas reto) -->
+      <path d="M30 9 C39 9 44.5 12 45.6 20 L46.6 40 L46.6 116 C46.6 126 42 131 30 131 C18 131 13.4 126 13.4 116 L13.4 40 L14.4 20 C15.5 12 21 9 30 9 Z"
+        fill="url(#hdCarPaint)" stroke="#05080D" stroke-width="1.4"/>
+      <!-- vincos do capô -->
+      <path d="M22 17 C23 26 23.5 34 24 43 M38 17 C37 26 36.5 34 36 43" stroke="rgba(0,0,0,0.18)" stroke-width="0.9"/>
+      <!-- grade + logo -->
+      <path d="M24 11.4 Q30 10.2 36 11.4" stroke="#1A2230" stroke-width="1.6" stroke-linecap="round"/>
+      <!-- faróis -->
+      <path d="M15.6 19 Q17.5 12.4 25 11.3 L24.4 15.2 Q19.6 16.4 17.2 21.4 Z" fill="#EAF6FF"/>
+      <path d="M44.4 19 Q42.5 12.4 35 11.3 L35.6 15.2 Q40.4 16.4 42.8 21.4 Z" fill="#EAF6FF"/>
+      <!-- para-brisa -->
+      <path d="M17 61 L43 61 L40.2 44 Q30 41.6 19.8 44 Z" fill="url(#hdCarGlass)" stroke="#05080D" stroke-width="0.8"/>
+      <path d="M21 46 L24.5 46 L20.5 58 L18.6 58 Z" fill="rgba(255,255,255,0.16)"/>
+      <!-- teto -->
+      <rect x="17.4" y="61" width="25.2" height="31" rx="3" fill="var(--car-paint-hi)" opacity="0.9"/>
+      <rect x="17.4" y="61" width="25.2" height="31" rx="3" fill="url(#hdCarPaint)" opacity="0.55"/>
+      <!-- vidros laterais -->
+      <path d="M15 47 L17 61 L17 96 L15 104 Z" fill="#0E1621"/>
+      <path d="M45 47 L43 61 L43 96 L45 104 Z" fill="#0E1621"/>
+      <!-- vidro traseiro -->
+      <path d="M17.4 92 L42.6 92 L39.6 105 Q30 106.8 20.4 105 Z" fill="url(#hdCarGlass)" stroke="#05080D" stroke-width="0.8"/>
+      <!-- retrovisores -->
+      <path d="M13.6 48 L8.6 46.6 Q7.6 50.6 9.4 52.4 L13.6 52.6 Z" fill="var(--car-paint)" stroke="#05080D" stroke-width="0.8"/>
+      <path d="M46.4 48 L51.4 46.6 Q52.4 50.6 50.6 52.4 L46.4 52.6 Z" fill="var(--car-paint)" stroke="#05080D" stroke-width="0.8"/>
+      <!-- tampa do porta-malas -->
+      <path d="M17 108 L43 108" stroke="rgba(0,0,0,0.22)" stroke-width="0.9"/>
+      <!-- lanternas -->
+      <path d="M14 117 L14 124 Q15.4 129.4 21 130.2 L21.6 126.4 Q16.8 124.6 16.4 117 Z" fill="#FF2D46"/>
+      <path d="M46 117 L46 124 Q44.6 129.4 39 130.2 L38.4 126.4 Q43.2 124.6 43.6 117 Z" fill="#FF2D46"/>
     </svg>`;
   return node;
 }
@@ -333,9 +412,32 @@ function initMapLibreStage() {
   mlMap.on('style.load', () => {
     mlMap.getSource('hd-route')?.setData(mlRouteData);
     mlMap.getSource('hd-dest')?.setData(mlDestData);
+    syncPlaceLabels();
   });
+  // Com a câmera inclinada os bairros do horizonte iam parar atrás da barra superior:
+  // nomes de bairro só aparecem com o mapa quase de cima
+  const syncPlaceLabels = () => {
+    if (!mlMap.getLayer('place-label')) return;
+    const want = mlMap.getPitch() > 25 ? 'none' : 'visible';
+    if (mlMap.getLayoutProperty('place-label', 'visibility') !== want) {
+      mlMap.setLayoutProperty('place-label', 'visibility', want);
+    }
+  };
+  mlMap.on('pitchend', syncPlaceLabels);
+  mlMap.on('moveend', syncPlaceLabels);
   // Nunca mexer na câmera de dentro de um evento de render (o MapLibre trava com "already running")
   mlMap.once('load', () => setTimeout(() => mlFollowCamera({ immediate: true }), 0));
+
+  trafficLayer = createTrafficLayer({
+    map: mlMap,
+    getKey: trafficKey,
+    getPosition: () => {
+      const lat = Number(lastMapState?.lat);
+      const lon = Number(lastMapState?.lon);
+      return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0) ? { lat, lon } : null;
+    },
+    onChange: updateTrafficBtnUi
+  });
   return true;
 }
 
@@ -945,6 +1047,31 @@ function renderActiveSearchUIs() {
   }
 }
 
+// Comércios pequenos muitas vezes não estão no OpenStreetMap: oferece o Google Maps (que tem tudo)
+// passando o texto digitado; o Google resolve o nome e já abre a navegação.
+function buildGoogleMapsFallback(q, kind, onDone) {
+  const isRow = kind === 'place-row';
+  return el(
+    'button',
+    {
+      className: isRow ? 'place-row-btn' : 'dropdown-item',
+      type: 'button',
+      'data-test': 'map-google-fallback',
+      onClick: () => {
+        onDone?.();
+        sendCommand('map.openExternal', { name: q, package: 'com.google.android.apps.maps' });
+      }
+    },
+    createPinSvg(isRow ? 18 : 16, '#34A853'),
+    el(
+      'span',
+      { className: isRow ? 'place-row-texts' : 'dropdown-item-texts' },
+      el('span', { className: isRow ? 'place-row-name' : 'dropdown-item-title' }, 'Navegar com Google Maps'),
+      el('span', { className: isRow ? 'place-row-addr' : 'dropdown-item-sub' }, `Não achou? O Google procura “${q}”`)
+    )
+  );
+}
+
 function renderHomeDropdown() {
   const input = document.getElementById('home-map-input');
   const clearBtn = document.getElementById('home-map-clear');
@@ -1079,6 +1206,7 @@ function renderHomeDropdown() {
       el('span', { className: 'dropdown-item-texts' }, el('span', { className: 'dropdown-item-title' }, `Buscar “${q}” no mapa`))
     )
   );
+  dropdown.appendChild(buildGoogleMapsFallback(q, 'dropdown-item', () => { input.value = ''; renderHomeDropdown(); }));
 
   dropdown.classList.remove('hidden');
   if (prevScrollTop > 0) dropdown.scrollTop = prevScrollTop;
@@ -1233,6 +1361,7 @@ function renderFullSearchResults() {
       )
     )
   );
+  listEl.appendChild(buildGoogleMapsFallback(q, 'place-row', () => { input.value = ''; renderFullSearchResults(); }));
   if (prevScrollTop > 0) listEl.scrollTop = prevScrollTop;
 }
 
@@ -1467,6 +1596,12 @@ export function initMap({ switchMode, openFavoriteSettings }) {
     else if (leafletMap) leafletMap.zoomOut();
   });
 
+  // Liga/desliga o trânsito ao vivo no mapa (escolha fica salva)
+  document.getElementById('map-traffic-btn')?.addEventListener('click', () => {
+    trafficLayer?.toggle();
+    updateTrafficBtnUi();
+  });
+
   document.getElementById('map-stop-route-btn').addEventListener('click', () => {
     sendCommand('map.stopRoute');
   });
@@ -1529,6 +1664,8 @@ export function updateMapState(mapState, clockEpochMs, options = {}) {
   }
 
   if (mlMap) {
+    trafficLayer?.sync();
+    updateTrafficBtnUi();
     mlCarMarker?.setLngLat([lon, lat]).setRotation(bearing);
     const rt = mapState.route || {};
     const pts = rt.active && Array.isArray(rt.polyline) ? rt.polyline : [];

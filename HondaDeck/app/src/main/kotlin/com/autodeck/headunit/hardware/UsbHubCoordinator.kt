@@ -9,6 +9,8 @@ import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,13 +57,26 @@ class UsbHubCoordinator(
     private val permissionQueue = ArrayDeque<String>()
     private var permissionInFlightDevice: String? = null
     private var registered = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val deferredPermissionCheck = Runnable {
+        refreshDevices(requestMissingPermissions = true)
+        // Se a permissão veio pelo fluxo do sistema, avisa a câmera para iniciar sem toque manual
+        val cam = findCameraDevice()
+        if (cam != null && usbManager?.hasPermission(cam) == true) onCameraAttached()
+    }
 
     private val systemUsbReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
             val device = IntentCompat.getParcelableExtra(intent, UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
             when (intent.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    refreshDevices(requestMissingPermissions = true)
+                    // O próprio Android abre "Abrir HondaDeck?" ao conectar (com a opção "Sempre").
+                    // Pedir permissão na mesma hora empilhava uma 2ª janela por cima e a câmera
+                    // ficava sem acesso até alguém tocar. Esperamos o fluxo do sistema e só pedimos
+                    // se a permissão ainda faltar.
+                    refreshDevices(requestMissingPermissions = false)
+                    mainHandler.removeCallbacks(deferredPermissionCheck)
+                    mainHandler.postDelayed(deferredPermissionCheck, ATTACH_PERMISSION_DELAY_MS)
                     if (device != null && isCameraRole(classifyRole(device))) {
                         onCameraAttached()
                     }
@@ -116,6 +131,7 @@ class UsbHubCoordinator(
 
     fun stop() {
         if (!registered) return
+        mainHandler.removeCallbacks(deferredPermissionCheck)
         runCatching { context.unregisterReceiver(systemUsbReceiver) }
         runCatching { context.unregisterReceiver(permissionReceiver) }
         registered = false
@@ -231,6 +247,7 @@ class UsbHubCoordinator(
 
     companion object {
         private const val ACTION_USB_PERMISSION = "com.autodeck.hondadeck.USB_PERMISSION"
+        private const val ATTACH_PERMISSION_DELAY_MS = 4_000L
         private val KNOWN_UVC_CAPTURE_VIDS = setOf(0x534D, 0x1B3F) // MacroSilicon MS210x/MS2130
         private val KNOWN_LEGACY_EASYCAP_VIDS = setOf(0x1B71, 0x05E1, 0xEB1A, 0x1C88) // UTV007, STK1160, EM2860, Somagic
     }

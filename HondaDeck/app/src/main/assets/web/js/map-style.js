@@ -25,21 +25,22 @@ const PALETTES = {
     labelStrong: '#DCE6F4',
     halo: '#080D16'
   },
+  // Dia: tons médios (não branco estourado) para combinar com os cards escuros e manter as ruas legíveis
   light: {
-    background: '#E7EBF0',
-    water: '#A9C7E2',
-    waterLine: '#8DB3D6',
-    park: '#CFE3D1',
-    landuse: '#E1E5EA',
-    minor: '#FFFFFF',
+    background: '#BCC6D2',
+    water: '#7FA6CC',
+    waterLine: '#6D96BF',
+    park: '#A9C6B2',
+    landuse: '#C3CCD7',
+    minor: '#EEF2F6',
     secondary: '#FFFFFF',
-    primary: '#FFE8A8',
-    motorway: '#FFC970',
-    building: '#D3D9E1',
-    buildingTop: '#C2CAD5',
-    label: '#4B5868',
-    labelStrong: '#1F2937',
-    halo: '#FFFFFF'
+    primary: '#FFE09A',
+    motorway: '#FFC266',
+    building: '#9EAABA',
+    buildingTop: '#8794A7',
+    label: '#2C3746',
+    labelStrong: '#16202C',
+    halo: '#E4E9EF'
   }
 };
 
@@ -207,7 +208,7 @@ export function buildMapStyle(theme, accent, routeData = EMPTY_FC, destData = EM
         type: 'symbol',
         source: 'openmaptiles',
         'source-layer': 'place',
-        // Só aparece com o mapa mais afastado; no drone de perto os bairros do horizonte invadiam a barra superior
+        // Só com o mapa afastado; e o map.js esconde quando a câmera está inclinada (horizonte = barra superior)
         maxzoom: 15.2,
         filter: ['in', ['get', 'class'], ['literal', ['city', 'town', 'suburb', 'neighbourhood']]],
         layout: {

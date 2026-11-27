@@ -6,8 +6,7 @@
   <meta name="color-scheme" content="dark">
   <link rel="icon" href="data:,">
   <title>HondaDeck — Órbita</title>
-  <link rel="stylesheet" href="./vendor/maplibre-gl.css">
-  <link rel="stylesheet" href="./vendor/leaflet.css">
+  <link rel="stylesheet" href="./vendor/maplibre-gl.css">  <link rel="stylesheet" href="./vendor/leaflet.css">
   <link rel="stylesheet" href="./css/orbita.css">
 </head>
 <body>
@@ -365,6 +364,15 @@
             </button>
             <button id="map-zoom-out-btn" class="map-ctrl-btn" type="button" aria-label="Afastar mapa">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12h14"></path></svg>
+            </button>
+            <!-- Trânsito ao vivo (TomTom) desenhado no próprio mapa: liga/desliga -->
+            <button id="map-traffic-btn" class="map-ctrl-btn map-ctrl-traffic hidden" type="button" aria-label="Trânsito ao vivo" title="Trânsito" aria-pressed="false" data-test="map-traffic-btn">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="7" y="2.5" width="10" height="19" rx="3"></rect>
+                <circle cx="12" cy="7" r="1.6" fill="#FF3B4E" stroke="none"></circle>
+                <circle cx="12" cy="12" r="1.6" fill="#FACC15" stroke="none"></circle>
+                <circle cx="12" cy="17" r="1.6" fill="#22C55E" stroke="none"></circle>
+              </svg>
             </button>
           </div>
 

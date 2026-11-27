@@ -745,10 +745,14 @@ button:active {
 }
 
 .hd-ml-car {
-  width: 92px;
-  height: 92px;
+  /* Civic 2005 prata (troque as 3 cores para pintar o carro de outra cor) */
+  --car-paint-hi: #E9EEF3;
+  --car-paint: #B7C0CA;
+  --car-paint-lo: #6B7684;
+  width: 104px;
+  height: 160px;
   z-index: 5;
-  filter: drop-shadow(0 0 10px var(--a35));
+  filter: drop-shadow(0 0 8px var(--a35));
 }
 
 .maplibregl-ctrl-attrib {
@@ -5047,4 +5051,25 @@ button:active {
   font-weight: 700;
   color: #FB7185;
   flex-shrink: 0;
+}
+
+/* Botão de trânsito ao vivo (TomTom) nos controles do mapa */
+.map-ctrl-btn.map-ctrl-traffic.hidden { display: none; }
+.map-ctrl-btn.map-ctrl-traffic:not(.active) { opacity: 0.55; }
+.map-ctrl-btn.map-ctrl-traffic.active {
+  border-color: rgba(250, 204, 21, 0.6);
+  box-shadow: 0 0 14px rgba(250, 204, 21, 0.35);
+}
+
+/* Esmaece o horizonte do mapa 3D sob a barra superior (nomes de ruas distantes não brigam com relógio/ícones) */
+.map-stage-wrap.use-maplibre::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 150px;
+  background: linear-gradient(180deg, rgba(8, 13, 22, 0.96) 0%, rgba(8, 13, 22, 0.78) 45%, rgba(8, 13, 22, 0) 100%);
+  pointer-events: none;
+  z-index: 3;
 }
